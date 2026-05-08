@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"net"
+	"shopmicro/user/middleware"
 	"time"
 
 	"github.com/cloudwego/kitex/pkg/rpcinfo"
@@ -12,6 +13,7 @@ import (
 	v1 "shopmicro/user/kitex_gen/api/user/v1/userservice"
 
 	pkgconf "shopmicro/pkg/conf"
+	"shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
 	"shopmicro/user/conf"
 	"shopmicro/user/data"
@@ -20,6 +22,10 @@ import (
 func Run(configPath string) error {
 	var cfg conf.Config
 	if err := pkgconf.Load(configPath, &cfg); err != nil {
+		return err
+	}
+	cfg.ApplyEnv()
+	if err := cfg.Validate(); err != nil {
 		return err
 	}
 
@@ -44,6 +50,7 @@ func Run(configPath string) error {
 		server.WithServerBasicInfo(&rpcinfo.EndpointBasicInfo{ServiceName: "user"}),
 		server.WithRegistry(r),
 		server.WithServiceAddr(addr),
+		server.WithMiddleware(middleware.AuthMiddleware(jwt.NewParser(cfg.JWT.Secret))),
 	)
 
 	logger.Infof("user service started on %s", cfg.Server.Addr)

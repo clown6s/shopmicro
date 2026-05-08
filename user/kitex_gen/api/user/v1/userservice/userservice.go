@@ -29,10 +29,10 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingUnary),
 	),
-	"LoginOut": kitex.NewMethodInfo(
-		loginOutHandler,
-		newLoginOutArgs,
-		newLoginOutResult,
+	"Logout": kitex.NewMethodInfo(
+		logoutHandler,
+		newLogoutArgs,
+		newLogoutResult,
 		false,
 		kitex.WithStreamingMode(kitex.StreamingUnary),
 	),
@@ -345,52 +345,52 @@ func (p *LoginResult) GetResult() interface{} {
 	return p.Success
 }
 
-func loginOutHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+func logoutHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	switch s := arg.(type) {
 	case *streaming.Args:
 		st := s.Stream
-		req := new(v1.LoginOutReq)
+		req := new(v1.LogoutReq)
 		if err := st.RecvMsg(req); err != nil {
 			return err
 		}
-		resp, err := handler.(v1.UserService).LoginOut(ctx, req)
+		resp, err := handler.(v1.UserService).Logout(ctx, req)
 		if err != nil {
 			return err
 		}
 		return st.SendMsg(resp)
-	case *LoginOutArgs:
-		success, err := handler.(v1.UserService).LoginOut(ctx, s.Req)
+	case *LogoutArgs:
+		success, err := handler.(v1.UserService).Logout(ctx, s.Req)
 		if err != nil {
 			return err
 		}
-		realResult := result.(*LoginOutResult)
+		realResult := result.(*LogoutResult)
 		realResult.Success = success
 		return nil
 	default:
 		return errInvalidMessageType
 	}
 }
-func newLoginOutArgs() interface{} {
-	return &LoginOutArgs{}
+func newLogoutArgs() interface{} {
+	return &LogoutArgs{}
 }
 
-func newLoginOutResult() interface{} {
-	return &LoginOutResult{}
+func newLogoutResult() interface{} {
+	return &LogoutResult{}
 }
 
-type LoginOutArgs struct {
-	Req *v1.LoginOutReq
+type LogoutArgs struct {
+	Req *v1.LogoutReq
 }
 
-func (p *LoginOutArgs) Marshal(out []byte) ([]byte, error) {
+func (p *LogoutArgs) Marshal(out []byte) ([]byte, error) {
 	if !p.IsSetReq() {
 		return out, nil
 	}
 	return proto.Marshal(p.Req)
 }
 
-func (p *LoginOutArgs) Unmarshal(in []byte) error {
-	msg := new(v1.LoginOutReq)
+func (p *LogoutArgs) Unmarshal(in []byte) error {
+	msg := new(v1.LogoutReq)
 	if err := proto.Unmarshal(in, msg); err != nil {
 		return err
 	}
@@ -398,38 +398,38 @@ func (p *LoginOutArgs) Unmarshal(in []byte) error {
 	return nil
 }
 
-var LoginOutArgs_Req_DEFAULT *v1.LoginOutReq
+var LogoutArgs_Req_DEFAULT *v1.LogoutReq
 
-func (p *LoginOutArgs) GetReq() *v1.LoginOutReq {
+func (p *LogoutArgs) GetReq() *v1.LogoutReq {
 	if !p.IsSetReq() {
-		return LoginOutArgs_Req_DEFAULT
+		return LogoutArgs_Req_DEFAULT
 	}
 	return p.Req
 }
 
-func (p *LoginOutArgs) IsSetReq() bool {
+func (p *LogoutArgs) IsSetReq() bool {
 	return p.Req != nil
 }
 
-func (p *LoginOutArgs) GetFirstArgument() interface{} {
+func (p *LogoutArgs) GetFirstArgument() interface{} {
 	return p.Req
 }
 
-type LoginOutResult struct {
-	Success *v1.LoginOutResp
+type LogoutResult struct {
+	Success *v1.LogoutResp
 }
 
-var LoginOutResult_Success_DEFAULT *v1.LoginOutResp
+var LogoutResult_Success_DEFAULT *v1.LogoutResp
 
-func (p *LoginOutResult) Marshal(out []byte) ([]byte, error) {
+func (p *LogoutResult) Marshal(out []byte) ([]byte, error) {
 	if !p.IsSetSuccess() {
 		return out, nil
 	}
 	return proto.Marshal(p.Success)
 }
 
-func (p *LoginOutResult) Unmarshal(in []byte) error {
-	msg := new(v1.LoginOutResp)
+func (p *LogoutResult) Unmarshal(in []byte) error {
+	msg := new(v1.LogoutResp)
 	if err := proto.Unmarshal(in, msg); err != nil {
 		return err
 	}
@@ -437,22 +437,22 @@ func (p *LoginOutResult) Unmarshal(in []byte) error {
 	return nil
 }
 
-func (p *LoginOutResult) GetSuccess() *v1.LoginOutResp {
+func (p *LogoutResult) GetSuccess() *v1.LogoutResp {
 	if !p.IsSetSuccess() {
-		return LoginOutResult_Success_DEFAULT
+		return LogoutResult_Success_DEFAULT
 	}
 	return p.Success
 }
 
-func (p *LoginOutResult) SetSuccess(x interface{}) {
-	p.Success = x.(*v1.LoginOutResp)
+func (p *LogoutResult) SetSuccess(x interface{}) {
+	p.Success = x.(*v1.LogoutResp)
 }
 
-func (p *LoginOutResult) IsSetSuccess() bool {
+func (p *LogoutResult) IsSetSuccess() bool {
 	return p.Success != nil
 }
 
-func (p *LoginOutResult) GetResult() interface{} {
+func (p *LogoutResult) GetResult() interface{} {
 	return p.Success
 }
 
@@ -819,11 +819,11 @@ func (p *kClient) Login(ctx context.Context, Req *v1.LoginReq) (r *v1.LoginResp,
 	return _result.GetSuccess(), nil
 }
 
-func (p *kClient) LoginOut(ctx context.Context, Req *v1.LoginOutReq) (r *v1.LoginOutResp, err error) {
-	var _args LoginOutArgs
+func (p *kClient) Logout(ctx context.Context, Req *v1.LogoutReq) (r *v1.LogoutResp, err error) {
+	var _args LogoutArgs
 	_args.Req = Req
-	var _result LoginOutResult
-	if err = p.c.Call(ctx, "LoginOut", &_args, &_result); err != nil {
+	var _result LogoutResult
+	if err = p.c.Call(ctx, "Logout", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

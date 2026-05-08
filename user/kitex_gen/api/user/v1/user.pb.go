@@ -41,87 +41,6 @@ func (x Gender) String() string {
 	return strconv.Itoa(int(x))
 }
 
-type UserInfo struct {
-	Id       int64  `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
-	Password string `protobuf:"bytes,2,opt,name=password" json:"password,omitempty"`
-	RealName string `protobuf:"bytes,3,opt,name=realName" json:"realName,omitempty"`
-	Avatar   string `protobuf:"bytes,4,opt,name=avatar" json:"avatar,omitempty"`
-	Gender   Gender `protobuf:"varint,5,opt,name=gender" json:"gender,omitempty"`
-	Age      int32  `protobuf:"varint,6,opt,name=age" json:"age,omitempty"`
-	Phone    string `protobuf:"bytes,7,opt,name=phone" json:"phone,omitempty"`
-	Email    string `protobuf:"bytes,8,opt,name=email" json:"email,omitempty"`
-	Remark   string `protobuf:"bytes,11,opt,name=remark" json:"remark,omitempty"`
-}
-
-func (x *UserInfo) Reset() { *x = UserInfo{} }
-
-func (x *UserInfo) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
-
-func (x *UserInfo) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
-
-func (x *UserInfo) GetId() int64 {
-	if x != nil {
-		return x.Id
-	}
-	return 0
-}
-
-func (x *UserInfo) GetPassword() string {
-	if x != nil {
-		return x.Password
-	}
-	return ""
-}
-
-func (x *UserInfo) GetRealName() string {
-	if x != nil {
-		return x.RealName
-	}
-	return ""
-}
-
-func (x *UserInfo) GetAvatar() string {
-	if x != nil {
-		return x.Avatar
-	}
-	return ""
-}
-
-func (x *UserInfo) GetGender() Gender {
-	if x != nil {
-		return x.Gender
-	}
-	return Gender_GENDER_UNKNOWN
-}
-
-func (x *UserInfo) GetAge() int32 {
-	if x != nil {
-		return x.Age
-	}
-	return 0
-}
-
-func (x *UserInfo) GetPhone() string {
-	if x != nil {
-		return x.Phone
-	}
-	return ""
-}
-
-func (x *UserInfo) GetEmail() string {
-	if x != nil {
-		return x.Email
-	}
-	return ""
-}
-
-func (x *UserInfo) GetRemark() string {
-	if x != nil {
-		return x.Remark
-	}
-	return ""
-}
-
 type RegisterUserReq struct {
 	Password string `protobuf:"bytes,1,opt,name=password" json:"password,omitempty"`
 	RealName string `protobuf:"bytes,2,opt,name=realName" json:"realName,omitempty"`
@@ -180,8 +99,6 @@ func (x *RegisterUserReq) GetAge() int32 {
 }
 
 type RegisterUserResp struct {
-	Code    uint32 `protobuf:"varint,1,opt,name=code" json:"code,omitempty"`
-	Message string `protobuf:"bytes,2,opt,name=message" json:"message,omitempty"`
 }
 
 func (x *RegisterUserResp) Reset() { *x = RegisterUserResp{} }
@@ -189,20 +106,6 @@ func (x *RegisterUserResp) Reset() { *x = RegisterUserResp{} }
 func (x *RegisterUserResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
 
 func (x *RegisterUserResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
-
-func (x *RegisterUserResp) GetCode() uint32 {
-	if x != nil {
-		return x.Code
-	}
-	return 0
-}
-
-func (x *RegisterUserResp) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
-}
 
 type LoginReq struct {
 	Password string `protobuf:"bytes,1,opt,name=password" json:"password,omitempty"`
@@ -230,10 +133,15 @@ func (x *LoginReq) GetPhone() string {
 }
 
 type LoginResp struct {
-	Code    uint32    `protobuf:"varint,1,opt,name=code" json:"code,omitempty"`
-	Message string    `protobuf:"bytes,2,opt,name=message" json:"message,omitempty"`
-	Token   string    `protobuf:"bytes,3,opt,name=token" json:"token,omitempty"`
-	Data    *UserInfo `protobuf:"bytes,4,opt,name=data" json:"data,omitempty"`
+	Id       int64  `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
+	RealName string `protobuf:"bytes,2,opt,name=realName" json:"realName,omitempty"`
+	Avatar   string `protobuf:"bytes,3,opt,name=avatar" json:"avatar,omitempty"`
+	Gender   Gender `protobuf:"varint,4,opt,name=gender" json:"gender,omitempty"`
+	Age      int32  `protobuf:"varint,5,opt,name=age" json:"age,omitempty"`
+	Phone    string `protobuf:"bytes,6,opt,name=phone" json:"phone,omitempty"`
+	Email    string `protobuf:"bytes,7,opt,name=email" json:"email,omitempty"`
+	Remark   string `protobuf:"bytes,8,opt,name=remark" json:"remark,omitempty"`
+	Token    string `protobuf:"bytes,9,opt,name=token" json:"token,omitempty"`
 }
 
 func (x *LoginResp) Reset() { *x = LoginResp{} }
@@ -242,16 +150,58 @@ func (x *LoginResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAp
 
 func (x *LoginResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
 
-func (x *LoginResp) GetCode() uint32 {
+func (x *LoginResp) GetId() int64 {
 	if x != nil {
-		return x.Code
+		return x.Id
 	}
 	return 0
 }
 
-func (x *LoginResp) GetMessage() string {
+func (x *LoginResp) GetRealName() string {
 	if x != nil {
-		return x.Message
+		return x.RealName
+	}
+	return ""
+}
+
+func (x *LoginResp) GetAvatar() string {
+	if x != nil {
+		return x.Avatar
+	}
+	return ""
+}
+
+func (x *LoginResp) GetGender() Gender {
+	if x != nil {
+		return x.Gender
+	}
+	return Gender_GENDER_UNKNOWN
+}
+
+func (x *LoginResp) GetAge() int32 {
+	if x != nil {
+		return x.Age
+	}
+	return 0
+}
+
+func (x *LoginResp) GetPhone() string {
+	if x != nil {
+		return x.Phone
+	}
+	return ""
+}
+
+func (x *LoginResp) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *LoginResp) GetRemark() string {
+	if x != nil {
+		return x.Remark
 	}
 	return ""
 }
@@ -263,54 +213,31 @@ func (x *LoginResp) GetToken() string {
 	return ""
 }
 
-func (x *LoginResp) GetData() *UserInfo {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-type LoginOutReq struct {
+type LogoutReq struct {
 	Token string `protobuf:"bytes,1,opt,name=token" json:"token,omitempty"`
 }
 
-func (x *LoginOutReq) Reset() { *x = LoginOutReq{} }
+func (x *LogoutReq) Reset() { *x = LogoutReq{} }
 
-func (x *LoginOutReq) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+func (x *LogoutReq) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
 
-func (x *LoginOutReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+func (x *LogoutReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
 
-func (x *LoginOutReq) GetToken() string {
+func (x *LogoutReq) GetToken() string {
 	if x != nil {
 		return x.Token
 	}
 	return ""
 }
 
-type LoginOutResp struct {
-	Code    uint32 `protobuf:"varint,1,opt,name=code" json:"code,omitempty"`
-	Message string `protobuf:"bytes,2,opt,name=message" json:"message,omitempty"`
+type LogoutResp struct {
 }
 
-func (x *LoginOutResp) Reset() { *x = LoginOutResp{} }
+func (x *LogoutResp) Reset() { *x = LogoutResp{} }
 
-func (x *LoginOutResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+func (x *LogoutResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
 
-func (x *LoginOutResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
-
-func (x *LoginOutResp) GetCode() uint32 {
-	if x != nil {
-		return x.Code
-	}
-	return 0
-}
-
-func (x *LoginOutResp) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
-}
+func (x *LogoutResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
 
 type UpdateUserReq struct {
 	Id       int64  `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
@@ -386,8 +313,6 @@ func (x *UpdateUserReq) GetRemark() string {
 }
 
 type UpdateUserResp struct {
-	Code    uint32 `protobuf:"varint,1,opt,name=code" json:"code,omitempty"`
-	Message string `protobuf:"bytes,2,opt,name=message" json:"message,omitempty"`
 }
 
 func (x *UpdateUserResp) Reset() { *x = UpdateUserResp{} }
@@ -395,20 +320,6 @@ func (x *UpdateUserResp) Reset() { *x = UpdateUserResp{} }
 func (x *UpdateUserResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
 
 func (x *UpdateUserResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
-
-func (x *UpdateUserResp) GetCode() uint32 {
-	if x != nil {
-		return x.Code
-	}
-	return 0
-}
-
-func (x *UpdateUserResp) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
-}
 
 type DeleteUserReq struct {
 	Id int64 `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
@@ -428,8 +339,6 @@ func (x *DeleteUserReq) GetId() int64 {
 }
 
 type DeleteUserResp struct {
-	Code    uint32 `protobuf:"varint,1,opt,name=code" json:"code,omitempty"`
-	Message string `protobuf:"bytes,2,opt,name=message" json:"message,omitempty"`
 }
 
 func (x *DeleteUserResp) Reset() { *x = DeleteUserResp{} }
@@ -437,20 +346,6 @@ func (x *DeleteUserResp) Reset() { *x = DeleteUserResp{} }
 func (x *DeleteUserResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
 
 func (x *DeleteUserResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
-
-func (x *DeleteUserResp) GetCode() uint32 {
-	if x != nil {
-		return x.Code
-	}
-	return 0
-}
-
-func (x *DeleteUserResp) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
-}
 
 type ListUserReq struct {
 	Page     int32  `protobuf:"varint,1,opt,name=page" json:"page,omitempty"`
@@ -494,12 +389,10 @@ func (x *ListUserReq) GetPhone() string {
 }
 
 type ListUserResp struct {
-	Code     uint32      `protobuf:"varint,1,opt,name=code" json:"code,omitempty"`
-	Message  string      `protobuf:"bytes,2,opt,name=message" json:"message,omitempty"`
-	Data     []*UserInfo `protobuf:"bytes,3,rep,name=data" json:"data,omitempty"`
-	Page     int32       `protobuf:"varint,4,opt,name=page" json:"page,omitempty"`
-	PageSize int32       `protobuf:"varint,5,opt,name=pageSize" json:"pageSize,omitempty"`
-	Total    int64       `protobuf:"varint,6,opt,name=total" json:"total,omitempty"`
+	List     []*UserInfo `protobuf:"bytes,1,rep,name=list" json:"list,omitempty"`
+	Page     int32       `protobuf:"varint,2,opt,name=page" json:"page,omitempty"`
+	PageSize int32       `protobuf:"varint,3,opt,name=pageSize" json:"pageSize,omitempty"`
+	Total    int64       `protobuf:"varint,4,opt,name=total" json:"total,omitempty"`
 }
 
 func (x *ListUserResp) Reset() { *x = ListUserResp{} }
@@ -508,23 +401,9 @@ func (x *ListUserResp) Marshal(in []byte) ([]byte, error) { return prutal.Marsha
 
 func (x *ListUserResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
 
-func (x *ListUserResp) GetCode() uint32 {
+func (x *ListUserResp) GetList() []*UserInfo {
 	if x != nil {
-		return x.Code
-	}
-	return 0
-}
-
-func (x *ListUserResp) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
-}
-
-func (x *ListUserResp) GetData() []*UserInfo {
-	if x != nil {
-		return x.Data
+		return x.List
 	}
 	return nil
 }
@@ -550,10 +429,84 @@ func (x *ListUserResp) GetTotal() int64 {
 	return 0
 }
 
+// UserInfo 公开用户信息，不含密码
+type UserInfo struct {
+	Id       int64  `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
+	RealName string `protobuf:"bytes,2,opt,name=realName" json:"realName,omitempty"`
+	Avatar   string `protobuf:"bytes,3,opt,name=avatar" json:"avatar,omitempty"`
+	Gender   Gender `protobuf:"varint,4,opt,name=gender" json:"gender,omitempty"`
+	Age      int32  `protobuf:"varint,5,opt,name=age" json:"age,omitempty"`
+	Phone    string `protobuf:"bytes,6,opt,name=phone" json:"phone,omitempty"`
+	Email    string `protobuf:"bytes,7,opt,name=email" json:"email,omitempty"`
+	Remark   string `protobuf:"bytes,8,opt,name=remark" json:"remark,omitempty"`
+}
+
+func (x *UserInfo) Reset() { *x = UserInfo{} }
+
+func (x *UserInfo) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *UserInfo) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *UserInfo) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *UserInfo) GetRealName() string {
+	if x != nil {
+		return x.RealName
+	}
+	return ""
+}
+
+func (x *UserInfo) GetAvatar() string {
+	if x != nil {
+		return x.Avatar
+	}
+	return ""
+}
+
+func (x *UserInfo) GetGender() Gender {
+	if x != nil {
+		return x.Gender
+	}
+	return Gender_GENDER_UNKNOWN
+}
+
+func (x *UserInfo) GetAge() int32 {
+	if x != nil {
+		return x.Age
+	}
+	return 0
+}
+
+func (x *UserInfo) GetPhone() string {
+	if x != nil {
+		return x.Phone
+	}
+	return ""
+}
+
+func (x *UserInfo) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *UserInfo) GetRemark() string {
+	if x != nil {
+		return x.Remark
+	}
+	return ""
+}
+
 type UserService interface {
 	RegisterUser(ctx context.Context, req *RegisterUserReq) (res *RegisterUserResp, err error)
 	Login(ctx context.Context, req *LoginReq) (res *LoginResp, err error)
-	LoginOut(ctx context.Context, req *LoginOutReq) (res *LoginOutResp, err error)
+	Logout(ctx context.Context, req *LogoutReq) (res *LogoutResp, err error)
 	UpdateUser(ctx context.Context, req *UpdateUserReq) (res *UpdateUserResp, err error)
 	DeleteUser(ctx context.Context, req *DeleteUserReq) (res *DeleteUserResp, err error)
 	ListUser(ctx context.Context, req *ListUserReq) (res *ListUserResp, err error)

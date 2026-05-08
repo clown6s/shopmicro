@@ -2,6 +2,7 @@ package jwt
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -10,6 +11,7 @@ import (
 var (
 	ErrTokenInvalid = errors.New("token is invalid")
 	ErrTokenExpired = errors.New("token is expired")
+	ErrSecretWeak   = errors.New("jwt secret must be at least 32 characters")
 )
 
 // Claims 自定义 JWT 载荷
@@ -25,8 +27,11 @@ type Generator struct {
 	expiration time.Duration
 }
 
-func NewGenerator(secret string, expiration time.Duration) *Generator {
-	return &Generator{secret: []byte(secret), expiration: expiration}
+func NewGenerator(secret string, expiration time.Duration) (*Generator, error) {
+	if len(secret) < 32 {
+		return nil, ErrSecretWeak
+	}
+	return &Generator{secret: []byte(secret), expiration: expiration}, nil
 }
 
 func (g *Generator) Generate(userID int64, phone string) (string, error) {
@@ -54,6 +59,10 @@ func NewParser(secret string) *Parser {
 
 func (p *Parser) Parse(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+		// 防止算法混淆攻击：只允许 HMAC 签名
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
 		return p.secret, nil
 	})
 	if err != nil {

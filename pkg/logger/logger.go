@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"fmt"
 	"sync"
 
 	"go.uber.org/zap"
@@ -12,7 +13,8 @@ var (
 	once sync.Once
 )
 
-func Init(mode string) {
+func Init(mode string) error {
+	var initErr error
 	once.Do(func() {
 		var cfg zap.Config
 		if mode == "dev" {
@@ -24,15 +26,17 @@ func Init(mode string) {
 		cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 		log, err := cfg.Build(zap.AddCallerSkip(1))
 		if err != nil {
-			panic(err)
+			initErr = err
+			return
 		}
 		L = log.Sugar()
 	})
+	return initErr
 }
 
 func C() *zap.SugaredLogger {
 	if L == nil {
-		Init("dev")
+		_ = Init("dev")
 	}
 	return L
 }
@@ -48,3 +52,8 @@ func Debugf(template string, args ...interface{}) { C().Debugf(template, args...
 func Warn(args ...interface{})                    { C().Warn(args...) }
 func Warnf(template string, args ...interface{})  { C().Warnf(template, args...) }
 func Sync()                                       { _ = C().Sync() }
+
+// Fatalf2 替代 Fatalf，返回 error 而不是调用 os.Exit
+func Fatalf2(format string, args ...interface{}) error {
+	return fmt.Errorf(format, args...)
+}

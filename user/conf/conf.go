@@ -1,6 +1,10 @@
 package conf
 
-import "shopmicro/pkg/conf"
+import (
+	"fmt"
+
+	"shopmicro/pkg/conf"
+)
 
 type MySQL struct {
 	DSN string `yaml:"dsn"`
@@ -14,7 +18,7 @@ type Redis struct {
 
 type JWT struct {
 	Secret     string `yaml:"secret"`
-	Expiration int    `yaml:"expiration"` // 小时
+	Expiration int    `yaml:"expiration"`
 }
 
 type Config struct {
@@ -24,4 +28,31 @@ type Config struct {
 	Redis  Redis       `yaml:"redis"`
 	JWT    JWT         `yaml:"jwt"`
 	Mode   string      `yaml:"mode"`
+}
+
+// ApplyEnv 从环境变量覆盖敏感配置
+func (c *Config) ApplyEnv() {
+	if v := conf.Env("MYSQL_DSN", ""); v != "" {
+		c.MySQL.DSN = v
+	}
+	if v := conf.Env("REDIS_ADDR", ""); v != "" {
+		c.Redis.Addr = v
+	}
+	if v := conf.Env("REDIS_PASSWORD", ""); v != "" {
+		c.Redis.Password = v
+	}
+	if v := conf.Env("JWT_SECRET", ""); v != "" {
+		c.JWT.Secret = v
+	}
+}
+
+// Validate 校验必填的敏感配置
+func (c *Config) Validate() error {
+	if c.MySQL.DSN == "" {
+		return fmt.Errorf("mysql dsn is required, set MYSQL_DSN env or config.yaml")
+	}
+	if c.JWT.Secret == "" {
+		return fmt.Errorf("jwt secret is required, set JWT_SECRET env or config.yaml")
+	}
+	return nil
 }

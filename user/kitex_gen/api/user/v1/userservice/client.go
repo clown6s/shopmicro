@@ -13,7 +13,7 @@ import (
 type Client interface {
 	RegisterUser(ctx context.Context, Req *v1.RegisterUserReq, callOptions ...callopt.Option) (r *v1.RegisterUserResp, err error)
 	Login(ctx context.Context, Req *v1.LoginReq, callOptions ...callopt.Option) (r *v1.LoginResp, err error)
-	LoginOut(ctx context.Context, Req *v1.LoginOutReq, callOptions ...callopt.Option) (r *v1.LoginOutResp, err error)
+	Logout(ctx context.Context, Req *v1.LogoutReq, callOptions ...callopt.Option) (r *v1.LogoutResp, err error)
 	UpdateUser(ctx context.Context, Req *v1.UpdateUserReq, callOptions ...callopt.Option) (r *v1.UpdateUserResp, err error)
 	DeleteUser(ctx context.Context, Req *v1.DeleteUserReq, callOptions ...callopt.Option) (r *v1.DeleteUserResp, err error)
 	ListUser(ctx context.Context, Req *v1.ListUserReq, callOptions ...callopt.Option) (r *v1.ListUserResp, err error)
@@ -58,9 +58,9 @@ func (p *kUserServiceClient) Login(ctx context.Context, Req *v1.LoginReq, callOp
 	return p.kClient.Login(ctx, Req)
 }
 
-func (p *kUserServiceClient) LoginOut(ctx context.Context, Req *v1.LoginOutReq, callOptions ...callopt.Option) (r *v1.LoginOutResp, err error) {
+func (p *kUserServiceClient) Logout(ctx context.Context, Req *v1.LogoutReq, callOptions ...callopt.Option) (r *v1.LogoutResp, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
-	return p.kClient.LoginOut(ctx, Req)
+	return p.kClient.Logout(ctx, Req)
 }
 
 func (p *kUserServiceClient) UpdateUser(ctx context.Context, Req *v1.UpdateUserReq, callOptions ...callopt.Option) (r *v1.UpdateUserResp, err error) {

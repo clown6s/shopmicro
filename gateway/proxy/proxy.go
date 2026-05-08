@@ -3,8 +3,11 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/bytedance/gopkg/cloud/metainfo"
 	dproto "github.com/cloudwego/dynamicgo/proto"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/kitex/client"
@@ -13,11 +16,21 @@ import (
 
 	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/jwt"
+	"shopmicro/pkg/logger"
 	"shopmicro/pkg/response"
+)
+
+// contextKey 类型化 context key，避免跨包冲突
+type contextKey string
+
+const (
+	keyUserID contextKey = "user_id"
+	keyPhone  contextKey = "phone"
 )
 
 // Proxy 通用 gRPC 代理，基于 Kitex generic client 自动转发请求
 type Proxy struct {
+	mu            sync.RWMutex
 	clients       map[string]genericclient.Client
 	publicMethods map[string]bool
 	jwtParser     *jwt.Parser
@@ -72,7 +85,9 @@ func (p *Proxy) RegisterService(destService, protoPath string, opts ...client.Op
 	if err != nil {
 		return err
 	}
+	p.mu.Lock()
 	p.clients[destService] = cli
+	p.mu.Unlock()
 	return nil
 }
 
@@ -82,7 +97,7 @@ func (p *Proxy) RegisterService(destService, protoPath string, opts ...client.Op
 //	URL method 使用 snake_case，自动转为 proto PascalCase RPC 方法名:
 //	  /api/v1/user/register_user → RegisterUser
 //	  /api/v1/user/login         → Login
-//	  /api/v1/user/login_out     → LoginOut
+//	  /api/v1/user/logout        → Logout
 //
 //	GET 请求的 query params 会自动转为 JSON body（snake_case → camelCase）
 //	Authorization header 中的 token 会自动注入到 body 中（供 LoginOut 等接口使用）
@@ -101,53 +116,63 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			}
 			claims, err := p.jwtParser.Parse(tokenStr)
 			if err != nil {
-				response.JSON(c, errcode.ErrToken.WithMsg(err.Error()), nil)
+				// 不泄露具体错误细节
+				response.JSON(c, errcode.ErrToken, nil)
 				c.Abort()
 				return
 			}
-			ctx = context.WithValue(ctx, "user_id", claims.UserID)
-			ctx = context.WithValue(ctx, "phone", claims.Phone)
+			ctx = context.WithValue(ctx, keyUserID, claims.UserID)
+			ctx = context.WithValue(ctx, keyPhone, claims.Phone)
 		}
 
+		p.mu.RLock()
 		cli, ok := p.clients[service]
+		p.mu.RUnlock()
 		if !ok {
-			response.JSON(c, errcode.ErrParam.WithMsg("service not found: "+service), nil)
+			response.JSON(c, errcode.ErrParam.WithMsg("service not found"), nil)
 			c.Abort()
 			return
 		}
 
 		body := p.buildRequestBody(c, tokenStr)
 
+		// 将 token 注入 Kitex persistent metadata，供下游服务拦截器校验
+		if tokenStr != "" {
+			ctx = metainfo.WithPersistentValue(ctx, "token", tokenStr)
+		}
+
 		resp, err := cli.GenericCall(ctx, method, string(body))
 		if err != nil {
-			response.JSON(c, errcode.ErrServer.WithMsg(err.Error()), nil)
+			// 从 gRPC remote error 中解析业务错误
+			if bizErr, ok := errcode.ParseBizError(err); ok {
+				response.JSON(c, errcode.FromBizError(bizErr), nil)
+				return
+			}
+			logger.Errorf("gRPC call failed: service=%s method=%s err=%v", service, method, err)
+			response.JSON(c, errcode.ErrServer.WithMsg("service unavailable"), nil)
 			return
 		}
 
-		// GenericCall 返回 JSON 字符串，解析为对象再返回
-		var data interface{}
+		// GenericCall 返回 JSON 字符串，解析后直接返回
+		var result map[string]interface{}
 		if respStr, ok := resp.(string); ok {
-			_ = json.Unmarshal([]byte(respStr), &data)
-		} else {
-			data = resp
+			if len(respStr) > 0 {
+				if err := json.Unmarshal([]byte(respStr), &result); err != nil {
+					logger.Errorf("unmarshal gRPC response failed: %v", err)
+					response.JSON(c, errcode.ErrResponse, nil)
+					return
+				}
+			}
 		}
-		response.JSON(c, errcode.Success, data)
+		response.JSON(c, errcode.Success, result)
 	}
 }
 
 // extractToken 从 Authorization header 或 Token header 提取 token
 func (p *Proxy) extractToken(c *app.RequestContext) string {
 	auth := string(c.GetHeader("Authorization"))
-	if auth != "" {
-		token := strings.TrimPrefix(auth, "Bearer ")
-		if token != auth {
-			return token
-		}
-		token = strings.TrimPrefix(auth, "bearer ")
-		if token != auth {
-			return token
-		}
-		return auth
+	if strings.HasPrefix(auth, "Bearer ") || strings.HasPrefix(auth, "bearer ") {
+		return strings.TrimPrefix(strings.TrimPrefix(auth, "Bearer "), "bearer ")
 	}
 	return string(c.GetHeader("Token"))
 }
@@ -162,7 +187,15 @@ func (p *Proxy) buildRequestBody(c *app.RequestContext, tokenStr string) json.Ra
 	if string(c.Method()) == "GET" {
 		params := make(map[string]interface{})
 		c.QueryArgs().VisitAll(func(key, value []byte) {
-			params[toCamelCase(string(key))] = string(value)
+			v := string(value)
+			// 数字字符串自动转为 int/float，匹配 proto int32/int64 类型
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				params[toCamelCase(string(key))] = n
+			} else if f, err := strconv.ParseFloat(v, 64); err == nil {
+				params[toCamelCase(string(key))] = f
+			} else {
+				params[toCamelCase(string(key))] = v
+			}
 		})
 		body, _ = json.Marshal(params)
 	} else {
@@ -174,7 +207,8 @@ func (p *Proxy) buildRequestBody(c *app.RequestContext, tokenStr string) json.Ra
 		var bodyMap map[string]interface{}
 		if len(body) > 0 {
 			_ = json.Unmarshal(body, &bodyMap)
-		} else {
+		}
+		if bodyMap == nil {
 			bodyMap = make(map[string]interface{})
 		}
 		bodyMap["token"] = tokenStr

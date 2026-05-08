@@ -1,1 +1,32 @@
+# IDE
 .idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+*.exe
+*.exe~
+*.test
+*.out
+vendor/
+
+# Generated code (should be regenerated, not committed)
+*/kitex_gen/
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+# Config (contains passwords - use .env.example instead)
+# Uncomment if you don't want config.yaml in repo:
+# */conf/config.yaml
+
+# Go workspace (local dev only)
+go.work
+go.work.sum

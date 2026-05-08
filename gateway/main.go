@@ -20,6 +20,10 @@ func Run(configPath string) error {
 	if err := pkgconf.Load(configPath, &cfg); err != nil {
 		return err
 	}
+	cfg.ApplyEnv()
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
 
 	logger.Init(cfg.Mode)
 	defer logger.Sync()
@@ -30,8 +34,11 @@ func Run(configPath string) error {
 	}
 
 	hlog.SetLevel(hlog.LevelWarn)
-	h := server.New(server.WithHostPorts(cfg.Server.Addr))
-	h.Use(middleware.CORS())
+	h := server.New(
+		server.WithHostPorts(cfg.Server.Addr),
+		server.WithMaxRequestBodySize(1<<20), // 1MB
+	)
+	h.Use(middleware.CORS(&middleware.CORSConfig{AllowOrigins: cfg.CORS.AllowOrigins}))
 
 	// 初始化通用 gRPC 代理
 	p := proxy.New(
@@ -40,10 +47,11 @@ func Run(configPath string) error {
 	)
 
 	// 注册下游服务，新增服务只需加一行
-	if err := p.RegisterService("user", "../user/api/user.proto",
-		client.WithResolver(r),
-		client.WithHostPorts("127.0.0.1:8888"),
-	); err != nil {
+	userOpts := []client.Option{client.WithResolver(r)}
+	if hp := cfg.GetHostPorts("user"); hp != "" {
+		userOpts = append(userOpts, client.WithHostPorts(hp))
+	}
+	if err := p.RegisterService("user", "../user/api/user.proto", userOpts...); err != nil {
 		return err
 	}
 

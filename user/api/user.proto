@@ -14,22 +14,10 @@ enum Gender {
 service UserService {
   rpc RegisterUser(RegisterUserReq) returns(RegisterUserResp);
   rpc Login(LoginReq) returns(LoginResp);
-  rpc LoginOut(LoginOutReq) returns(LoginOutResp);
+  rpc Logout(LogoutReq) returns(LogoutResp);
   rpc UpdateUser(UpdateUserReq) returns(UpdateUserResp);
   rpc DeleteUser(DeleteUserReq) returns(DeleteUserResp);
   rpc ListUser(ListUserReq) returns(ListUserResp);
-}
-
-message UserInfo {
-  int64 id = 1;
-  string password = 2;
-  string realName = 3;
-  string avatar = 4;
-  Gender gender = 5;
-  int32 age = 6;
-  string phone = 7;
-  string email = 8;
-  string remark = 11;
 }
 
 message RegisterUserReq {
@@ -41,10 +29,7 @@ message RegisterUserReq {
   int32 age = 6;
 }
 
-message RegisterUserResp {
-  uint32 code = 1;
-  string message = 2;
-}
+message RegisterUserResp {}
 
 message LoginReq {
   string password = 1;
@@ -52,20 +37,22 @@ message LoginReq {
 }
 
 message LoginResp {
-  uint32 code = 1;
-  string message = 2;
-  string token = 3;
-  UserInfo data = 4;
+  int64 id = 1;
+  string realName = 2;
+  string avatar = 3;
+  Gender gender = 4;
+  int32 age = 5;
+  string phone = 6;
+  string email = 7;
+  string remark = 8;
+  string token = 9;
 }
 
-message LoginOutReq{
+message LogoutReq {
   string token = 1;
 }
 
-message LoginOutResp{
-  uint32 code = 1;
-  string message = 2;
-}
+message LogoutResp {}
 
 message UpdateUserReq {
   int64 id = 1;
@@ -78,19 +65,13 @@ message UpdateUserReq {
   string remark = 8;
 }
 
-message UpdateUserResp {
-  uint32 code = 1;
-  string message = 2;
-}
+message UpdateUserResp {}
 
 message DeleteUserReq {
   int64 id = 1;
 }
 
-message DeleteUserResp {
-  uint32 code = 1;
-  string message = 2;
-}
+message DeleteUserResp {}
 
 message ListUserReq {
   int32 page = 1;
@@ -100,10 +81,20 @@ message ListUserReq {
 }
 
 message ListUserResp {
-  uint32 code = 1;
-  string message = 2;
-  repeated UserInfo data = 3;
-  int32 page = 4;
-  int32 pageSize = 5;
-  int64 total = 6;
+  repeated UserInfo list = 1;
+  int32 page = 2;
+  int32 pageSize = 3;
+  int64 total = 4;
+}
+
+// UserInfo 公开用户信息，不含密码
+message UserInfo {
+  int64 id = 1;
+  string realName = 2;
+  string avatar = 3;
+  Gender gender = 4;
+  int32 age = 5;
+  string phone = 6;
+  string email = 7;
+  string remark = 8;
 }

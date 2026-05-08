@@ -1,34 +1,28 @@
 package errcode
 
-import "net/http"
-
+// ErrCode 网关 HTTP 响应错误码，仅 gateway 层使用
 type ErrCode struct {
 	Code int
 	Msg  string
 }
 
 var (
-	Success         = ErrCode{0, "success"}
-	ErrParam        = ErrCode{10001, "参数错误"}
-	ErrDB           = ErrCode{10002, "数据库错误"}
-	ErrUserExist    = ErrCode{10003, "用户已存在"}
-	ErrUserNotFound = ErrCode{10004, "用户不存在"}
-	ErrServer       = ErrCode{10005, "服务器内部错误"}
-	ErrToken        = ErrCode{10006, "token无效"}
+	Success = ErrCode{0, "success"}
+
+	// 基础设施错误 — gateway 自身产生的错误
+	ErrParam    = ErrCode{int(CodeGwParam), "参数错误"}
+	ErrServer   = ErrCode{int(CodeGwServer), "服务器内部错误"}
+	ErrToken    = ErrCode{int(CodeGwToken), "token无效"}
+	ErrNotFound = ErrCode{int(CodeGwNotFound), "service not found"}
+	ErrResponse = ErrCode{int(CodeGwResponse), "invalid response"}
 )
-
-func (e ErrCode) HttpCode() int {
-	if e.Code == 0 {
-		return http.StatusOK
-	}
-	return http.StatusInternalServerError
-}
-
-func (e ErrCode) Error() string {
-	return e.Msg
-}
 
 // WithMsg 创建新错误码，保留 Code 替换 Msg
 func (e ErrCode) WithMsg(msg string) ErrCode {
 	return ErrCode{Code: e.Code, Msg: msg}
+}
+
+// FromBizError 将下游 BizError 转为网关 ErrCode，保留原始业务 code 和 message
+func FromBizError(biz *BizError) ErrCode {
+	return ErrCode{Code: int(biz.Code), Msg: biz.Message}
 }

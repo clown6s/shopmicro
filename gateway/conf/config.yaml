@@ -3,11 +3,19 @@ server:
 
 redis:
   addr: "10.211.55.5:6379"
-  password: "admin@zzp"
+  password: ""  # 通过 REDIS_PASSWORD 环境变量设置
   db: 0
 
 jwt:
-  secret: "shopmicro-jwt-secret-2026"
+  secret: ""  # 通过 JWT_SECRET 环境变量设置
+
+cors:
+  allowOrigins:
+    - "*"  # 生产环境替换为具体域名
+
+serviceRoutes:
+  - name: "user"
+    hostPorts: "127.0.0.1:8888"  # 服务发现可用时去掉
 
 etcd:
   addrs:
