@@ -13,9 +13,9 @@ cors:
   allowOrigins:
     - "*"  # 生产环境替换为具体域名
 
-serviceRoutes:
-  - name: "user"
-    hostPorts: "127.0.0.1:8888"  # 服务发现可用时去掉
+# proto 文件基础路径（相对于网关工作目录），默认 "../"
+# proto 约定路径: {protoBase}{serviceName}/api/{serviceName}.proto
+protoBase: "../"
 
 etcd:
   addrs:

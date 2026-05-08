@@ -3,16 +3,20 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bytedance/gopkg/cloud/metainfo"
 	dproto "github.com/cloudwego/dynamicgo/proto"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/kitex/client"
 	"github.com/cloudwego/kitex/client/genericclient"
+	"github.com/cloudwego/kitex/pkg/discovery"
 	"github.com/cloudwego/kitex/pkg/generic"
+	etcdv3 "go.etcd.io/etcd/client/v3"
 
 	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/jwt"
@@ -24,8 +28,9 @@ import (
 type contextKey string
 
 const (
-	keyUserID contextKey = "user_id"
-	keyPhone  contextKey = "phone"
+	keyUserID           contextKey = "user_id"
+	keyPhone            contextKey = "phone"
+	kitexRegistryPrefix            = "kitex/registry-etcd/"
 )
 
 // Proxy 通用 gRPC 代理，基于 Kitex generic client 自动转发请求
@@ -88,6 +93,64 @@ func (p *Proxy) RegisterService(destService, protoPath string, opts ...client.Op
 	p.mu.Lock()
 	p.clients[destService] = cli
 	p.mu.Unlock()
+	return nil
+}
+
+// DiscoverAndRegister 自动从 Etcd 发现已注册的 Kitex 服务并创建 generic client
+// 新增服务零配置：只需启动下游服务注册到 Etcd，网关自动感知
+//
+// resolver: 服务发现 Resolver（已连接 Etcd）
+// etcdAddrs: Etcd 地址列表，用于查询已注册的服务名
+// protoBase: proto 文件基础路径（相对于网关工作目录），默认 "../"
+//
+//	proto 文件约定路径: {protoBase}{serviceName}/api/{serviceName}.proto
+func (p *Proxy) DiscoverAndRegister(resolver discovery.Resolver, etcdAddrs []string, protoBase string) error {
+	if protoBase == "" {
+		protoBase = "../"
+	}
+
+	cli, err := etcdv3.New(etcdv3.Config{
+		Endpoints:   etcdAddrs,
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("create etcd client for discovery: %w", err)
+	}
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := cli.Get(ctx, kitexRegistryPrefix, etcdv3.WithPrefix())
+	if err != nil {
+		return fmt.Errorf("discover services from etcd: %w", err)
+	}
+
+	services := make(map[string]bool)
+	for _, kv := range resp.Kvs {
+		rest := strings.TrimPrefix(string(kv.Key), kitexRegistryPrefix)
+		if idx := strings.Index(rest, "/"); idx > 0 {
+			services[rest[:idx]] = true
+		} else if rest != "" {
+			services[rest] = true
+		}
+	}
+
+	if len(services) == 0 {
+		logger.Warnf("no services discovered in etcd under %s", kitexRegistryPrefix)
+		return nil
+	}
+
+	for name := range services {
+		protoPath := protoBase + name + "/api/" + name + ".proto"
+		opts := []client.Option{client.WithResolver(resolver)}
+		if err := p.RegisterService(name, protoPath, opts...); err != nil {
+			logger.Warnf("auto-register service %s failed (proto: %s): %v", name, protoPath, err)
+			continue
+		}
+		logger.Infof("auto-discovered service: %s (proto: %s)", name, protoPath)
+	}
+
 	return nil
 }
 

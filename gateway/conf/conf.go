@@ -6,9 +6,14 @@ import (
 	"shopmicro/pkg/conf"
 )
 
-type ServiceRoute struct {
-	Name      string `yaml:"name"`      // 下游服务名
-	HostPorts string `yaml:"hostPorts"` // 直连地址（服务发现失败时使用，空则仅走服务发现）
+type Config struct {
+	Server    conf.Server `yaml:"server"`
+	Etcd      conf.Etcd   `yaml:"etcd"`
+	CORS      CORS        `yaml:"cors"`
+	Redis     Redis       `yaml:"redis"`
+	JWT       JWT         `yaml:"jwt"`
+	ProtoBase string      `yaml:"protoBase"` // proto 文件基础路径，默认 "../"
+	Mode      string      `yaml:"mode"`
 }
 
 type CORS struct {
@@ -23,16 +28,6 @@ type Redis struct {
 
 type JWT struct {
 	Secret string `yaml:"secret"`
-}
-
-type Config struct {
-	Server        conf.Server    `yaml:"server"`
-	Etcd          conf.Etcd      `yaml:"etcd"`
-	CORS          CORS           `yaml:"cors"`
-	Redis         Redis          `yaml:"redis"`
-	JWT           JWT            `yaml:"jwt"`
-	ServiceRoutes []ServiceRoute `yaml:"serviceRoutes"`
-	Mode          string         `yaml:"mode"`
 }
 
 func (c *Config) ApplyEnv() {
@@ -52,14 +47,4 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("jwt secret is required, set JWT_SECRET env or config.yaml")
 	}
 	return nil
-}
-
-// GetHostPorts 获取服务直连地址
-func (c *Config) GetHostPorts(serviceName string) string {
-	for _, s := range c.ServiceRoutes {
-		if s.Name == serviceName {
-			return s.HostPorts
-		}
-	}
-	return ""
 }

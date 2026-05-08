@@ -5,7 +5,6 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
-	"github.com/cloudwego/kitex/client"
 	"github.com/kitex-contrib/registry-etcd"
 
 	"shopmicro/gateway/conf"
@@ -46,12 +45,8 @@ func Run(configPath string) error {
 		proxy.WithPublicMethods("RegisterUser", "Login"),
 	)
 
-	// 注册下游服务，新增服务只需加一行
-	userOpts := []client.Option{client.WithResolver(r)}
-	if hp := cfg.GetHostPorts("user"); hp != "" {
-		userOpts = append(userOpts, client.WithHostPorts(hp))
-	}
-	if err := p.RegisterService("user", "../user/api/user.proto", userOpts...); err != nil {
+	// 自动发现 Etcd 中已注册的服务，新增服务零配置
+	if err := p.DiscoverAndRegister(r, cfg.Etcd.Addrs, cfg.ProtoBase); err != nil {
 		return err
 	}
 
