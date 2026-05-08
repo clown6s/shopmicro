@@ -1,0 +1,16 @@
+server:
+  addr: ":8080"
+
+redis:
+  addr: "10.211.55.5:6379"
+  password: "admin@zzp"
+  db: 0
+
+jwt:
+  secret: "shopmicro-jwt-secret-2026"
+
+etcd:
+  addrs:
+    - "10.211.55.5:2379"
+
+mode: "dev"
