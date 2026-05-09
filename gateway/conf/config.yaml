@@ -24,10 +24,21 @@ etcd:
 
 mode: "dev"
 
+# HashiCorp Vault（留空则使用环境变量 .env）
+vault:
+  address: ""       # 通过 VAULT_ADDRESS 环境变量设置，如 "http://10.211.55.5:8200"
+  token: ""         # 通过 VAULT_TOKEN 环境变量设置
+  mountPath: "secret"
+
 # 分布式限流配置 (Redis 滑动窗口)
 rateLimit:
   limit: 100          # 窗口内最大请求数
   windowSec: 60       # 滑动窗口时长（秒）
+  # P1-15: 端点级限流 — Login 端点更严格
+  endpoints:
+    user/Login:
+      limit: 5            # 每分钟每IP最多5次登录尝试
+      windowSec: 60
 
 # 熔断器配置
 circuitBreaker:

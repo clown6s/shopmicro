@@ -6,18 +6,20 @@ import (
 
 	"shopmicro/pkg/conf"
 	"shopmicro/pkg/redis"
+	"shopmicro/pkg/secrets"
 )
 
 type Config struct {
-	Server         conf.Server       `yaml:"server"`
-	Etcd           conf.Etcd         `yaml:"etcd"`
-	CORS           CORS              `yaml:"cors"`
-	Redis          redis.Config      `yaml:"redis"`
-	JWT            JWT               `yaml:"jwt"`
-	ProtoBase      string            `yaml:"protoBase"`
-	Mode           string            `yaml:"mode"`
-	RateLimit      RateLimit         `yaml:"rateLimit"`
-	CircuitBreaker CircuitBreakerCfg `yaml:"circuitBreaker"`
+	Server         conf.Server         `yaml:"server"`
+	Etcd           conf.Etcd           `yaml:"etcd"`
+	CORS           CORS                `yaml:"cors"`
+	Redis          redis.Config        `yaml:"redis"`
+	JWT            JWT                 `yaml:"jwt"`
+	ProtoBase      string              `yaml:"protoBase"`
+	Mode           string              `yaml:"mode"`
+	RateLimit      RateLimit           `yaml:"rateLimit"`
+	CircuitBreaker CircuitBreakerCfg   `yaml:"circuitBreaker"`
+	Vault          secrets.VaultConfig `yaml:"vault"`
 }
 
 type CORS struct {
@@ -33,6 +35,15 @@ type JWT struct {
 type RateLimit struct {
 	Limit   int `yaml:"limit"`     // 窗口内最大请求数 (default: 100)
 	WindowS int `yaml:"windowSec"` // 滑动窗口时长（秒） (default: 60)
+	// P1-15: Per-endpoint rate limits for sensitive operations
+	Endpoints map[string]EndpointRate `yaml:"endpoints"`
+}
+
+// EndpointRate defines rate limiting for a specific endpoint.
+// Key format: "service/method" (e.g. "user/Login")
+type EndpointRate struct {
+	Limit   int `yaml:"limit"`     // max requests per window
+	WindowS int `yaml:"windowSec"` // window duration in seconds (default: global window)
 }
 
 // CircuitBreakerCfg 熔断器配置
@@ -69,6 +80,14 @@ func (c *Config) SetDefaults() {
 }
 
 func (c *Config) ApplyEnv() {
+	// Initialise secrets provider (Vault if configured, fallback to env)
+	if c.Vault.Address != "" {
+		if token := conf.Env("VAULT_TOKEN", c.Vault.Token); token != "" {
+			c.Vault.Token = token
+		}
+		secrets.InitProvider(c.Vault)
+	}
+
 	if v := conf.Env("REDIS_ADDR", ""); v != "" {
 		c.Redis.Addr = v
 	}

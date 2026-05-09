@@ -25,6 +25,12 @@ func New(cfg Config) (*Client, func(), error) {
 		Addr:     cfg.Addr,
 		Password: cfg.Password,
 		DB:       cfg.DB,
+		// P1-18: Connection pool configuration for production
+		PoolSize:     100, // max connections
+		MinIdleConns: 10,  // minimum idle connections
+		// PoolTimeout:     4 * time.Second, // wait timeout for getting a connection (default 4s)
+		ConnMaxLifetime: 30 * time.Minute, // max connection age
+		ConnMaxIdleTime: 10 * time.Minute, // max idle connection age
 	}
 	rdb := redis.NewClient(opt)
 
@@ -38,6 +44,7 @@ func New(cfg Config) (*Client, func(), error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
+		_ = rdb.Close() // P2-19: close client on ping failure to prevent leak
 		return nil, nil, err
 	}
 

@@ -24,7 +24,8 @@ func Init(mode string) error {
 		}
 		cfg.EncoderConfig.TimeKey = "ts"
 		cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-		log, err := cfg.Build(zap.AddCallerSkip(1))
+		// P1-07: Add stack trace for Error and higher levels
+		log, err := cfg.Build(zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.ErrorLevel))
 		if err != nil {
 			initErr = err
 			return

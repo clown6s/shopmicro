@@ -19,3 +19,9 @@ etcd:
     - "10.211.55.5:2379"
 
 mode: "dev"
+
+# HashiCorp Vault（留空则使用环境变量 .env）
+vault:
+  address: ""       # 通过 VAULT_ADDRESS 环境变量设置，如 "http://10.211.55.5:8200"
+  token: ""         # 通过 VAULT_TOKEN 环境变量设置
+  mountPath: "secret"

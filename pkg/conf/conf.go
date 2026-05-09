@@ -6,6 +6,8 @@ import (
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
+
+	"shopmicro/pkg/secrets"
 )
 
 type Server struct {
@@ -39,8 +41,13 @@ func Load(path string, cfg interface{}) error {
 	return nil
 }
 
-// Env 读取环境变量，带默认值
+// Env 读取密钥值，优先从 DefaultProvider（Vault）获取，回退到环境变量
 func Env(key, fallback string) string {
+	// Try the configured provider first (Vault if available)
+	if v, ok := secrets.Get(key); ok {
+		return v
+	}
+	// Fallback to raw environment variable
 	if v := os.Getenv(key); v != "" {
 		return v
 	}

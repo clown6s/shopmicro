@@ -50,6 +50,10 @@ type Proxy struct {
 	jwtParser    *pkgjwt.Parser
 	rdb          *redis.Client
 	publicMethod map[string]bool
+	// P1-12: Allowed service names (nil = allow all discovered)
+	allowedServices map[string]bool
+	// P1-12: Allowed methods per service (nil = allow all methods)
+	allowedMethods map[string]map[string]bool
 }
 
 // Option configures Proxy at construction time.
@@ -81,13 +85,27 @@ func WithPublicMethods(methods ...string) Option {
 // New creates a Proxy with the given options.
 func New(opts ...Option) *Proxy {
 	p := &Proxy{
-		clients:      make(map[string]*ServiceClient),
-		publicMethod: make(map[string]bool),
+		clients:        make(map[string]*ServiceClient),
+		publicMethod:   make(map[string]bool),
+		allowedMethods: make(map[string]map[string]bool),
 	}
 	for _, opt := range opts {
 		opt(p)
 	}
 	return p
+}
+
+// WithAllowedMethods registers a whitelist of RPC methods per service.
+// Example: WithAllowedMethods("user", "RegisterUser", "Login", "Logout")
+// If no methods are registered for a service, all methods are allowed.
+func WithAllowedMethods(service string, methods ...string) Option {
+	return func(p *Proxy) {
+		m := make(map[string]bool)
+		for _, method := range methods {
+			m[method] = true
+		}
+		p.allowedMethods[service] = m
+	}
 }
 
 // =========================
@@ -242,41 +260,79 @@ func (p *Proxy) DiscoverAndRegister(
 
 // WatchServices watches Etcd for newly registered services and registers them
 // automatically. It runs in a background goroutine and returns immediately.
+// P1-03: Accepts a lifecycle context for cancellation and adds reconnect logic
+// with exponential backoff when the etcd watch channel closes unexpectedly.
 func (p *Proxy) WatchServices(
+	ctx context.Context,
 	resolver discovery.Resolver,
 	etcdAddrs []string,
 	protoBase string,
 ) {
 	go func() {
-		etcdClient, err := newEtcdClient(etcdAddrs)
-		if err != nil {
-			logger.Errorf("WatchServices: connect to etcd: %v", err)
-			return
-		}
-		defer etcdClient.Close()
+		const maxBackoff = 30 * time.Second
+		backoff := time.Second
 
-		prefix := etcdRegistryPrefix + "/"
-		watchCh := etcdClient.Watch(context.Background(), prefix, clientv3.WithPrefix())
+		for {
+			if ctx.Err() != nil {
+				return // parent context cancelled
+			}
 
-		for wresp := range watchCh {
-			for _, ev := range wresp.Events {
-				if ev.Type != clientv3.EventTypePut {
-					continue
-				}
-				svcName := extractServiceName(string(ev.Kv.Key), prefix)
-				if svcName == "" {
-					continue
-				}
-				if _, ok := p.getClient(svcName); ok {
-					continue // already registered
-				}
-				protoPath := buildProtoPath(protoBase, svcName)
-				if err := p.registerService(svcName, protoPath, resolver); err != nil {
-					logger.Warnf("WatchServices: failed to register %s: %v", svcName, err)
-				}
+			err := p.watchOnce(ctx, resolver, etcdAddrs, protoBase)
+			if ctx.Err() != nil {
+				return
+			}
+
+			// Watch channel closed (etcd connection lost or other error)
+			logger.Warnf("WatchServices: watch channel closed, reconnecting in %v: %v", backoff, err)
+			time.Sleep(backoff)
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
 			}
 		}
 	}()
+}
+
+// watchOnce performs a single etcd watch loop until the channel closes or context cancels.
+func (p *Proxy) watchOnce(
+	ctx context.Context,
+	resolver discovery.Resolver,
+	etcdAddrs []string,
+	protoBase string,
+) error {
+	etcdClient, err := newEtcdClient(etcdAddrs)
+	if err != nil {
+		return fmt.Errorf("connect to etcd: %w", err)
+	}
+	defer etcdClient.Close()
+
+	prefix := etcdRegistryPrefix + "/"
+	// P1-03: Use lifecycle context instead of context.Background()
+	watchCh := etcdClient.Watch(ctx, prefix, clientv3.WithPrefix())
+
+	for wresp := range watchCh {
+		if wresp.Err() != nil {
+			return fmt.Errorf("etcd watch error: %w", wresp.Err())
+		}
+		for _, ev := range wresp.Events {
+			if ev.Type != clientv3.EventTypePut {
+				continue
+			}
+			svcName := extractServiceName(string(ev.Kv.Key), prefix)
+			if svcName == "" {
+				continue
+			}
+			if _, ok := p.getClient(svcName); ok {
+				continue // already registered
+			}
+			protoPath := buildProtoPath(protoBase, svcName)
+			if err := p.registerService(svcName, protoPath, resolver); err != nil {
+				logger.Warnf("WatchServices: failed to register %s: %v", svcName, err)
+			}
+		}
+	}
+
+	return fmt.Errorf("watch channel closed")
 }
 
 // =========================
@@ -289,6 +345,15 @@ func (p *Proxy) Handler() app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		service := c.Param("service")
 		method := toMethodName(c.Param("method"))
+
+		// P1-12: Service/method whitelist enforcement
+		if allowed, ok := p.allowedMethods[service]; ok {
+			if !allowed[method] {
+				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwParam), fmt.Sprintf("method %s not allowed for service %s", method, service))
+				c.Abort()
+				return
+			}
+		}
 
 		// JWT authentication — skip for public methods.
 		if p.jwtParser != nil && !p.publicMethod[method] {
@@ -311,8 +376,12 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			// Verify token is still active in Redis (not logged out / superseded).
 			if p.rdb != nil {
 				tokenKey := fmt.Sprintf("%s%d", tokenPrefix, claims.UserID)
-				stored, _ := p.rdb.Get(ctx, tokenKey)
-				if stored != tokenStr {
+				stored, err := p.rdb.Get(ctx, tokenKey)
+				if err != nil {
+					// P0-01 fix: Redis failure → fail-open to avoid becoming SPOF.
+					// Log warning and allow request; token revocation is best-effort.
+					logger.Warnf("redis get token failed (fail-open): user_id=%d err=%v", claims.UserID, err)
+				} else if stored != tokenStr {
 					response.Unauthorized(c, "token revoked")
 					c.Abort()
 					return

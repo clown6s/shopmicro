@@ -52,17 +52,36 @@ return 1
 // RedisRateLimiter implements distributed sliding window rate limiting via Redis.
 type RedisRateLimiter struct {
 	rdb    *redis.Client
-	limit  int           // max requests per window
-	window time.Duration // sliding window duration
+	limit  int           // max requests per window (default)
+	window time.Duration // sliding window duration (default)
+	// P1-15: Per-endpoint overrides
+	endpointOverrides map[string]*endpointLimit
+}
+
+// endpointLimit holds per-endpoint rate limit configuration
+type endpointLimit struct {
+	limit  int
+	window time.Duration
 }
 
 // NewRedisRateLimiter creates a Redis-based sliding window rate limiter.
 func NewRedisRateLimiter(rdb *redis.Client, limit int, window time.Duration) *RedisRateLimiter {
 	return &RedisRateLimiter{
-		rdb:    rdb,
-		limit:  limit,
-		window: window,
+		rdb:               rdb,
+		limit:             limit,
+		window:            window,
+		endpointOverrides: make(map[string]*endpointLimit),
 	}
+}
+
+// SetEndpointLimit sets a per-endpoint rate limit override.
+// endpointKey format: "service/method" (e.g. "user/Login")
+func (rl *RedisRateLimiter) SetEndpointLimit(endpointKey string, limit int, windowS int) {
+	w := rl.window
+	if windowS > 0 {
+		w = time.Duration(windowS) * time.Second
+	}
+	rl.endpointOverrides[endpointKey] = &endpointLimit{limit: limit, window: w}
 }
 
 // Allow checks whether a request from the given key is allowed.
@@ -95,6 +114,36 @@ func RateLimitMiddleware(rl *RedisRateLimiter) app.HandlerFunc {
 		key := fmt.Sprintf("shopmicro:ratelimit:ip:%s", ip)
 
 		if !rl.Allow(ctx, key) {
+			response.TooManyRequests(c)
+			c.Abort()
+			return
+		}
+		c.Next(ctx)
+	}
+}
+
+// P1-15: EndpointRateLimitMiddleware creates a middleware that applies
+// a specific rate limit to a single endpoint (service/method).
+// Use this for sensitive endpoints like Login.
+func EndpointRateLimitMiddleware(rl *RedisRateLimiter, endpointKey string) app.HandlerFunc {
+	el, ok := rl.endpointOverrides[endpointKey]
+	if !ok {
+		// No override configured, fall through to global rate limit
+		return func(ctx context.Context, c *app.RequestContext) {
+			c.Next(ctx)
+		}
+	}
+	// Create a dedicated limiter for this endpoint
+	dedicated := &RedisRateLimiter{
+		rdb:    rl.rdb,
+		limit:  el.limit,
+		window: el.window,
+	}
+	return func(ctx context.Context, c *app.RequestContext) {
+		ip := c.ClientIP()
+		key := fmt.Sprintf("shopmicro:ratelimit:ep:%s:ip:%s", endpointKey, ip)
+
+		if !dedicated.Allow(ctx, key) {
 			response.TooManyRequests(c)
 			c.Abort()
 			return

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -62,6 +63,7 @@ func Run(configPath string) error {
 
 	shutdownTracer := otel.InitTracer(
 		"shopmicro-gateway",
+		cfg.Mode,
 	)
 
 	defer shutdownTracer(
@@ -136,6 +138,7 @@ func Run(configPath string) error {
 			&middleware.CORSConfig{
 				AllowOrigins: cfg.CORS.AllowOrigins,
 			},
+			cfg.Mode,
 		),
 	)
 
@@ -152,6 +155,12 @@ func Run(configPath string) error {
 	// distributed rate limit (Redis sliding window, per-IP)
 	rlWindow := time.Duration(cfg.RateLimit.WindowS) * time.Second
 	rl := middleware.NewRedisRateLimiter(rdb, cfg.RateLimit.Limit, rlWindow)
+
+	// P1-15: Configure per-endpoint rate limits for sensitive operations
+	for epKey, epCfg := range cfg.RateLimit.Endpoints {
+		rl.SetEndpointLimit(epKey, epCfg.Limit, epCfg.WindowS)
+	}
+
 	h.Use(
 		middleware.RateLimitMiddleware(rl),
 	)
@@ -172,6 +181,16 @@ func Run(configPath string) error {
 			"RegisterUser",
 			"Login",
 		),
+
+		// P1-12: Explicit method whitelist for user service
+		proxy.WithAllowedMethods("user",
+			"RegisterUser",
+			"Login",
+			"Logout",
+			"UpdateUser",
+			"DeleteUser",
+			"ListUser",
+		),
 	)
 
 	// discover services
@@ -184,8 +203,12 @@ func Run(configPath string) error {
 		return err
 	}
 
-	// watch services
+	// watch services — P1-03: pass lifecycle context for cancellation
+	watchCtx, watchCancel := context.WithCancel(context.Background())
+	defer watchCancel()
+
 	p.WatchServices(
+		watchCtx,
 		r,
 		cfg.Etcd.Addrs,
 		cfg.ProtoBase,
@@ -198,6 +221,12 @@ func Run(configPath string) error {
 	h.GET(
 		"/health",
 		health.Handler(),
+	)
+
+	// P0-07: Readiness probe for K8s
+	h.GET(
+		"/ready",
+		health.ReadyHandler(),
 	)
 
 	// =========================
@@ -215,6 +244,13 @@ func Run(configPath string) error {
 			cbTimeout,
 			uint32(cfg.CircuitBreaker.ConsecutiveFailures),
 		),
+	)
+
+	// P1-15: Login endpoint gets stricter rate limiting
+	api.POST(
+		"/user/Login",
+		middleware.EndpointRateLimitMiddleware(rl, "user/Login"),
+		p.Handler(),
 	)
 
 	api.GET(
@@ -241,7 +277,12 @@ func Run(configPath string) error {
 	// graceful shutdown
 	// =========================
 
+	// P1-13: Use WaitGroup to ensure main() blocks until shutdown completes
+	var wg sync.WaitGroup
+	wg.Add(1)
+
 	go func() {
+		defer wg.Done()
 
 		quit := make(
 			chan os.Signal,
@@ -319,12 +360,15 @@ func Run(configPath string) error {
 				"hertz already stopped",
 			)
 
+			wg.Wait()
 			return nil
 		}
 
+		wg.Wait()
 		return err
 	}
 
+	wg.Wait()
 	return nil
 }
 

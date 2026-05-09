@@ -118,8 +118,9 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32) ([]*model.User
 	}
 
 	offset := int64(page-1) * int64(pageSize)
+	// P1-08: List query does NOT select password column — no need to load hashes into memory
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT id, password, COALESCE(real_name,''), COALESCE(avatar,''), gender, COALESCE(age,0),
+		`SELECT id, COALESCE(real_name,''), COALESCE(avatar,''), gender, COALESCE(age,0),
 		        phone, COALESCE(email,''), create_time, update_time, COALESCE(remark,'')
 		 FROM user WHERE deleted_at IS NULL
 		 ORDER BY id DESC LIMIT ? OFFSET ?`, pageSize, offset,
@@ -132,7 +133,7 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32) ([]*model.User
 	users := make([]*model.User, 0)
 	for rows.Next() {
 		u := &model.User{}
-		if err := rows.Scan(&u.ID, &u.Password, &u.RealName, &u.Avatar, &u.Gender, &u.Age,
+		if err := rows.Scan(&u.ID, &u.RealName, &u.Avatar, &u.Gender, &u.Age,
 			&u.Phone, &u.Email, &u.CreateTime, &u.UpdateTime, &u.Remark); err != nil {
 			return nil, 0, err
 		}
