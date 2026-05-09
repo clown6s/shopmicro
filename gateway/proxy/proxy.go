@@ -22,6 +22,7 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"shopmicro/pkg/errcode"
 	pkgjwt "shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
 )
@@ -315,9 +316,23 @@ func (p *Proxy) Handler() app.HandlerFunc {
 
 		resp, err := p.Call(ctx, service, method, body)
 		if err != nil {
+			// P0-2: Never expose internal errors to clients.
+			// P1-8: Try to parse downstream BizError for proper status code.
+			if biz, ok := errcode.ParseBizError(err); ok {
+				statusCode := http.StatusBadRequest
+				if biz.Code >= 500 {
+					statusCode = http.StatusInternalServerError
+				}
+				c.JSON(statusCode, map[string]interface{}{
+					"code": int(biz.Code),
+					"msg":  biz.Message,
+				})
+				return
+			}
+			logger.Errorf("rpc call failed: service=%s method=%s err=%v", service, method, err)
 			c.JSON(http.StatusInternalServerError, map[string]interface{}{
 				"code": 500,
-				"msg":  err.Error(),
+				"msg":  "internal server error",
 			})
 			return
 		}

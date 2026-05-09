@@ -195,6 +195,18 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 		return nil, errNothingUpdate
 	}
 
+	// P0-4: Check phone uniqueness before update.
+	if newPhone, ok := updates["phone"].(string); ok && newPhone != "" {
+		existing, err := s.userDal.GetByPhone(ctx, newPhone)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			logger.Errorf("check phone uniqueness failed: %v", err)
+			return nil, errInternal
+		}
+		if existing != nil && existing.ID != req.GetId() {
+			return nil, errPhoneExists
+		}
+	}
+
 	if err := s.userDal.Update(ctx, req.GetId(), updates); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errUserNotFound

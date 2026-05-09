@@ -136,14 +136,9 @@ func Run(configPath string) error {
 		middleware.AccessLogMiddleware(),
 	)
 
-	// rate limit
+	// rate limit (global, including /health is fine)
 	h.Use(
 		middleware.RateLimitMiddleware(),
-	)
-
-	// circuit breaker
-	h.Use(
-		middleware.CircuitBreakerMiddleware(),
 	)
 
 	// =========================
@@ -193,6 +188,11 @@ func Run(configPath string) error {
 	// =========================
 
 	api := h.Group("/api/v1")
+
+	// P0-5: Circuit breaker only on API routes — /health must remain reachable.
+	api.Use(
+		middleware.CircuitBreakerMiddleware(),
+	)
 
 	api.GET(
 		"/:service/:method",
