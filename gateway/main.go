@@ -166,6 +166,8 @@ func Run(configPath string) error {
 			cfg.JWT.Secret,
 		),
 
+		proxy.WithRedis(rdb),
+
 		proxy.WithPublicMethods(
 			"RegisterUser",
 			"Login",
@@ -254,7 +256,7 @@ func Run(configPath string) error {
 
 		sig := <-quit
 
-		logger.L.Infof(
+		logger.Infof(
 			"shutdown signal received: %v",
 			sig,
 		)
@@ -276,14 +278,14 @@ func Run(configPath string) error {
 				"engine is not running",
 			) {
 
-				logger.L.Warnf(
+				logger.Warnf(
 					"hertz already stopped",
 				)
 
 				return
 			}
 
-			logger.L.Errorf(
+			logger.Errorf(
 				"hertz shutdown failed: %v",
 				err,
 			)
@@ -291,7 +293,7 @@ func Run(configPath string) error {
 			return
 		}
 
-		logger.L.Infof(
+		logger.Infof(
 			"gateway stopped",
 		)
 	}()
@@ -300,7 +302,7 @@ func Run(configPath string) error {
 	// start server
 	// =========================
 
-	logger.L.Infof(
+	logger.Infof(
 		"gateway started at %s",
 		cfg.Server.Addr,
 	)
@@ -313,7 +315,7 @@ func Run(configPath string) error {
 			"engine is not running",
 		) {
 
-			logger.L.Warnf(
+			logger.Warnf(
 				"hertz already stopped",
 			)
 
@@ -340,7 +342,7 @@ func main() {
 		*configPath,
 	); err != nil {
 
-		logger.L.Fatalf(
+		logger.Fatalf(
 			"gateway run failed: %v",
 			err,
 		)

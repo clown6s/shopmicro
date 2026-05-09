@@ -14,6 +14,7 @@ import (
 	server "github.com/cloudwego/kitex/server"
 
 	"github.com/cloudwego/kitex/pkg/rpcinfo"
+	"github.com/cloudwego/kitex/pkg/transmeta"
 
 	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
 
@@ -22,14 +23,12 @@ import (
 	v1 "shopmicro/user/kitex_gen/api/user/v1/userservice"
 
 	pkgconf "shopmicro/pkg/conf"
-	"shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/otel"
 
 	"shopmicro/user/conf"
 	"shopmicro/user/data"
 	"shopmicro/user/handler"
-	"shopmicro/user/middleware"
 )
 
 func Run(configPath string) error {
@@ -143,13 +142,8 @@ func Run(configPath string) error {
 			addr,
 		),
 
-		// auth middleware
-		server.WithMiddleware(
-			middleware.AuthMiddleware(
-				jwt.NewParser(
-					cfg.JWT.Secret,
-				),
-			),
+		server.WithMetaHandler(
+			transmeta.MetainfoServerHandler,
 		),
 
 		// otel tracing
@@ -179,7 +173,7 @@ func Run(configPath string) error {
 
 		sig := <-quit
 
-		logger.L.Infof(
+		logger.Infof(
 			"shutdown signal received: %v",
 			sig,
 		)
@@ -199,14 +193,14 @@ func Run(configPath string) error {
 				"context deadline exceeded",
 			) {
 
-				logger.L.Warnf(
+				logger.Warnf(
 					"kitex shutdown timeout",
 				)
 
 				return
 			}
 
-			logger.L.Errorf(
+			logger.Errorf(
 				"kitex shutdown failed: %v",
 				err,
 			)
@@ -216,7 +210,7 @@ func Run(configPath string) error {
 
 		_ = ctx
 
-		logger.L.Infof(
+		logger.Infof(
 			"user service stopped",
 		)
 	}()
@@ -225,7 +219,7 @@ func Run(configPath string) error {
 	// start server
 	// =========================
 
-	logger.L.Infof(
+	logger.Infof(
 		"user service started on %s",
 		cfg.Server.Addr,
 	)
@@ -237,7 +231,7 @@ func Run(configPath string) error {
 			"context deadline exceeded",
 		) {
 
-			logger.L.Warnf(
+			logger.Warnf(
 				"kitex already stopped",
 			)
 

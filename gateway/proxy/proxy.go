@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"github.com/bytedance/gopkg/cloud/metainfo"
+	dproto "github.com/cloudwego/dynamicgo/proto"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/kitex/client"
 	"github.com/cloudwego/kitex/client/genericclient"
 	"github.com/cloudwego/kitex/pkg/discovery"
 	"github.com/cloudwego/kitex/pkg/generic"
-
-	dproto "github.com/cloudwego/dynamicgo/proto"
+	"github.com/cloudwego/kitex/pkg/transmeta"
 	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -25,12 +25,14 @@ import (
 	"shopmicro/pkg/errcode"
 	pkgjwt "shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
+	"shopmicro/pkg/redis"
 	"shopmicro/pkg/response"
 )
 
 const (
 	// etcdRegistryPrefix is the key namespace used by kitex registry-etcd.
 	etcdRegistryPrefix = "kitex/registry-etcd"
+	tokenPrefix        = "shopmicro:user:token:"
 )
 
 // ServiceClient bundles a kitex generic client with its descriptor.
@@ -46,6 +48,7 @@ type Proxy struct {
 	clients map[string]*ServiceClient
 
 	jwtParser    *pkgjwt.Parser
+	rdb          *redis.Client
 	publicMethod map[string]bool
 }
 
@@ -56,6 +59,13 @@ type Option func(*Proxy)
 func WithJWT(secret string) Option {
 	return func(p *Proxy) {
 		p.jwtParser = pkgjwt.NewParser(secret)
+	}
+}
+
+// WithRedis sets the Redis client for token validation.
+func WithRedis(rdb *redis.Client) Option {
+	return func(p *Proxy) {
+		p.rdb = rdb
 	}
 }
 
@@ -125,6 +135,7 @@ func (p *Proxy) registerService(
 		client.WithResolver(resolver),
 		client.WithRPCTimeout(5*time.Second),
 		client.WithConnectTimeout(3*time.Second),
+		client.WithMetaHandler(transmeta.MetainfoClientHandler),
 		client.WithSuite(kotelkitex.NewClientSuite(
 			kotelkitex.WithEnableGRPCMetadata(),
 		)),
@@ -296,6 +307,18 @@ func (p *Proxy) Handler() app.HandlerFunc {
 				c.Abort()
 				return
 			}
+
+			// Verify token is still active in Redis (not logged out / superseded).
+			if p.rdb != nil {
+				tokenKey := fmt.Sprintf("%s%d", tokenPrefix, claims.UserID)
+				stored, _ := p.rdb.Get(ctx, tokenKey)
+				if stored != tokenStr {
+					response.Unauthorized(c, "token revoked")
+					c.Abort()
+					return
+				}
+			}
+
 			// Forward identity to downstream service via Kitex metainfo.
 			ctx = metainfo.WithPersistentValue(ctx, "token", tokenStr)
 			ctx = metainfo.WithPersistentValue(ctx, "user_id", fmt.Sprintf("%d", claims.UserID))

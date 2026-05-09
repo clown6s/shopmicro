@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bytedance/gopkg/cloud/metainfo"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 
 	"shopmicro/user/data"
@@ -31,16 +33,13 @@ var (
 	errPhonePwdWrong    = newBiz(errcode.CodeUserPhonePwdWrong, "phone or password incorrect")
 	errInvalidUserID    = newBiz(errcode.CodeUserInvalidID, "invalid user id")
 	errNothingUpdate    = newBiz(errcode.CodeUserNothingUpdate, "nothing to update")
-	errTokenRequired    = newBiz(errcode.CodeUserTokenRequired, "token is required")
-	errTokenInvalid     = newBiz(errcode.CodeUserTokenInvalid, "invalid token")
-	errTokenMismatch    = newBiz(errcode.CodeUserTokenMismatch, "token mismatch, please login again")
 	errUserNotFound     = newBiz(errcode.CodeUserNotFound, "user not found")
+	errUnauthorized     = newBiz(errcode.CodeUserUnauthorized, "unauthorized: missing user identity")
 )
 
 type UserServiceImpl struct {
 	userDal   *data.UserDal
 	jwtGen    *jwt.Generator
-	jwtParser *jwt.Parser
 	jwtExpHrs int
 	rdb       *redis.Client
 }
@@ -53,7 +52,6 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int) *UserServic
 	return &UserServiceImpl{
 		userDal:   d.User(),
 		jwtGen:    gen,
-		jwtParser: jwt.NewParser(jwtSecret),
 		jwtExpHrs: jwtExpHours,
 		rdb:       d.Rdb,
 	}
@@ -259,26 +257,18 @@ func toUserInfo(u *model.User) *v1.UserInfo {
 	}
 }
 
-// Logout implements the UserServiceImpl interface.
+// Logout deletes the user's active token from Redis.
+// Token validation is handled by the gateway; downstream receives user_id via metainfo.
 func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *v1.LogoutResp, err error) {
-	if req.GetToken() == "" {
-		return nil, errTokenRequired
+	userIDStr, ok := metainfo.GetPersistentValue(ctx, "user_id")
+	if !ok || userIDStr == "" {
+		logger.Warn("logout: user_id not found in metainfo, request may bypass gateway", zap.String("user_id", userIDStr))
+		return nil, errUnauthorized
 	}
 
-	claims, parseErr := s.jwtParser.Parse(req.GetToken())
-	if parseErr != nil {
-		return nil, errTokenInvalid
-	}
-
-	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, claims.UserID)
-	storedToken, _ := s.rdb.Get(ctx, tokenKey)
-	if storedToken != req.GetToken() {
-		return nil, errTokenMismatch
-	}
-
-	if err := s.rdb.Del(ctx, tokenKey); err != nil {
-		logger.Errorf("delete token from redis failed: %v", err)
-	}
+	tokenKey := fmt.Sprintf("%s%s", tokenPrefix, userIDStr)
+	// Log out all sessions by deleting the key directly (single-device login).
+	_ = s.rdb.Del(ctx, tokenKey)
 
 	return &v1.LogoutResp{}, nil
 }

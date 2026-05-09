@@ -20,6 +20,7 @@ const (
 	CodeUserTokenInvalid  uint32 = 10011
 	CodeUserTokenMismatch uint32 = 10012
 	CodeUserInternal      uint32 = 10013
+	CodeUserUnauthorized  uint32 = 10014
 )
 
 // Product 服务: 20000 - 29999 (预留)
