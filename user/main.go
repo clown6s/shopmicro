@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/kitex/pkg/rpcinfo"
 	"github.com/cloudwego/kitex/server"
 	"github.com/kitex-contrib/registry-etcd"
+	"go.uber.org/zap"
 
 	v1 "shopmicro/user/kitex_gen/api/user/v1/userservice"
 
@@ -62,6 +63,6 @@ func main() {
 	flag.Parse()
 
 	if err := Run(*configPath); err != nil {
-		logger.Fatalf("user service run failed: %v", err)
+		logger.L.Info("run service error", zap.Error(err))
 	}
 }

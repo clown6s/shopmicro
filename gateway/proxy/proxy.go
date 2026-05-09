@@ -16,7 +16,6 @@ import (
 	"github.com/cloudwego/kitex/client/genericclient"
 	"github.com/cloudwego/kitex/pkg/discovery"
 	"github.com/cloudwego/kitex/pkg/generic"
-
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	etcdv3 "go.etcd.io/etcd/client/v3"
 
@@ -184,7 +183,7 @@ func (p *Proxy) DiscoverAndRegister(
 
 	if len(services) == 0 {
 
-		logger.Infof(
+		logger.L.Infof(
 			"no services discovered yet under %s",
 			kitexRegistryPrefix,
 		)
@@ -223,7 +222,7 @@ func (p *Proxy) DiscoverAndRegister(
 			opts...,
 		); err != nil {
 
-			logger.Warnf(
+			logger.L.Warnf(
 				"auto-register service %s failed (proto: %s): %v",
 				serviceName,
 				protoPath,
@@ -233,8 +232,8 @@ func (p *Proxy) DiscoverAndRegister(
 			continue
 		}
 
-		logger.Infof(
-			"auto-discovered service: %s",
+		logger.L.Info(
+			"auto-discovered service: ",
 			serviceName,
 		)
 	}
@@ -255,7 +254,7 @@ func (p *Proxy) WatchServices(
 	}
 
 	if p.etcdCli == nil {
-		logger.Errorf("etcd client is nil")
+		logger.L.Errorf("etcd client is nil")
 		return
 	}
 
@@ -267,7 +266,7 @@ func (p *Proxy) WatchServices(
 
 	go func() {
 
-		logger.Infof(
+		logger.L.Infof(
 			"watching etcd services under %s",
 			kitexRegistryPrefix,
 		)
@@ -322,7 +321,7 @@ func (p *Proxy) WatchServices(
 						opts...,
 					); err != nil {
 
-						logger.Warnf(
+						logger.L.Warnf(
 							"watch auto-register failed: %s err=%v",
 							serviceName,
 							err,
@@ -331,7 +330,7 @@ func (p *Proxy) WatchServices(
 						continue
 					}
 
-					logger.Infof(
+					logger.L.Infof(
 						"new service discovered: %s",
 						serviceName,
 					)
@@ -341,7 +340,7 @@ func (p *Proxy) WatchServices(
 
 					key := string(event.Kv.Key)
 
-					logger.Infof(
+					logger.L.Infof(
 						"service instance offline: %s",
 						key,
 					)
@@ -413,7 +412,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 
 		if !ok {
 
-			logger.Warnf(
+			logger.L.Warnf(
 				"service not found: %s",
 				service,
 			)
@@ -468,7 +467,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 				return
 			}
 
-			logger.Errorf(
+			logger.L.Errorf(
 				"gRPC call failed: service=%s method=%s err=%v",
 				service,
 				method,
@@ -496,7 +495,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 					&result,
 				); err != nil {
 
-					logger.Errorf(
+					logger.L.Errorf(
 						"unmarshal gRPC response failed: %v",
 						err,
 					)
