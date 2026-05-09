@@ -9,9 +9,9 @@ import (
 
 	"github.com/XSAM/otelsql"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/redis/go-redis/extra/redisotel/v9"
-	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
+
+	"shopmicro/pkg/redis"
 )
 
 type Data struct {
@@ -19,7 +19,7 @@ type Data struct {
 	Rdb *redis.Client
 }
 
-func New(cfg conf.MySQL, redisCfg conf.Redis, mode string) (*Data, func(), error) {
+func New(cfg conf.MySQL, redisCfg redis.Config, mode string) (*Data, func(), error) {
 
 	// 显式配置 SpanOptions：开启所有 SQL 相关 span
 	spanOpts := otelsql.SpanOptions{
@@ -51,44 +51,27 @@ func New(cfg conf.MySQL, redisCfg conf.Redis, mode string) (*Data, func(), error
 	db.SetMaxOpenConns(100)
 	db.SetConnMaxLifetime(time.Hour)
 
-	// ping mysql（用 Background，不创建 ping span 也可以）
+	// ping mysql
 	if err := db.PingContext(context.Background()); err != nil {
 		return nil, nil, err
 	}
 
-	// redis
-	rdb := redis.NewClient(
-		&redis.Options{
-			Addr:     redisCfg.Addr,
-			Password: redisCfg.Password,
-			DB:       redisCfg.DB,
-		},
-	)
-
-	// redis tracing
-	if err := redisotel.InstrumentTracing(rdb); err != nil {
+	// redis (tracing enabled)
+	redisCfg.EnableTracing = true
+	rc, redisCleanup, err := redis.New(redisCfg)
+	if err != nil {
 		_ = db.Close()
-		return nil, nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// ping redis
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		_ = db.Close()
-		_ = rdb.Close()
 		return nil, nil, err
 	}
 
 	cleanup := func() {
 		_ = db.Close()
-		_ = rdb.Close()
+		redisCleanup()
 	}
 
 	return &Data{
 		DB:  db,
-		Rdb: rdb,
+		Rdb: rc,
 	}, cleanup, nil
 }
 

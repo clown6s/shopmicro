@@ -24,6 +24,7 @@ import (
 	pkgconf "shopmicro/pkg/conf"
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/otel"
+	"shopmicro/pkg/redis"
 )
 
 func Run(configPath string) error {
@@ -104,6 +105,16 @@ func Run(configPath string) error {
 	)
 
 	// =========================
+	// redis (for distributed rate limiting)
+	// =========================
+
+	rdb, redisCleanup, err := redis.New(cfg.Redis)
+	if err != nil {
+		return err
+	}
+	defer redisCleanup()
+
+	// =========================
 	// middleware
 	// =========================
 
@@ -138,9 +149,9 @@ func Run(configPath string) error {
 		middleware.TraceIDMiddleware(),
 	)
 
-	// rate limit (global, /health included is fine)
-	rlCleanup, rlIdle := cfg.RateLimitDuration()
-	rl := middleware.NewRateLimiter(cfg.RateLimit, rlCleanup, rlIdle)
+	// distributed rate limit (Redis sliding window, per-IP)
+	rlWindow := time.Duration(cfg.RateLimit.WindowS) * time.Second
+	rl := middleware.NewRedisRateLimiter(rdb, cfg.RateLimit.Limit, rlWindow)
 	h.Use(
 		middleware.RateLimitMiddleware(rl),
 	)

@@ -1,13 +1,14 @@
 server:
   addr: ":8080"
 
+# 限流专用 Redis（开发阶段与业务共用，生产环境隔离）
 redis:
   addr: "10.211.55.5:6379"
-  password: ""  # 通过 REDIS_PASSWORD 环境变量设置
+  password: ""  # 通过 REDIS_PASSWORD 环境变量或 .env 设置
   db: 0
 
 jwt:
-  secret: ""  # 通过 JWT_SECRET 环境变量设置
+  secret: ""  # 通过 JWT_SECRET 环境变量或 .env 设置
 
 cors:
   allowOrigins:
@@ -23,13 +24,10 @@ etcd:
 
 mode: "dev"
 
-# 限流配置
+# 分布式限流配置 (Redis 滑动窗口)
 rateLimit:
-  rate: 10           # 每秒请求数
-  burst: 20          # 突发上限
-  maxIPs: 100000     # 最大追踪 IP 数
-  cleanupSec: 60     # 清理间隔（秒）
-  idleSec: 180       # 空闲过期（秒）
+  limit: 100          # 窗口内最大请求数
+  windowSec: 60       # 滑动窗口时长（秒）
 
 # 熔断器配置
 circuitBreaker:

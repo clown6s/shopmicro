@@ -4,16 +4,11 @@ import (
 	"fmt"
 
 	"shopmicro/pkg/conf"
+	"shopmicro/pkg/redis"
 )
 
 type MySQL struct {
 	DSN string `yaml:"dsn"`
-}
-
-type Redis struct {
-	Addr     string `yaml:"addr"`
-	Password string `yaml:"password"`
-	DB       int    `yaml:"db"`
 }
 
 type JWT struct {
@@ -22,12 +17,12 @@ type JWT struct {
 }
 
 type Config struct {
-	Server conf.Server `yaml:"server"`
-	Etcd   conf.Etcd   `yaml:"etcd"`
-	MySQL  MySQL       `yaml:"mysql"`
-	Redis  Redis       `yaml:"redis"`
-	JWT    JWT         `yaml:"jwt"`
-	Mode   string      `yaml:"mode"`
+	Server conf.Server  `yaml:"server"`
+	Etcd   conf.Etcd    `yaml:"etcd"`
+	MySQL  MySQL        `yaml:"mysql"`
+	Redis  redis.Config `yaml:"redis"`
+	JWT    JWT          `yaml:"jwt"`
+	Mode   string       `yaml:"mode"`
 }
 
 // ApplyEnv 从环境变量覆盖敏感配置

@@ -5,13 +5,14 @@ import (
 	"time"
 
 	"shopmicro/pkg/conf"
+	"shopmicro/pkg/redis"
 )
 
 type Config struct {
 	Server         conf.Server       `yaml:"server"`
 	Etcd           conf.Etcd         `yaml:"etcd"`
 	CORS           CORS              `yaml:"cors"`
-	Redis          Redis             `yaml:"redis"`
+	Redis          redis.Config      `yaml:"redis"`
 	JWT            JWT               `yaml:"jwt"`
 	ProtoBase      string            `yaml:"protoBase"`
 	Mode           string            `yaml:"mode"`
@@ -23,24 +24,15 @@ type CORS struct {
 	AllowOrigins []string `yaml:"allowOrigins"`
 }
 
-type Redis struct {
-	Addr     string `yaml:"addr"`
-	Password string `yaml:"password"`
-	DB       int    `yaml:"db"`
-}
-
 type JWT struct {
 	Secret     string `yaml:"secret"`
 	Expiration int    `yaml:"expiration"`
 }
 
-// RateLimit 限流配置
+// RateLimit 分布式限流配置 (Redis 滑动窗口)
 type RateLimit struct {
-	Rate     float64 `yaml:"rate"`       // 每秒允许的请求数 (default: 10)
-	Burst    int     `yaml:"burst"`      // 突发上限 (default: 20)
-	MaxIPs   int     `yaml:"maxIPs"`     // 最大追踪 IP 数 (default: 100000)
-	CleanupS int     `yaml:"cleanupSec"` // 清理间隔秒数 (default: 60)
-	IdleS    int     `yaml:"idleSec"`    // IP 空闲过期秒数 (default: 180)
+	Limit   int `yaml:"limit"`     // 窗口内最大请求数 (default: 100)
+	WindowS int `yaml:"windowSec"` // 滑动窗口时长（秒） (default: 60)
 }
 
 // CircuitBreakerCfg 熔断器配置
@@ -54,20 +46,11 @@ type CircuitBreakerCfg struct {
 // SetDefaults fills zero-value fields with sensible defaults.
 func (c *Config) SetDefaults() {
 	rl := &c.RateLimit
-	if rl.Rate <= 0 {
-		rl.Rate = 10
+	if rl.Limit <= 0 {
+		rl.Limit = 100
 	}
-	if rl.Burst <= 0 {
-		rl.Burst = 20
-	}
-	if rl.MaxIPs <= 0 {
-		rl.MaxIPs = 100_000
-	}
-	if rl.CleanupS <= 0 {
-		rl.CleanupS = 60
-	}
-	if rl.IdleS <= 0 {
-		rl.IdleS = 180
+	if rl.WindowS <= 0 {
+		rl.WindowS = 60
 	}
 
 	cb := &c.CircuitBreaker
@@ -102,12 +85,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("jwt secret is required, set JWT_SECRET env or config.yaml")
 	}
 	return nil
-}
-
-// RateLimitDuration returns the parsed cleanup and idle durations.
-func (c *Config) RateLimitDuration() (cleanup, idle time.Duration) {
-	return time.Duration(c.RateLimit.CleanupS) * time.Second,
-		time.Duration(c.RateLimit.IdleS) * time.Second
 }
 
 // CircuitBreakerDurations returns the parsed interval and timeout durations.

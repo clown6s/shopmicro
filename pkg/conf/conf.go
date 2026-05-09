@@ -2,6 +2,7 @@ package conf
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
@@ -32,8 +33,9 @@ func Load(path string, cfg interface{}) error {
 		return err
 	}
 
-	// 尝试加载 .env（文件不存在时不报错）
-	_ = godotenv.Load()
+	// 尝试加载 .env（工作目录 > config.yaml 同目录，文件不存在时不报错）
+	godotenv.Load()                                          // ./  .env (working directory)
+	godotenv.Load(filepath.Join(filepath.Dir(path), ".env")) // config dir .env
 	return nil
 }
 

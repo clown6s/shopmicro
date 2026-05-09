@@ -4,14 +4,16 @@ import (
 	"context"
 	"time"
 
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 )
 
 type Config struct {
-	Addr     string   `yaml:"addr"`
-	Password string   `yaml:"password"`
-	DB       int      `yaml:"db"`
-	Addrs    []string `yaml:"addrs"`
+	Addr          string   `yaml:"addr"`
+	Password      string   `yaml:"password"`
+	DB            int      `yaml:"db"`
+	Addrs         []string `yaml:"addrs"`
+	EnableTracing bool     `yaml:"enableTracing"`
 }
 
 type Client struct {
@@ -26,6 +28,13 @@ func New(cfg Config) (*Client, func(), error) {
 	}
 	rdb := redis.NewClient(opt)
 
+	if cfg.EnableTracing {
+		if err := redisotel.InstrumentTracing(rdb); err != nil {
+			_ = rdb.Close()
+			return nil, nil, err
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
@@ -34,6 +43,13 @@ func New(cfg Config) (*Client, func(), error) {
 
 	cleanup := func() { _ = rdb.Close() }
 	return &Client{rdb: rdb}, cleanup, nil
+}
+
+// RawClient returns the underlying *redis.Client.
+// Use this when you need access to the full go-redis API
+// (e.g., custom commands that Client does not wrap).
+func (c *Client) RawClient() *redis.Client {
+	return c.rdb
 }
 
 func (c *Client) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {

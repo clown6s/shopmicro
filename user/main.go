@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -17,8 +18,6 @@ import (
 	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
 
 	"github.com/kitex-contrib/registry-etcd"
-
-	"go.uber.org/zap"
 
 	v1 "shopmicro/user/kitex_gen/api/user/v1/userservice"
 
@@ -265,9 +264,7 @@ func main() {
 		*configPath,
 	); err != nil {
 
-		logger.L.Fatal(
-			"run user service failed",
-			zap.Error(err),
-		)
+		// logger may not be initialized yet (e.g. config load/validate failed)
+		log.Fatalf("run user service failed: %v", err)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
+	"shopmicro/pkg/redis"
 )
 
 func newBiz(code uint32, msg string) *errcode.BizError { return errcode.NewBizError(code, msg) }
@@ -41,9 +42,7 @@ type UserServiceImpl struct {
 	jwtGen    *jwt.Generator
 	jwtParser *jwt.Parser
 	jwtExpHrs int
-	redisSet  func(ctx context.Context, key string, value interface{}, ttl time.Duration) error
-	redisGet  func(ctx context.Context, key string) (string, error)
-	redisDel  func(ctx context.Context, keys ...string) error
+	rdb       *redis.Client
 }
 
 func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int) *UserServiceImpl {
@@ -56,19 +55,11 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int) *UserServic
 		jwtGen:    gen,
 		jwtParser: jwt.NewParser(jwtSecret),
 		jwtExpHrs: jwtExpHours,
-		redisSet: func(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
-			return d.Rdb.Set(ctx, key, value, ttl).Err()
-		},
-		redisGet: func(ctx context.Context, key string) (string, error) {
-			return d.Rdb.Get(ctx, key).Result()
-		},
-		redisDel: func(ctx context.Context, keys ...string) error {
-			return d.Rdb.Del(ctx, keys...).Err()
-		},
+		rdb:       d.Rdb,
 	}
 }
 
-const tokenPrefix = "user:token:"
+const tokenPrefix = "shopmicro:user:token:"
 
 func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUserReq) (*v1.RegisterUserResp, error) {
 	if req.GetPhone() == "" {
@@ -145,7 +136,7 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 
 	// token 存 Redis
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, user.ID)
-	if err := s.redisSet(ctx, tokenKey, token, time.Duration(s.jwtExpHrs)*time.Hour); err != nil {
+	if err := s.rdb.Set(ctx, tokenKey, token, time.Duration(s.jwtExpHrs)*time.Hour); err != nil {
 		logger.Errorf("store token to redis failed: %v", err)
 		// Redis 写入失败不阻塞登录，但 token 可能无法被主动失效
 	}
@@ -280,12 +271,12 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 	}
 
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, claims.UserID)
-	storedToken, _ := s.redisGet(ctx, tokenKey)
+	storedToken, _ := s.rdb.Get(ctx, tokenKey)
 	if storedToken != req.GetToken() {
 		return nil, errTokenMismatch
 	}
 
-	if err := s.redisDel(ctx, tokenKey); err != nil {
+	if err := s.rdb.Del(ctx, tokenKey); err != nil {
 		logger.Errorf("delete token from redis failed: %v", err)
 	}
 
