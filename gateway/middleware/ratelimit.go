@@ -7,104 +7,89 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"golang.org/x/time/rate"
+
+	"shopmicro/gateway/conf"
+	"shopmicro/pkg/response"
 )
+
+// RateLimiter manages per-IP token buckets with automatic eviction.
+type RateLimiter struct {
+	mu         sync.Mutex
+	visitors   map[string]*visitor
+	rate       float64
+	burst      int
+	maxIPs     int
+	visitorTTL time.Duration
+}
 
 type visitor struct {
 	limiter  *rate.Limiter
 	lastSeen time.Time
 }
 
-var (
-	visitors = make(map[string]*visitor)
-	mu       sync.Mutex
-)
-
-const (
-	// visitorTTL controls how long an idle visitor entry stays in the map.
-	visitorTTL = 3 * time.Minute
-	// cleanupInterval controls how often stale visitors are evicted.
-	cleanupInterval = 1 * time.Minute
-	// maxVisitors caps the total number of tracked IPs to prevent OOM.
-	maxVisitors = 100_000
-)
-
-func init() {
-	go cleanupStaleVisitors()
+// NewRateLimiter creates a configurable rate limiter.
+func NewRateLimiter(cfg conf.RateLimit, cleanupInterval, visitorTTL time.Duration) *RateLimiter {
+	rl := &RateLimiter{
+		visitors:   make(map[string]*visitor),
+		rate:       cfg.Rate,
+		burst:      cfg.Burst,
+		maxIPs:     cfg.MaxIPs,
+		visitorTTL: visitorTTL,
+	}
+	go rl.cleanupLoop(cleanupInterval)
+	return rl
 }
 
-// cleanupStaleVisitors periodically removes expired visitor entries.
-func cleanupStaleVisitors() {
-	ticker := time.NewTicker(cleanupInterval)
+// cleanupLoop periodically removes expired visitor entries.
+func (rl *RateLimiter) cleanupLoop(interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for range ticker.C {
-		mu.Lock()
-		for ip, v := range visitors {
-			if time.Since(v.lastSeen) > visitorTTL {
-				delete(visitors, ip)
+		rl.mu.Lock()
+		for ip, v := range rl.visitors {
+			if time.Since(v.lastSeen) > rl.visitorTTL {
+				delete(rl.visitors, ip)
 			}
 		}
-		mu.Unlock()
+		rl.mu.Unlock()
 	}
 }
 
-func getVisitor(ip string) *rate.Limiter {
+// getLimiter returns the token bucket for the given IP.
+func (rl *RateLimiter) getLimiter(ip string) *rate.Limiter {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	// Hard cap: reject new entries if we've hit the limit.
-	if len(visitors) >= maxVisitors {
-		// Reset existing entry's lastSeen so it won't be evicted while active.
-		if v, ok := visitors[ip]; ok {
+	if len(rl.visitors) >= rl.maxIPs {
+		if v, ok := rl.visitors[ip]; ok {
 			v.lastSeen = time.Now()
 			return v.limiter
 		}
-		// Unknown IP and map is full — apply a shared restrictive limiter.
-		limiter := rate.NewLimiter(1, 3) // 1 req/s, burst 3
-		return limiter
+		// Map full + unknown IP → shared restrictive limiter.
+		return rate.NewLimiter(1, 3)
 	}
 
-	v, exists := visitors[ip]
-
+	v, exists := rl.visitors[ip]
 	if !exists {
-
-		limiter := rate.NewLimiter(
-			10, // 每秒 10 个请求
-			20, // burst
-		)
-
-		visitors[ip] = &visitor{
-			limiter:  limiter,
-			lastSeen: time.Now(),
-		}
-
+		limiter := rate.NewLimiter(rate.Limit(rl.rate), rl.burst)
+		rl.visitors[ip] = &visitor{limiter: limiter, lastSeen: time.Now()}
 		return limiter
 	}
 
 	v.lastSeen = time.Now()
-
 	return v.limiter
 }
 
-func RateLimitMiddleware() app.HandlerFunc {
-
+// RateLimitMiddleware returns a Hertz middleware that limits per-IP request rate.
+// Callers must create the RateLimiter once at startup and pass it here.
+func RateLimitMiddleware(rl *RateLimiter) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-
-		ip := c.ClientIP()
-
-		limiter := getVisitor(ip)
-
+		limiter := rl.getLimiter(c.ClientIP())
 		if !limiter.Allow() {
-
-			c.JSON(429, map[string]interface{}{
-				"code": 429,
-				"msg":  "too many requests",
-			})
-
+			response.TooManyRequests(c)
 			c.Abort()
 			return
 		}
-
 		c.Next(ctx)
 	}
 }

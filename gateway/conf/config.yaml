@@ -22,3 +22,18 @@ etcd:
     - "10.211.55.5:2379"
 
 mode: "dev"
+
+# 限流配置
+rateLimit:
+  rate: 10           # 每秒请求数
+  burst: 20          # 突发上限
+  maxIPs: 100000     # 最大追踪 IP 数
+  cleanupSec: 60     # 清理间隔（秒）
+  idleSec: 180       # 空闲过期（秒）
+
+# 熔断器配置
+circuitBreaker:
+  maxRequests: 5             # 半开状态最大探测请求数
+  intervalSec: 60            # 统计间隔（秒）
+  timeoutSec: 10             # 熔断恢复超时（秒）
+  consecutiveFailures: 5     # 连续失败触发熔断

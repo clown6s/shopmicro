@@ -7,56 +7,34 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/sony/gobreaker"
+
+	"shopmicro/pkg/response"
 )
 
-var cb *gobreaker.CircuitBreaker
+// CircuitBreakerMiddleware returns a Hertz middleware with a circuit breaker
+// configured by the given parameters. The breaker is created once per call.
+func CircuitBreakerMiddleware(maxRequests int, interval, timeout time.Duration, consecutiveFailures uint32) app.HandlerFunc {
 
-func init() {
-
-	cb = gobreaker.NewCircuitBreaker(
-		gobreaker.Settings{
-			Name: "gateway",
-
-			MaxRequests: 5,
-
-			Interval: time.Minute,
-
-			Timeout: 10 * time.Second,
-
-			ReadyToTrip: func(
-				counts gobreaker.Counts,
-			) bool {
-
-				return counts.ConsecutiveFailures >= 5
-			},
+	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
+		Name:        "gateway",
+		MaxRequests: uint32(maxRequests),
+		Interval:    interval,
+		Timeout:     timeout,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures >= consecutiveFailures
 		},
-	)
-}
-
-func CircuitBreakerMiddleware() app.HandlerFunc {
+	})
 
 	return func(ctx context.Context, c *app.RequestContext) {
-
 		_, err := cb.Execute(func() (interface{}, error) {
-
 			c.Next(ctx)
-
-			status := c.Response.StatusCode()
-
-			if status >= 500 {
+			if c.Response.StatusCode() >= 500 {
 				return nil, errors.New("server error")
 			}
-
 			return nil, nil
 		})
-
 		if err != nil {
-
-			c.JSON(503, map[string]interface{}{
-				"code": 503,
-				"msg":  "service temporarily unavailable",
-			})
-
+			response.ServiceUnavailable(c)
 			c.Abort()
 			return
 		}

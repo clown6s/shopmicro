@@ -6,9 +6,14 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"shopmicro/pkg/logger"
 )
 
+// AccessLogMiddleware records request latency and trace ID for every request.
+// It extracts the trace ID from the OpenTelemetry SpanContext set by
+// hertztracing.ServerMiddleware — no custom TraceMiddleware needed.
 func AccessLogMiddleware() app.HandlerFunc {
 
 	return func(ctx context.Context, c *app.RequestContext) {
@@ -19,9 +24,12 @@ func AccessLogMiddleware() app.HandlerFunc {
 
 		latency := time.Since(start)
 
-		traceID := string(
-			c.Response.Header.Peek("X-Trace-Id"),
-		)
+		// Extract trace ID from the otel SpanContext injected by hertztracing.
+		traceID := ""
+		span := trace.SpanFromContext(ctx)
+		if span.SpanContext().IsValid() {
+			traceID = span.SpanContext().TraceID().String()
+		}
 
 		logger.Infof(
 			"[ACCESS] method=%s path=%s status=%d latency=%s ip=%s trace_id=%s",

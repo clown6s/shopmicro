@@ -25,6 +25,7 @@ import (
 	"shopmicro/pkg/errcode"
 	pkgjwt "shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
+	"shopmicro/pkg/response"
 )
 
 const (
@@ -285,19 +286,13 @@ func (p *Proxy) Handler() app.HandlerFunc {
 				"Bearer ",
 			)
 			if tokenStr == "" {
-				c.JSON(http.StatusUnauthorized, map[string]interface{}{
-					"code": 401,
-					"msg":  "missing token",
-				})
+				response.Unauthorized(c, "missing token")
 				c.Abort()
 				return
 			}
 			claims, err := p.jwtParser.Parse(tokenStr)
 			if err != nil {
-				c.JSON(http.StatusUnauthorized, map[string]interface{}{
-					"code": 401,
-					"msg":  "invalid token",
-				})
+				response.Unauthorized(c, "invalid token")
 				c.Abort()
 				return
 			}
@@ -316,24 +311,14 @@ func (p *Proxy) Handler() app.HandlerFunc {
 
 		resp, err := p.Call(ctx, service, method, body)
 		if err != nil {
-			// P0-2: Never expose internal errors to clients.
-			// P1-8: Try to parse downstream BizError for proper status code.
+			// Try to parse downstream BizError for proper status code.
 			if biz, ok := errcode.ParseBizError(err); ok {
-				statusCode := http.StatusBadRequest
-				if biz.Code >= 500 {
-					statusCode = http.StatusInternalServerError
-				}
-				c.JSON(statusCode, map[string]interface{}{
-					"code": int(biz.Code),
-					"msg":  biz.Message,
-				})
+				response.BizErr(c, biz)
 				return
 			}
+			// Internal / network error — never expose to client.
 			logger.Errorf("rpc call failed: service=%s method=%s err=%v", service, method, err)
-			c.JSON(http.StatusInternalServerError, map[string]interface{}{
-				"code": 500,
-				"msg":  "internal server error",
-			})
+			response.Fail(c, http.StatusInternalServerError, 500, "internal server error")
 			return
 		}
 
@@ -352,11 +337,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			data = resp
 		}
 
-		c.JSON(http.StatusOK, map[string]interface{}{
-			"code": 0,
-			"msg":  "ok",
-			"data": data,
-		})
+		response.OK(c, data)
 	}
 }
 

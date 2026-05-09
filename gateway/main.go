@@ -9,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	hrecovery "github.com/cloudwego/hertz/pkg/app/middlewares/server/recovery"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
 
@@ -40,6 +39,9 @@ func Run(configPath string) error {
 	}
 
 	cfg.ApplyEnv()
+
+	// Fill zero-value config fields with defaults.
+	cfg.SetDefaults()
 
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -105,19 +107,14 @@ func Run(configPath string) error {
 	// middleware
 	// =========================
 
-	// otel middleware
+	// otel middleware (creates root span + injects trace context)
 	h.Use(
 		hertztracing.ServerMiddleware(
 			traceCfg,
 		),
 	)
 
-	// official recovery
-	h.Use(
-		hrecovery.Recovery(),
-	)
-
-	// custom panic recovery
+	// panic recovery — custom version logs stack trace
 	h.Use(
 		middleware.RecoveryMiddleware(),
 	)
@@ -136,9 +133,16 @@ func Run(configPath string) error {
 		middleware.AccessLogMiddleware(),
 	)
 
-	// rate limit (global, including /health is fine)
+	// trace-id header (reads from hertztracing span, no duplicate span)
 	h.Use(
-		middleware.RateLimitMiddleware(),
+		middleware.TraceIDMiddleware(),
+	)
+
+	// rate limit (global, /health included is fine)
+	rlCleanup, rlIdle := cfg.RateLimitDuration()
+	rl := middleware.NewRateLimiter(cfg.RateLimit, rlCleanup, rlIdle)
+	h.Use(
+		middleware.RateLimitMiddleware(rl),
 	)
 
 	// =========================
@@ -190,8 +194,14 @@ func Run(configPath string) error {
 	api := h.Group("/api/v1")
 
 	// P0-5: Circuit breaker only on API routes — /health must remain reachable.
+	cbInterval, cbTimeout := cfg.CircuitBreakerDurations()
 	api.Use(
-		middleware.CircuitBreakerMiddleware(),
+		middleware.CircuitBreakerMiddleware(
+			cfg.CircuitBreaker.MaxRequests,
+			cbInterval,
+			cbTimeout,
+			uint32(cfg.CircuitBreaker.ConsecutiveFailures),
+		),
 	)
 
 	api.GET(

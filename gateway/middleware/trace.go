@@ -3,74 +3,24 @@ package middleware
 import (
 	"context"
 
-	"github.com/bytedance/gopkg/cloud/metainfo"
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/google/uuid"
 
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
-func TraceMiddleware() app.HandlerFunc {
-
-	tracer := otel.Tracer("gateway")
+// TraceIDMiddleware sets the X-Trace-Id response header so callers can
+// correlate responses with distributed traces. It does NOT create its own
+// span — hertztracing.ServerMiddleware handles that.
+func TraceIDMiddleware() app.HandlerFunc {
 
 	return func(ctx context.Context, c *app.RequestContext) {
 
-		traceID := string(
-			c.GetHeader("X-Trace-Id"),
-		)
-
-		if traceID == "" {
-			traceID = uuid.NewString()
-		}
-
-		// response header
-		c.Response.Header.Set(
-			"X-Trace-Id",
-			traceID,
-		)
-
-		// rpc metadata
-		ctx = metainfo.WithPersistentValue(
-			ctx,
-			"trace_id",
-			traceID,
-		)
-
-		// otel span
-		ctx, span := tracer.Start(
-			ctx,
-			string(c.Path()),
-		)
-
-		span.SetAttributes(
-
-			attribute.String(
-				"http.method",
-				string(c.Method()),
-			),
-
-			attribute.String(
-				"http.path",
-				string(c.Path()),
-			),
-
-			attribute.String(
-				"trace.id",
-				traceID,
-			),
-		)
-
-		defer span.End()
-
 		c.Next(ctx)
 
-		span.SetAttributes(
-			attribute.Int(
-				"http.status_code",
-				c.Response.StatusCode(),
-			),
-		)
+		// After hertztracing has created the span, extract trace ID.
+		span := trace.SpanFromContext(ctx)
+		if span.SpanContext().IsValid() {
+			c.Response.Header.Set("X-Trace-Id", span.SpanContext().TraceID().String())
+		}
 	}
 }

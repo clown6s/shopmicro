@@ -4,11 +4,14 @@ import (
 	"context"
 	"runtime/debug"
 
-	"shopmicro/pkg/logger"
-
 	"github.com/cloudwego/hertz/pkg/app"
+
+	"shopmicro/pkg/logger"
+	"shopmicro/pkg/response"
 )
 
+// RecoveryMiddleware catches panics, logs the stack trace, and returns a
+// unified error response. This replaces hertz's built-in hrecovery.
 func RecoveryMiddleware() app.HandlerFunc {
 
 	return func(ctx context.Context, c *app.RequestContext) {
@@ -23,10 +26,7 @@ func RecoveryMiddleware() app.HandlerFunc {
 					string(debug.Stack()),
 				)
 
-				c.JSON(500, map[string]interface{}{
-					"code": 500,
-					"msg":  "internal server error",
-				})
+				response.InternalError(c)
 
 				c.Abort()
 			}
