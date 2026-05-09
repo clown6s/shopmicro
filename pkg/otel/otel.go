@@ -1,4 +1,4 @@
-package middleware
+package otel
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 
+	"go.opentelemetry.io/otel/propagation"
+
 	"go.opentelemetry.io/otel/sdk/resource"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -15,7 +17,9 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 )
 
-func InitTracer(serviceName string) func(context.Context) error {
+func InitTracer(
+	serviceName string,
+) func(context.Context) error {
 
 	exporter, err := otlptracegrpc.New(
 		context.Background(),
@@ -33,16 +37,16 @@ func InitTracer(serviceName string) func(context.Context) error {
 
 	tp := sdktrace.NewTracerProvider(
 
+		sdktrace.WithSampler(
+			sdktrace.AlwaysSample(),
+		),
+
 		sdktrace.WithBatcher(
 			exporter,
 
 			sdktrace.WithBatchTimeout(
 				2*time.Second,
 			),
-		),
-
-		sdktrace.WithSampler(
-			sdktrace.AlwaysSample(),
 		),
 
 		sdktrace.WithResource(
@@ -57,6 +61,14 @@ func InitTracer(serviceName string) func(context.Context) error {
 	)
 
 	otel.SetTracerProvider(tp)
+
+	// W3C tracecontext propagation：跨服务传递 traceparent / tracestate
+	otel.SetTextMapPropagator(
+		propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{},
+			propagation.Baggage{},
+		),
+	)
 
 	return tp.Shutdown
 }

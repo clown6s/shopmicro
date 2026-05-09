@@ -13,6 +13,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
 
+	hertztracing "github.com/hertz-contrib/obs-opentelemetry/tracing"
+
 	"github.com/kitex-contrib/registry-etcd"
 
 	"shopmicro/gateway/conf"
@@ -22,6 +24,7 @@ import (
 
 	pkgconf "shopmicro/pkg/conf"
 	"shopmicro/pkg/logger"
+	"shopmicro/pkg/otel"
 )
 
 func Run(configPath string) error {
@@ -47,17 +50,20 @@ func Run(configPath string) error {
 	// =========================
 
 	logger.Init(cfg.Mode)
+
 	defer logger.L.Sync()
 
 	// =========================
 	// otel tracer
 	// =========================
 
-	shutdownTracer := middleware.InitTracer(
+	shutdownTracer := otel.InitTracer(
 		"shopmicro-gateway",
 	)
 
-	defer shutdownTracer(context.Background())
+	defer shutdownTracer(
+		context.Background(),
+	)
 
 	// =========================
 	// etcd resolver
@@ -66,6 +72,7 @@ func Run(configPath string) error {
 	r, err := etcd.NewEtcdResolver(
 		cfg.Etcd.Addrs,
 	)
+
 	if err != nil {
 		return err
 	}
@@ -74,22 +81,46 @@ func Run(configPath string) error {
 	// hertz
 	// =========================
 
-	hlog.SetLevel(hlog.LevelWarn)
+	hlog.SetLevel(
+		hlog.LevelWarn,
+	)
+
+	// hertz otel tracing
+	tracer, traceCfg := hertztracing.NewServerTracer()
 
 	h := server.New(
-		server.WithHostPorts(cfg.Server.Addr),
-		server.WithMaxRequestBodySize(1<<20), // 1MB
+
+		tracer,
+
+		server.WithHostPorts(
+			cfg.Server.Addr,
+		),
+
+		server.WithMaxRequestBodySize(
+			1<<20, // 1MB
+		),
 	)
 
 	// =========================
 	// middleware
 	// =========================
 
-	// 官方 recovery
-	h.Use(hrecovery.Recovery())
+	// otel middleware
+	h.Use(
+		hertztracing.ServerMiddleware(
+			traceCfg,
+		),
+	)
 
-	// 自定义 panic recover
-	h.Use(middleware.RecoveryMiddleware())
+	// official recovery
+	h.Use(
+		hrecovery.Recovery(),
+	)
+
+	// custom panic recovery
+	h.Use(
+		middleware.RecoveryMiddleware(),
+	)
 
 	// cors
 	h.Use(
@@ -98,11 +129,6 @@ func Run(configPath string) error {
 				AllowOrigins: cfg.CORS.AllowOrigins,
 			},
 		),
-	)
-
-	// trace
-	h.Use(
-		middleware.TraceMiddleware(),
 	)
 
 	// access log
@@ -125,14 +151,18 @@ func Run(configPath string) error {
 	// =========================
 
 	p := proxy.New(
-		proxy.WithJWT(cfg.JWT.Secret),
+
+		proxy.WithJWT(
+			cfg.JWT.Secret,
+		),
+
 		proxy.WithPublicMethods(
 			"RegisterUser",
 			"Login",
 		),
 	)
 
-	// 首次发现服务
+	// discover services
 	if err := p.DiscoverAndRegister(
 		r,
 		cfg.Etcd.Addrs,
@@ -142,9 +172,10 @@ func Run(configPath string) error {
 		return err
 	}
 
-	// 动态监听服务
+	// watch services
 	p.WatchServices(
 		r,
+		cfg.Etcd.Addrs,
 		cfg.ProtoBase,
 	)
 
@@ -189,7 +220,10 @@ func Run(configPath string) error {
 
 	go func() {
 
-		quit := make(chan os.Signal, 1)
+		quit := make(
+			chan os.Signal,
+			1,
+		)
 
 		signal.Notify(
 			quit,
@@ -211,9 +245,11 @@ func Run(configPath string) error {
 
 		defer cancel()
 
-		if err := h.Shutdown(ctx); err != nil {
+		if err := h.Shutdown(
+			ctx,
+		); err != nil {
 
-			// GoLand stop 时可能出现
+			// GoLand stop
 			if strings.Contains(
 				err.Error(),
 				"engine is not running",
@@ -234,7 +270,9 @@ func Run(configPath string) error {
 			return
 		}
 
-		logger.L.Infof("gateway stopped")
+		logger.L.Infof(
+			"gateway stopped",
+		)
 	}()
 
 	// =========================
@@ -246,10 +284,9 @@ func Run(configPath string) error {
 		cfg.Server.Addr,
 	)
 
-	// 阻塞运行
 	if err := h.Run(); err != nil {
 
-		// shutdown 时可能返回
+		// graceful shutdown
 		if strings.Contains(
 			err.Error(),
 			"engine is not running",
@@ -278,7 +315,9 @@ func main() {
 
 	flag.Parse()
 
-	if err := Run(*configPath); err != nil {
+	if err := Run(
+		*configPath,
+	); err != nil {
 
 		logger.L.Fatalf(
 			"gateway run failed: %v",

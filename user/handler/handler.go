@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"context"
@@ -46,7 +46,7 @@ type UserServiceImpl struct {
 	redisDel  func(ctx context.Context, keys ...string) error
 }
 
-func newUserHandler(d *data.Data, jwtSecret string, jwtExpHours int) *UserServiceImpl {
+func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int) *UserServiceImpl {
 	gen, err := jwt.NewGenerator(jwtSecret, time.Duration(jwtExpHours)*time.Hour)
 	if err != nil {
 		logger.Fatalf("init jwt generator failed: %v", err)
@@ -223,6 +223,7 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 }
 
 func (s *UserServiceImpl) ListUser(ctx context.Context, req *v1.ListUserReq) (*v1.ListUserResp, error) {
+
 	users, total, err := s.userDal.List(ctx, req.GetPage(), req.GetPageSize())
 	if err != nil {
 		logger.Errorf("list users failed: %v", err)

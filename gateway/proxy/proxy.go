@@ -4,644 +4,383 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
+	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bytedance/gopkg/cloud/metainfo"
-	dproto "github.com/cloudwego/dynamicgo/proto"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/kitex/client"
 	"github.com/cloudwego/kitex/client/genericclient"
 	"github.com/cloudwego/kitex/pkg/discovery"
 	"github.com/cloudwego/kitex/pkg/generic"
-	"go.etcd.io/etcd/api/v3/mvccpb"
-	etcdv3 "go.etcd.io/etcd/client/v3"
 
-	"shopmicro/pkg/errcode"
-	"shopmicro/pkg/jwt"
+	dproto "github.com/cloudwego/dynamicgo/proto"
+	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
+
+	pkgjwt "shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
-	"shopmicro/pkg/response"
 )
-
-// contextKey 类型化 context key，避免跨包冲突
-type contextKey string
 
 const (
-	keyUserID           contextKey = "user_id"
-	keyPhone            contextKey = "phone"
-	kitexRegistryPrefix            = "kitex/registry-etcd/"
+	// etcdRegistryPrefix is the key namespace used by kitex registry-etcd.
+	etcdRegistryPrefix = "kitex/registry-etcd"
 )
 
-// Proxy 通用 gRPC 代理
-type Proxy struct {
-	mu            sync.RWMutex
-	clients       map[string]genericclient.Client
-	publicMethods map[string]bool
-	jwtParser     *jwt.Parser
-
-	// etcd client
-	etcdCli *etcdv3.Client
+// ServiceClient bundles a kitex generic client with its descriptor.
+type ServiceClient struct {
+	Client  genericclient.Client
+	Generic generic.Generic
 }
 
-// Option 配置项
+// Proxy is the central HTTP→gRPC generic proxy.
+type Proxy struct {
+	mu sync.RWMutex
+
+	clients map[string]*ServiceClient
+
+	jwtParser    *pkgjwt.Parser
+	publicMethod map[string]bool
+}
+
+// Option configures Proxy at construction time.
 type Option func(*Proxy)
 
-// WithPublicMethods 设置免认证方法
+// WithJWT sets the JWT secret used to validate inbound tokens.
+func WithJWT(secret string) Option {
+	return func(p *Proxy) {
+		p.jwtParser = pkgjwt.NewParser(secret)
+	}
+}
+
+// WithPublicMethods marks RPC methods that do NOT require a JWT token.
 func WithPublicMethods(methods ...string) Option {
 	return func(p *Proxy) {
 		for _, m := range methods {
-			p.publicMethods[m] = true
+			p.publicMethod[m] = true
 		}
 	}
 }
 
-// WithJWT 启用 JWT
-func WithJWT(secret string) Option {
-	return func(p *Proxy) {
-		p.jwtParser = jwt.NewParser(secret)
-	}
-}
-
-// New 创建 Proxy
+// New creates a Proxy with the given options.
 func New(opts ...Option) *Proxy {
 	p := &Proxy{
-		clients:       make(map[string]genericclient.Client),
-		publicMethods: make(map[string]bool),
+		clients:      make(map[string]*ServiceClient),
+		publicMethod: make(map[string]bool),
 	}
-
 	for _, opt := range opts {
 		opt(p)
 	}
-
 	return p
 }
 
-// RegisterService 注册服务
-func (p *Proxy) RegisterService(
-	destService,
-	protoPath string,
-	opts ...client.Option,
-) error {
+// =========================
+// register service
+// =========================
 
+// registerService creates a Kitex generic client for the given service and
+// caches it in p.clients. It is idempotent: a second call for the same
+// serviceName is a no-op.
+func (p *Proxy) registerService(
+	serviceName string,
+	protoPath string,
+	resolver discovery.Resolver,
+) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if _, ok := p.clients[serviceName]; ok {
+		return nil
+	}
+
+	// Build a PbDescriptorProvider from the proto file on disk.
+	// JSONPbGeneric requires PbDescriptorProviderDynamicGo, provided by
+	// NewPbFileProviderWithDynamicGo.
 	provider, err := generic.NewPbFileProviderWithDynamicGo(
 		protoPath,
 		context.Background(),
 		dproto.Options{},
+		filepath.Dir(protoPath), // search imports in the same directory
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("create pb provider for %s (%s): %w", serviceName, protoPath, err)
 	}
 
+	// JSONPbGeneric: gateway receives JSON body; Kitex serialises to PB on the wire.
 	g, err := generic.JSONPbGeneric(provider)
 	if err != nil {
-		return err
+		_ = provider.Close()
+		return fmt.Errorf("create json-pb generic for %s: %w", serviceName, err)
 	}
 
 	cli, err := genericclient.NewClient(
-		destService,
+		serviceName,
 		g,
-		opts...,
+		client.WithResolver(resolver),
+		client.WithRPCTimeout(5*time.Second),
+		client.WithConnectTimeout(3*time.Second),
+		client.WithSuite(kotelkitex.NewClientSuite(
+			kotelkitex.WithEnableGRPCMetadata(),
+		)),
 	)
 	if err != nil {
-		return err
+		_ = provider.Close()
+		return fmt.Errorf("create kitex client for %s: %w", serviceName, err)
 	}
 
-	p.mu.Lock()
-	p.clients[destService] = cli
-	p.mu.Unlock()
+	p.clients[serviceName] = &ServiceClient{
+		Client:  cli,
+		Generic: g,
+	}
 
+	logger.Infof("service registered: %s (proto: %s)", serviceName, protoPath)
 	return nil
 }
 
-// DiscoverAndRegister
-//
-// 启动时扫描 etcd 已有服务
+// =========================
+// get client
+// =========================
+
+func (p *Proxy) getClient(service string) (*ServiceClient, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	c, ok := p.clients[service]
+	return c, ok
+}
+
+// =========================
+// call RPC
+// =========================
+
+// Call performs a generic RPC to the named service and method.
+// req must be a JSON-encoded string (for JSONPbGeneric).
+// method must be the CamelCase protobuf RPC name (e.g. "ListUser", NOT
+// a gRPC full path like "api.user.v1.UserService/ListUser").
+func (p *Proxy) Call(
+	ctx context.Context,
+	service string,
+	method string,
+	req interface{},
+) (interface{}, error) {
+	cli, ok := p.getClient(service)
+	if !ok {
+		return nil, fmt.Errorf("service not found: %s", service)
+	}
+
+	// JSONPbGeneric: WriteJSON.Write calls LookupMethodByName(method)
+	// which expects CamelCase method name, NOT gRPC full path.
+	// Use method directly; the generic client already knows the service.
+	resp, err := cli.Client.GenericCall(ctx, method, req)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// =========================
+// discover & watch services
+// =========================
+
+// DiscoverAndRegister scans Etcd for all currently registered Kitex services
+// and registers a generic client for each one.
 func (p *Proxy) DiscoverAndRegister(
 	resolver discovery.Resolver,
 	etcdAddrs []string,
 	protoBase string,
 ) error {
-
-	if protoBase == "" {
-		protoBase = "../"
-	}
-
-	cli, err := etcdv3.New(etcdv3.Config{
-		Endpoints:   etcdAddrs,
-		DialTimeout: 5 * time.Second,
-	})
+	etcdClient, err := newEtcdClient(etcdAddrs)
 	if err != nil {
-		return fmt.Errorf(
-			"create etcd client for discovery: %w",
-			err,
-		)
+		return err
 	}
+	defer etcdClient.Close()
 
-	// 保存 etcd client 给 watch 使用
-	p.etcdCli = cli
-
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		5*time.Second,
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	resp, err := cli.Get(
-		ctx,
-		kitexRegistryPrefix,
-		etcdv3.WithPrefix(),
-	)
+	// Keys are stored as:  kitex/registry-etcd/{serviceName}/{addr}
+	prefix := etcdRegistryPrefix + "/"
+	resp, err := etcdClient.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithKeysOnly())
 	if err != nil {
-		return fmt.Errorf(
-			"discover services from etcd: %w",
-			err,
-		)
+		return fmt.Errorf("etcd list services: %w", err)
 	}
 
-	services := make(map[string]bool)
-
+	seen := make(map[string]struct{})
 	for _, kv := range resp.Kvs {
-
-		key := string(kv.Key)
-
-		rest := strings.TrimPrefix(
-			key,
-			kitexRegistryPrefix,
-		)
-
-		idx := strings.Index(rest, "/")
-		if idx <= 0 {
+		svcName := extractServiceName(string(kv.Key), prefix)
+		if svcName == "" {
 			continue
 		}
-
-		serviceName := rest[:idx]
-
-		services[serviceName] = true
-	}
-
-	if len(services) == 0 {
-
-		logger.L.Infof(
-			"no services discovered yet under %s",
-			kitexRegistryPrefix,
-		)
-
-		return nil
-	}
-
-	for serviceName := range services {
-
-		// 已存在
-		p.mu.RLock()
-		_, exists := p.clients[serviceName]
-		p.mu.RUnlock()
-
-		if exists {
+		if _, done := seen[svcName]; done {
 			continue
 		}
+		seen[svcName] = struct{}{}
 
-		protoPath :=
-			protoBase +
-				serviceName +
-				"/api/" +
-				serviceName +
-				".proto"
-
-		opts := []client.Option{
-			client.WithResolver(resolver),
-
-			// RPC 超时
-			client.WithRPCTimeout(3 * time.Second),
+		protoPath := buildProtoPath(protoBase, svcName)
+		if err := p.registerService(svcName, protoPath, resolver); err != nil {
+			logger.Warnf("failed to register service %s: %v", svcName, err)
 		}
-
-		if err := p.RegisterService(
-			serviceName,
-			protoPath,
-			opts...,
-		); err != nil {
-
-			logger.L.Warnf(
-				"auto-register service %s failed (proto: %s): %v",
-				serviceName,
-				protoPath,
-				err,
-			)
-
-			continue
-		}
-
-		logger.L.Info(
-			"auto-discovered service: ",
-			serviceName,
-		)
 	}
-
 	return nil
 }
 
-// WatchServices
-//
-// 动态监听 etcd 服务变化
+// WatchServices watches Etcd for newly registered services and registers them
+// automatically. It runs in a background goroutine and returns immediately.
 func (p *Proxy) WatchServices(
 	resolver discovery.Resolver,
+	etcdAddrs []string,
 	protoBase string,
 ) {
-
-	if protoBase == "" {
-		protoBase = "../"
-	}
-
-	if p.etcdCli == nil {
-		logger.L.Errorf("etcd client is nil")
-		return
-	}
-
-	watchChan := p.etcdCli.Watch(
-		context.Background(),
-		kitexRegistryPrefix,
-		etcdv3.WithPrefix(),
-	)
-
 	go func() {
+		etcdClient, err := newEtcdClient(etcdAddrs)
+		if err != nil {
+			logger.Errorf("WatchServices: connect to etcd: %v", err)
+			return
+		}
+		defer etcdClient.Close()
 
-		logger.L.Infof(
-			"watching etcd services under %s",
-			kitexRegistryPrefix,
-		)
+		prefix := etcdRegistryPrefix + "/"
+		watchCh := etcdClient.Watch(context.Background(), prefix, clientv3.WithPrefix())
 
-		for resp := range watchChan {
-
-			for _, event := range resp.Events {
-
-				switch event.Type {
-
-				// 服务上线
-				case mvccpb.PUT:
-
-					key := string(event.Kv.Key)
-
-					rest := strings.TrimPrefix(
-						key,
-						kitexRegistryPrefix,
-					)
-
-					idx := strings.Index(rest, "/")
-					if idx <= 0 {
-						continue
-					}
-
-					serviceName := rest[:idx]
-
-					// 已存在
-					p.mu.RLock()
-					_, exists := p.clients[serviceName]
-					p.mu.RUnlock()
-
-					if exists {
-						continue
-					}
-
-					protoPath :=
-						protoBase +
-							serviceName +
-							"/api/" +
-							serviceName +
-							".proto"
-
-					opts := []client.Option{
-						client.WithResolver(resolver),
-						client.WithRPCTimeout(3 * time.Second),
-					}
-
-					if err := p.RegisterService(
-						serviceName,
-						protoPath,
-						opts...,
-					); err != nil {
-
-						logger.L.Warnf(
-							"watch auto-register failed: %s err=%v",
-							serviceName,
-							err,
-						)
-
-						continue
-					}
-
-					logger.L.Infof(
-						"new service discovered: %s",
-						serviceName,
-					)
-
-				// 服务下线
-				case mvccpb.DELETE:
-
-					key := string(event.Kv.Key)
-
-					logger.L.Infof(
-						"service instance offline: %s",
-						key,
-					)
+		for wresp := range watchCh {
+			for _, ev := range wresp.Events {
+				if ev.Type != clientv3.EventTypePut {
+					continue
+				}
+				svcName := extractServiceName(string(ev.Kv.Key), prefix)
+				if svcName == "" {
+					continue
+				}
+				if _, ok := p.getClient(svcName); ok {
+					continue // already registered
+				}
+				protoPath := buildProtoPath(protoBase, svcName)
+				if err := p.registerService(svcName, protoPath, resolver); err != nil {
+					logger.Warnf("WatchServices: failed to register %s: %v", svcName, err)
 				}
 			}
 		}
 	}()
 }
 
-// Handler
-//
-// 通用路由:
-// /api/v1/:service/:method
+// =========================
+// HTTP handler
+// =========================
+
+// Handler returns a Hertz HandlerFunc that dispatches
+// /api/v1/:service/:method requests to the corresponding gRPC service.
 func (p *Proxy) Handler() app.HandlerFunc {
-
 	return func(ctx context.Context, c *app.RequestContext) {
-
 		service := c.Param("service")
-		method := toRPCMethod(c.Param("method"))
+		method := toMethodName(c.Param("method"))
 
-		// JWT
-		tokenStr := p.extractToken(c)
-
-		if !p.publicMethods[method] &&
-			p.jwtParser != nil {
-
+		// JWT authentication — skip for public methods.
+		if p.jwtParser != nil && !p.publicMethod[method] {
+			tokenStr := strings.TrimPrefix(
+				string(c.GetHeader("Authorization")),
+				"Bearer ",
+			)
 			if tokenStr == "" {
-
-				response.JSON(
-					c,
-					errcode.ErrToken,
-					nil,
-				)
-
+				c.JSON(http.StatusUnauthorized, map[string]interface{}{
+					"code": 401,
+					"msg":  "missing token",
+				})
 				c.Abort()
 				return
 			}
-
 			claims, err := p.jwtParser.Parse(tokenStr)
 			if err != nil {
-
-				response.JSON(
-					c,
-					errcode.ErrToken,
-					nil,
-				)
-
+				c.JSON(http.StatusUnauthorized, map[string]interface{}{
+					"code": 401,
+					"msg":  "invalid token",
+				})
 				c.Abort()
 				return
 			}
-
-			ctx = context.WithValue(
-				ctx,
-				keyUserID,
-				claims.UserID,
-			)
-
-			ctx = context.WithValue(
-				ctx,
-				keyPhone,
-				claims.Phone,
-			)
+			// Forward identity to downstream service via Kitex metainfo.
+			ctx = metainfo.WithPersistentValue(ctx, "token", tokenStr)
+			ctx = metainfo.WithPersistentValue(ctx, "user_id", fmt.Sprintf("%d", claims.UserID))
 		}
 
-		// 查找 client
-		p.mu.RLock()
-		cli, ok := p.clients[service]
-		p.mu.RUnlock()
-
-		if !ok {
-
-			logger.L.Warnf(
-				"service not found: %s",
-				service,
-			)
-
-			response.JSON(
-				c,
-				errcode.ErrParam.WithMsg("service not found"),
-				nil,
-			)
-
-			c.Abort()
-			return
+		// Pass the raw JSON request body to the generic client.
+		// WriteJSON treats nil as "{}", but an empty string "" will fail to
+		// unmarshal, so default to "{}" for GET / empty-body requests.
+		body := string(c.Request.Body())
+		if body == "" {
+			body = "{}"
 		}
 
-		body := p.buildRequestBody(c, tokenStr)
-
-		// token 透传
-		if tokenStr != "" {
-			ctx = metainfo.WithPersistentValue(
-				ctx,
-				"token",
-				tokenStr,
-			)
-		}
-
-		// trace id
-		traceID := string(c.GetHeader("X-Trace-Id"))
-		if traceID != "" {
-			ctx = metainfo.WithPersistentValue(
-				ctx,
-				"trace_id",
-				traceID,
-			)
-		}
-
-		resp, err := cli.GenericCall(
-			ctx,
-			method,
-			string(body),
-		)
-
+		resp, err := p.Call(ctx, service, method, body)
 		if err != nil {
-
-			if bizErr, ok := errcode.ParseBizError(err); ok {
-
-				response.JSON(
-					c,
-					errcode.FromBizError(bizErr),
-					nil,
-				)
-
-				return
-			}
-
-			logger.L.Errorf(
-				"gRPC call failed: service=%s method=%s err=%v",
-				service,
-				method,
-				err,
-			)
-
-			response.JSON(
-				c,
-				errcode.ErrServer.WithMsg("service unavailable"),
-				nil,
-			)
-
+			c.JSON(http.StatusInternalServerError, map[string]interface{}{
+				"code": 500,
+				"msg":  err.Error(),
+			})
 			return
 		}
 
-		// 解析 JSON
-		var result map[string]interface{}
-
-		if respStr, ok := resp.(string); ok {
-
-			if len(respStr) > 0 {
-
-				if err := json.Unmarshal(
-					[]byte(respStr),
-					&result,
-				); err != nil {
-
-					logger.L.Errorf(
-						"unmarshal gRPC response failed: %v",
-						err,
-					)
-
-					response.JSON(
-						c,
-						errcode.ErrResponse,
-						nil,
-					)
-
-					return
-				}
+		// GenericCall returns the JSON string from downstream.
+		// Parse it back to an object so the wrapper marshal produces
+		// {"data":{...}} instead of {"data":"{...}"}.
+		var data interface{}
+		if s, ok := resp.(string); ok && s != "" {
+			if err := json.Unmarshal([]byte(s), &data); err == nil {
+				// successfully parsed
+			} else {
+				// not valid JSON, keep original
+				data = resp
 			}
+		} else {
+			data = resp
 		}
 
-		response.JSON(
-			c,
-			errcode.Success,
-			result,
-		)
+		c.JSON(http.StatusOK, map[string]interface{}{
+			"code": 0,
+			"msg":  "ok",
+			"data": data,
+		})
 	}
 }
 
-// extractToken
-func (p *Proxy) extractToken(
-	c *app.RequestContext,
-) string {
+// =========================
+// helpers
+// =========================
 
-	auth := string(c.GetHeader("Authorization"))
-
-	if strings.HasPrefix(auth, "Bearer ") ||
-		strings.HasPrefix(auth, "bearer ") {
-
-		return strings.TrimPrefix(
-			strings.TrimPrefix(auth, "Bearer "),
-			"bearer ",
-		)
+// toMethodName ensures the first letter of a method name is upper-case.
+func toMethodName(method string) string {
+	if method == "" {
+		return method
 	}
-
-	return string(c.GetHeader("Token"))
+	return strings.ToUpper(method[:1]) + method[1:]
 }
 
-// buildRequestBody
-func (p *Proxy) buildRequestBody(
-	c *app.RequestContext,
-	tokenStr string,
-) json.RawMessage {
-
-	var body json.RawMessage
-
-	// GET -> query params
-	if string(c.Method()) == "GET" {
-
-		params := make(map[string]interface{})
-
-		c.QueryArgs().VisitAll(
-			func(key, value []byte) {
-
-				v := string(value)
-
-				if n, err := strconv.ParseInt(
-					v,
-					10,
-					64,
-				); err == nil {
-
-					params[toCamelCase(string(key))] = n
-
-				} else if f, err := strconv.ParseFloat(
-					v,
-					64,
-				); err == nil {
-
-					params[toCamelCase(string(key))] = f
-
-				} else {
-
-					params[toCamelCase(string(key))] = v
-				}
-			},
-		)
-
-		body, _ = json.Marshal(params)
-
-	} else {
-
-		body, _ = c.Body()
-	}
-
-	// token 注入 body
-	if tokenStr != "" {
-
-		var bodyMap map[string]interface{}
-
-		if len(body) > 0 {
-			_ = json.Unmarshal(body, &bodyMap)
-		}
-
-		if bodyMap == nil {
-			bodyMap = make(map[string]interface{})
-		}
-
-		bodyMap["token"] = tokenStr
-
-		body, _ = json.Marshal(bodyMap)
-	}
-
-	return body
+// buildProtoPath returns {protoBase}/{service}/api/{service}.proto.
+func buildProtoPath(protoBase, service string) string {
+	return filepath.Join(protoBase, service, "api", service+".proto")
 }
 
-// toRPCMethod
-//
-// snake_case -> PascalCase
-func toRPCMethod(s string) string {
-
-	parts := strings.Split(s, "_")
-
-	for i := range parts {
-
-		if len(parts[i]) > 0 {
-
-			parts[i] =
-				strings.ToUpper(parts[i][:1]) +
-					parts[i][1:]
-		}
+// extractServiceName parses the service name from an Etcd key.
+// Key format: {prefix}{serviceName}/{addr}
+func extractServiceName(key, prefix string) string {
+	trimmed := strings.TrimPrefix(key, prefix)
+	parts := strings.SplitN(trimmed, "/", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		return ""
 	}
-
-	return strings.Join(parts, "")
+	return parts[0]
 }
 
-// toCamelCase
-//
-// snake_case -> camelCase
-func toCamelCase(s string) string {
-
-	parts := strings.Split(s, "_")
-
-	for i := 1; i < len(parts); i++ {
-
-		if len(parts[i]) > 0 {
-
-			parts[i] =
-				strings.ToUpper(parts[i][:1]) +
-					parts[i][1:]
-		}
+// newEtcdClient creates a minimal etcd v3 client.
+func newEtcdClient(addrs []string) (*clientv3.Client, error) {
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   addrs,
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("connect to etcd %v: %w", addrs, err)
 	}
-
-	return strings.Join(parts, "")
+	return cli, nil
 }
