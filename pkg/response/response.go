@@ -32,7 +32,7 @@ func OK(c *app.RequestContext, data interface{}) {
 // BizErr sends a downstream business error using the parsed BizError.
 func BizErr(c *app.RequestContext, biz *errcode.BizError) {
 	statusCode := http.StatusBadRequest
-	if biz.Code >= 500 {
+	if biz.Code >= 50000 {
 		statusCode = http.StatusInternalServerError
 	}
 	c.JSON(statusCode, R{Code: int(biz.Code), Msg: biz.Message})

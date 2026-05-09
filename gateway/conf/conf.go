@@ -23,7 +23,8 @@ type Config struct {
 }
 
 type CORS struct {
-	AllowOrigins []string `yaml:"allowOrigins"`
+	AllowOrigins     []string `yaml:"allowOrigins"`
+	AllowCredentials bool     `yaml:"allowCredentials"`
 }
 
 type JWT struct {

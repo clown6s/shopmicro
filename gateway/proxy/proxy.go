@@ -373,15 +373,17 @@ func (p *Proxy) Handler() app.HandlerFunc {
 				return
 			}
 
-			// Verify token is still active in Redis (not logged out / superseded).
+			// P1-1: Verify token is still active in Redis SET (multi-device support).
+			// Uses SISMEMBER to check if the token belongs to the user's active token set.
+			// SISMEMBER returns (false, nil) for non-existent keys — no redis.Nil ambiguity.
 			if p.rdb != nil {
 				tokenKey := fmt.Sprintf("%s%d", tokenPrefix, claims.UserID)
-				stored, err := p.rdb.Get(ctx, tokenKey)
+				isMember, err := p.rdb.SIsMember(ctx, tokenKey, tokenStr)
 				if err != nil {
-					// P0-01 fix: Redis failure → fail-open to avoid becoming SPOF.
-					// Log warning and allow request; token revocation is best-effort.
-					logger.Warnf("redis get token failed (fail-open): user_id=%d err=%v", claims.UserID, err)
-				} else if stored != tokenStr {
+					// Redis connection error → fail-open (Redis not SPOF).
+					logger.Warnf("redis sismember failed (fail-open): user_id=%d err=%v", claims.UserID, err)
+				} else if !isMember {
+					// Token not in the user's active set → revoked or expired.
 					response.Unauthorized(c, "token revoked")
 					c.Abort()
 					return

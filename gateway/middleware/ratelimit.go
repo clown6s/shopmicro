@@ -3,10 +3,12 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	goredis "github.com/redis/go-redis/v9"
+	"golang.org/x/time/rate"
 
 	"shopmicro/pkg/redis"
 	"shopmicro/pkg/response"
@@ -51,11 +53,12 @@ return 1
 
 // RedisRateLimiter implements distributed sliding window rate limiting via Redis.
 type RedisRateLimiter struct {
-	rdb    *redis.Client
-	limit  int           // max requests per window (default)
-	window time.Duration // sliding window duration (default)
-	// P1-15: Per-endpoint overrides
+	rdb               *redis.Client
+	limit             int           // max requests per window (default)
+	window            time.Duration // sliding window duration (default)
 	endpointOverrides map[string]*endpointLimit
+	// P1-3: Local fallback rate limiters (token bucket) when Redis is down.
+	localLimiters sync.Map // map[string]*rate.Limiter
 }
 
 // endpointLimit holds per-endpoint rate limit configuration
@@ -85,6 +88,7 @@ func (rl *RedisRateLimiter) SetEndpointLimit(endpointKey string, limit int, wind
 }
 
 // Allow checks whether a request from the given key is allowed.
+// P1-3: Falls back to local in-memory rate limiter when Redis is down.
 func (rl *RedisRateLimiter) Allow(ctx context.Context, key string) bool {
 	now := time.Now()
 	windowStart := now.Add(-rl.window)
@@ -99,11 +103,21 @@ func (rl *RedisRateLimiter) Allow(ctx context.Context, key string) bool {
 	).Int()
 
 	if err != nil {
-		// Redis error → fail-open: rate limiting is protection, not a gatekeeper.
-		return true
+		// P1-3: Redis down → fall back to local in-memory rate limiter.
+		// Prevents rate limit bypass when Redis is unavailable (e.g. DDoS + brute force).
+		return rl.localAllow(key)
 	}
 
 	return result == 1
+}
+
+// localAllow provides in-memory token-bucket rate limiting as a fallback
+// when Redis is unavailable. Uses per-key limiters stored in a sync.Map.
+func (rl *RedisRateLimiter) localAllow(key string) bool {
+	// tokens per second = limit / window_seconds
+	r := rate.Limit(float64(rl.limit) / rl.window.Seconds())
+	limiter, _ := rl.localLimiters.LoadOrStore(key, rate.NewLimiter(r, 1))
+	return limiter.(*rate.Limiter).Allow()
 }
 
 // RateLimitMiddleware returns a Hertz middleware that performs distributed

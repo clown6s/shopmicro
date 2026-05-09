@@ -12,7 +12,9 @@ jwt:
 
 cors:
   allowOrigins:
-    - "*"  # 生产环境替换为具体域名
+    - "http://localhost:3000"   # 生产环境替换为实际前端域名
+    - "http://127.0.0.1:3000"
+  allowCredentials: true
 
 # proto 文件基础路径（相对于网关工作目录），默认 "../"
 # proto 约定路径: {protoBase}{serviceName}/api/{serviceName}.proto

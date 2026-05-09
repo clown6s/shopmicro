@@ -74,3 +74,23 @@ func (c *Client) Del(ctx context.Context, keys ...string) error {
 func (c *Client) Exists(ctx context.Context, keys ...string) (int64, error) {
 	return c.rdb.Exists(ctx, keys...).Result()
 }
+
+// SAdd adds members to a Redis SET.
+func (c *Client) SAdd(ctx context.Context, key string, members ...interface{}) error {
+	return c.rdb.SAdd(ctx, key, members...).Err()
+}
+
+// SRem removes members from a Redis SET.
+func (c *Client) SRem(ctx context.Context, key string, members ...interface{}) error {
+	return c.rdb.SRem(ctx, key, members...).Err()
+}
+
+// SIsMember checks if a member exists in a Redis SET.
+func (c *Client) SIsMember(ctx context.Context, key string, member interface{}) (bool, error) {
+	return c.rdb.SIsMember(ctx, key, member).Result()
+}
+
+// Expire sets a TTL on an existing key.
+func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) error {
+	return c.rdb.Expire(ctx, key, ttl).Err()
+}

@@ -167,12 +167,14 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 		return nil, errInternal
 	}
 
-	// P1-04: Store token in Redis — fail-open consistent with P0-01 fix.
-	// If Redis is down, the login still succeeds. Token revocation becomes
-	// best-effort (gateway also fail-opens on Redis errors).
+	// P1-1: Store token in a Redis SET (multi-device support).
+	// Each user has a SET of active tokens. Login adds the new token.
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, user.ID)
-	if err := s.rdb.Set(ctx, tokenKey, token, time.Duration(s.jwtExpHrs)*time.Hour); err != nil {
+	ttl := time.Duration(s.jwtExpHrs) * time.Hour
+	if err := s.rdb.SAdd(ctx, tokenKey, token); err != nil {
 		logger.Warnf("login: store token to redis failed (user still logged in): %v", err)
+	} else if err := s.rdb.Expire(ctx, tokenKey, ttl); err != nil {
+		logger.Warnf("login: set token ttl failed: %v", err)
 	}
 
 	return &v1.LoginResp{
@@ -247,17 +249,10 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 		return nil, errNothingUpdate
 	}
 
-	// P0-04: Check phone uniqueness before update (still needed for UPDATE path).
-	if newPhone, ok := updates["phone"].(string); ok && newPhone != "" {
-		existing, err := s.userDal.GetByPhone(ctx, newPhone)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			logger.Errorf("check phone uniqueness failed: %v", err)
-			return nil, errInternal
-		}
-		if existing != nil && existing.ID != req.GetId() {
-			return nil, errPhoneExists
-		}
-	}
+	// P2-1 fix: Removed TOCTOU phone uniqueness pre-check.
+	// Rely entirely on the DB UNIQUE index + isDuplicateKeyError below.
+	// The SELECT-then-UPDATE pattern had a race window where two concurrent
+	// requests could both pass the check.
 
 	if err := s.userDal.Update(ctx, req.GetId(), updates); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -291,10 +286,10 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 		return nil, errInternal
 	}
 
-	// P2-05: Also clear Redis token on delete to invalidate sessions
+	// P2-05: Clear ALL Redis tokens for this user (DELETE on SET key removes the whole set).
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
 	if err := s.rdb.Del(ctx, tokenKey); err != nil {
-		logger.Warnf("delete user: failed to clear redis token (user_id=%d): %v", req.GetId(), err)
+		logger.Warnf("delete user: failed to clear redis tokens (user_id=%d): %v", req.GetId(), err)
 	}
 
 	return &v1.DeleteUserResp{}, nil
@@ -378,8 +373,9 @@ func parseInt64(s string) int64 {
 	return n
 }
 
-// Logout deletes the user's active token from Redis.
-// Token validation is handled by the gateway; downstream receives user_id via metainfo.
+// Logout removes the caller's specific token from Redis.
+// Gateway forwards user_id AND token via metainfo, so we only invalidate
+// the current device's session (multi-device support).
 func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *v1.LogoutResp, err error) {
 	userIDStr, ok := metainfo.GetPersistentValue(ctx, "user_id")
 	if !ok || userIDStr == "" {
@@ -387,12 +383,16 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 		return nil, errUnauthorized
 	}
 
+	tokenStr, ok := metainfo.GetPersistentValue(ctx, "token")
+	if !ok || tokenStr == "" {
+		logger.Warn("logout: token not found in metainfo, request may bypass gateway")
+		return nil, errUnauthorized
+	}
+
 	tokenKey := fmt.Sprintf("%s%s", tokenPrefix, userIDStr)
-	// Log out all sessions by deleting the key directly (single-device login).
-	// P1-20: Log Redis Del errors instead of swallowing them.
-	if err := s.rdb.Del(ctx, tokenKey); err != nil {
-		logger.Warnf("logout: failed to delete redis token (user_id=%s): %v", userIDStr, err)
-		// Still return success — the JWT will expire naturally
+	// P1-1: Remove only the current device's token from the SET.
+	if err := s.rdb.SRem(ctx, tokenKey, tokenStr); err != nil {
+		logger.Warnf("logout: failed to remove token from redis (user_id=%s): %v", userIDStr, err)
 	}
 
 	return &v1.LogoutResp{}, nil
