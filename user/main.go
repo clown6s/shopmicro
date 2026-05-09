@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -194,7 +195,7 @@ func Run(configPath string) error {
 		Handler: healthMux,
 	}
 	go func() {
-		if err := healthSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := healthSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Warnf("health check server stopped: %v", err)
 		}
 	}()
