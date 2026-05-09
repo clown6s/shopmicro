@@ -16,6 +16,8 @@ import (
 	"github.com/cloudwego/kitex/client/genericclient"
 	"github.com/cloudwego/kitex/pkg/discovery"
 	"github.com/cloudwego/kitex/pkg/generic"
+
+	"go.etcd.io/etcd/api/v3/mvccpb"
 	etcdv3 "go.etcd.io/etcd/client/v3"
 
 	"shopmicro/pkg/errcode"
@@ -33,18 +35,21 @@ const (
 	kitexRegistryPrefix            = "kitex/registry-etcd/"
 )
 
-// Proxy 通用 gRPC 代理，基于 Kitex generic client 自动转发请求
+// Proxy 通用 gRPC 代理
 type Proxy struct {
 	mu            sync.RWMutex
 	clients       map[string]genericclient.Client
 	publicMethods map[string]bool
 	jwtParser     *jwt.Parser
+
+	// etcd client
+	etcdCli *etcdv3.Client
 }
 
-// Option 代理配置选项
+// Option 配置项
 type Option func(*Proxy)
 
-// WithPublicMethods 设置不需要认证的 RPC 方法（PascalCase，如 RegisterUser、Login）
+// WithPublicMethods 设置免认证方法
 func WithPublicMethods(methods ...string) Option {
 	return func(p *Proxy) {
 		for _, m := range methods {
@@ -53,30 +58,39 @@ func WithPublicMethods(methods ...string) Option {
 	}
 }
 
-// WithJWT 启用 JWT 认证
+// WithJWT 启用 JWT
 func WithJWT(secret string) Option {
 	return func(p *Proxy) {
 		p.jwtParser = jwt.NewParser(secret)
 	}
 }
 
-// New 创建代理实例
+// New 创建 Proxy
 func New(opts ...Option) *Proxy {
 	p := &Proxy{
 		clients:       make(map[string]genericclient.Client),
 		publicMethods: make(map[string]bool),
 	}
+
 	for _, opt := range opts {
 		opt(p)
 	}
+
 	return p
 }
 
-// RegisterService 注册下游 gRPC 服务
-// destService: 服务发现名（etcd 注册名）
-// protoPath: proto 文件路径，用于加载 JSON 描述符
-func (p *Proxy) RegisterService(destService, protoPath string, opts ...client.Option) error {
-	provider, err := generic.NewPbFileProviderWithDynamicGo(protoPath, context.Background(), dproto.Options{})
+// RegisterService 注册服务
+func (p *Proxy) RegisterService(
+	destService,
+	protoPath string,
+	opts ...client.Option,
+) error {
+
+	provider, err := generic.NewPbFileProviderWithDynamicGo(
+		protoPath,
+		context.Background(),
+		dproto.Options{},
+	)
 	if err != nil {
 		return err
 	}
@@ -86,25 +100,31 @@ func (p *Proxy) RegisterService(destService, protoPath string, opts ...client.Op
 		return err
 	}
 
-	cli, err := genericclient.NewClient(destService, g, opts...)
+	cli, err := genericclient.NewClient(
+		destService,
+		g,
+		opts...,
+	)
 	if err != nil {
 		return err
 	}
+
 	p.mu.Lock()
 	p.clients[destService] = cli
 	p.mu.Unlock()
+
 	return nil
 }
 
-// DiscoverAndRegister 自动从 Etcd 发现已注册的 Kitex 服务并创建 generic client
-// 新增服务零配置：只需启动下游服务注册到 Etcd，网关自动感知
+// DiscoverAndRegister
 //
-// resolver: 服务发现 Resolver（已连接 Etcd）
-// etcdAddrs: Etcd 地址列表，用于查询已注册的服务名
-// protoBase: proto 文件基础路径（相对于网关工作目录），默认 "../"
-//
-//	proto 文件约定路径: {protoBase}{serviceName}/api/{serviceName}.proto
-func (p *Proxy) DiscoverAndRegister(resolver discovery.Resolver, etcdAddrs []string, protoBase string) error {
+// 启动时扫描 etcd 已有服务
+func (p *Proxy) DiscoverAndRegister(
+	resolver discovery.Resolver,
+	etcdAddrs []string,
+	protoBase string,
+) error {
+
 	if protoBase == "" {
 		protoBase = "../"
 	}
@@ -114,191 +134,515 @@ func (p *Proxy) DiscoverAndRegister(resolver discovery.Resolver, etcdAddrs []str
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
-		return fmt.Errorf("create etcd client for discovery: %w", err)
+		return fmt.Errorf(
+			"create etcd client for discovery: %w",
+			err,
+		)
 	}
-	defer cli.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// 保存 etcd client 给 watch 使用
+	p.etcdCli = cli
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second,
+	)
 	defer cancel()
 
-	resp, err := cli.Get(ctx, kitexRegistryPrefix, etcdv3.WithPrefix())
+	resp, err := cli.Get(
+		ctx,
+		kitexRegistryPrefix,
+		etcdv3.WithPrefix(),
+	)
 	if err != nil {
-		return fmt.Errorf("discover services from etcd: %w", err)
+		return fmt.Errorf(
+			"discover services from etcd: %w",
+			err,
+		)
 	}
 
 	services := make(map[string]bool)
+
 	for _, kv := range resp.Kvs {
-		rest := strings.TrimPrefix(string(kv.Key), kitexRegistryPrefix)
-		if idx := strings.Index(rest, "/"); idx > 0 {
-			services[rest[:idx]] = true
-		} else if rest != "" {
-			services[rest] = true
+
+		key := string(kv.Key)
+
+		rest := strings.TrimPrefix(
+			key,
+			kitexRegistryPrefix,
+		)
+
+		idx := strings.Index(rest, "/")
+		if idx <= 0 {
+			continue
 		}
+
+		serviceName := rest[:idx]
+
+		services[serviceName] = true
 	}
 
 	if len(services) == 0 {
-		logger.Warnf("no services discovered in etcd under %s", kitexRegistryPrefix)
+
+		logger.Infof(
+			"no services discovered yet under %s",
+			kitexRegistryPrefix,
+		)
+
 		return nil
 	}
 
-	for name := range services {
-		protoPath := protoBase + name + "/api/" + name + ".proto"
-		opts := []client.Option{client.WithResolver(resolver)}
-		if err := p.RegisterService(name, protoPath, opts...); err != nil {
-			logger.Warnf("auto-register service %s failed (proto: %s): %v", name, protoPath, err)
+	for serviceName := range services {
+
+		// 已存在
+		p.mu.RLock()
+		_, exists := p.clients[serviceName]
+		p.mu.RUnlock()
+
+		if exists {
 			continue
 		}
-		logger.Infof("auto-discovered service: %s (proto: %s)", name, protoPath)
+
+		protoPath :=
+			protoBase +
+				serviceName +
+				"/api/" +
+				serviceName +
+				".proto"
+
+		opts := []client.Option{
+			client.WithResolver(resolver),
+
+			// RPC 超时
+			client.WithRPCTimeout(3 * time.Second),
+		}
+
+		if err := p.RegisterService(
+			serviceName,
+			protoPath,
+			opts...,
+		); err != nil {
+
+			logger.Warnf(
+				"auto-register service %s failed (proto: %s): %v",
+				serviceName,
+				protoPath,
+				err,
+			)
+
+			continue
+		}
+
+		logger.Infof(
+			"auto-discovered service: %s",
+			serviceName,
+		)
 	}
 
 	return nil
 }
 
-// Handler 返回通用的 Hertz 路由处理器
-// 路由格式: /api/v1/:service/:method
+// WatchServices
 //
-//	URL method 使用 snake_case，自动转为 proto PascalCase RPC 方法名:
-//	  /api/v1/user/register_user → RegisterUser
-//	  /api/v1/user/login         → Login
-//	  /api/v1/user/logout        → Logout
+// 动态监听 etcd 服务变化
+func (p *Proxy) WatchServices(
+	resolver discovery.Resolver,
+	protoBase string,
+) {
+
+	if protoBase == "" {
+		protoBase = "../"
+	}
+
+	if p.etcdCli == nil {
+		logger.Errorf("etcd client is nil")
+		return
+	}
+
+	watchChan := p.etcdCli.Watch(
+		context.Background(),
+		kitexRegistryPrefix,
+		etcdv3.WithPrefix(),
+	)
+
+	go func() {
+
+		logger.Infof(
+			"watching etcd services under %s",
+			kitexRegistryPrefix,
+		)
+
+		for resp := range watchChan {
+
+			for _, event := range resp.Events {
+
+				switch event.Type {
+
+				// 服务上线
+				case mvccpb.PUT:
+
+					key := string(event.Kv.Key)
+
+					rest := strings.TrimPrefix(
+						key,
+						kitexRegistryPrefix,
+					)
+
+					idx := strings.Index(rest, "/")
+					if idx <= 0 {
+						continue
+					}
+
+					serviceName := rest[:idx]
+
+					// 已存在
+					p.mu.RLock()
+					_, exists := p.clients[serviceName]
+					p.mu.RUnlock()
+
+					if exists {
+						continue
+					}
+
+					protoPath :=
+						protoBase +
+							serviceName +
+							"/api/" +
+							serviceName +
+							".proto"
+
+					opts := []client.Option{
+						client.WithResolver(resolver),
+						client.WithRPCTimeout(3 * time.Second),
+					}
+
+					if err := p.RegisterService(
+						serviceName,
+						protoPath,
+						opts...,
+					); err != nil {
+
+						logger.Warnf(
+							"watch auto-register failed: %s err=%v",
+							serviceName,
+							err,
+						)
+
+						continue
+					}
+
+					logger.Infof(
+						"new service discovered: %s",
+						serviceName,
+					)
+
+				// 服务下线
+				case mvccpb.DELETE:
+
+					key := string(event.Kv.Key)
+
+					logger.Infof(
+						"service instance offline: %s",
+						key,
+					)
+				}
+			}
+		}
+	}()
+}
+
+// Handler
 //
-//	GET 请求的 query params 会自动转为 JSON body（snake_case → camelCase）
-//	Authorization header 中的 token 会自动注入到 body 中（供 LoginOut 等接口使用）
+// 通用路由:
+// /api/v1/:service/:method
 func (p *Proxy) Handler() app.HandlerFunc {
+
 	return func(ctx context.Context, c *app.RequestContext) {
+
 		service := c.Param("service")
 		method := toRPCMethod(c.Param("method"))
 
-		// JWT 认证
+		// JWT
 		tokenStr := p.extractToken(c)
-		if !p.publicMethods[method] && p.jwtParser != nil {
+
+		if !p.publicMethods[method] &&
+			p.jwtParser != nil {
+
 			if tokenStr == "" {
-				response.JSON(c, errcode.ErrToken, nil)
+
+				response.JSON(
+					c,
+					errcode.ErrToken,
+					nil,
+				)
+
 				c.Abort()
 				return
 			}
+
 			claims, err := p.jwtParser.Parse(tokenStr)
 			if err != nil {
-				// 不泄露具体错误细节
-				response.JSON(c, errcode.ErrToken, nil)
+
+				response.JSON(
+					c,
+					errcode.ErrToken,
+					nil,
+				)
+
 				c.Abort()
 				return
 			}
-			ctx = context.WithValue(ctx, keyUserID, claims.UserID)
-			ctx = context.WithValue(ctx, keyPhone, claims.Phone)
+
+			ctx = context.WithValue(
+				ctx,
+				keyUserID,
+				claims.UserID,
+			)
+
+			ctx = context.WithValue(
+				ctx,
+				keyPhone,
+				claims.Phone,
+			)
 		}
 
+		// 查找 client
 		p.mu.RLock()
 		cli, ok := p.clients[service]
 		p.mu.RUnlock()
+
 		if !ok {
-			response.JSON(c, errcode.ErrParam.WithMsg("service not found"), nil)
+
+			logger.Warnf(
+				"service not found: %s",
+				service,
+			)
+
+			response.JSON(
+				c,
+				errcode.ErrParam.WithMsg("service not found"),
+				nil,
+			)
+
 			c.Abort()
 			return
 		}
 
 		body := p.buildRequestBody(c, tokenStr)
 
-		// 将 token 注入 Kitex persistent metadata，供下游服务拦截器校验
+		// token 透传
 		if tokenStr != "" {
-			ctx = metainfo.WithPersistentValue(ctx, "token", tokenStr)
+			ctx = metainfo.WithPersistentValue(
+				ctx,
+				"token",
+				tokenStr,
+			)
 		}
 
-		resp, err := cli.GenericCall(ctx, method, string(body))
+		// trace id
+		traceID := string(c.GetHeader("X-Trace-Id"))
+		if traceID != "" {
+			ctx = metainfo.WithPersistentValue(
+				ctx,
+				"trace_id",
+				traceID,
+			)
+		}
+
+		resp, err := cli.GenericCall(
+			ctx,
+			method,
+			string(body),
+		)
+
 		if err != nil {
-			// 从 gRPC remote error 中解析业务错误
+
 			if bizErr, ok := errcode.ParseBizError(err); ok {
-				response.JSON(c, errcode.FromBizError(bizErr), nil)
+
+				response.JSON(
+					c,
+					errcode.FromBizError(bizErr),
+					nil,
+				)
+
 				return
 			}
-			logger.Errorf("gRPC call failed: service=%s method=%s err=%v", service, method, err)
-			response.JSON(c, errcode.ErrServer.WithMsg("service unavailable"), nil)
+
+			logger.Errorf(
+				"gRPC call failed: service=%s method=%s err=%v",
+				service,
+				method,
+				err,
+			)
+
+			response.JSON(
+				c,
+				errcode.ErrServer.WithMsg("service unavailable"),
+				nil,
+			)
+
 			return
 		}
 
-		// GenericCall 返回 JSON 字符串，解析后直接返回
+		// 解析 JSON
 		var result map[string]interface{}
+
 		if respStr, ok := resp.(string); ok {
+
 			if len(respStr) > 0 {
-				if err := json.Unmarshal([]byte(respStr), &result); err != nil {
-					logger.Errorf("unmarshal gRPC response failed: %v", err)
-					response.JSON(c, errcode.ErrResponse, nil)
+
+				if err := json.Unmarshal(
+					[]byte(respStr),
+					&result,
+				); err != nil {
+
+					logger.Errorf(
+						"unmarshal gRPC response failed: %v",
+						err,
+					)
+
+					response.JSON(
+						c,
+						errcode.ErrResponse,
+						nil,
+					)
+
 					return
 				}
 			}
 		}
-		response.JSON(c, errcode.Success, result)
+
+		response.JSON(
+			c,
+			errcode.Success,
+			result,
+		)
 	}
 }
 
-// extractToken 从 Authorization header 或 Token header 提取 token
-func (p *Proxy) extractToken(c *app.RequestContext) string {
+// extractToken
+func (p *Proxy) extractToken(
+	c *app.RequestContext,
+) string {
+
 	auth := string(c.GetHeader("Authorization"))
-	if strings.HasPrefix(auth, "Bearer ") || strings.HasPrefix(auth, "bearer ") {
-		return strings.TrimPrefix(strings.TrimPrefix(auth, "Bearer "), "bearer ")
+
+	if strings.HasPrefix(auth, "Bearer ") ||
+		strings.HasPrefix(auth, "bearer ") {
+
+		return strings.TrimPrefix(
+			strings.TrimPrefix(auth, "Bearer "),
+			"bearer ",
+		)
 	}
+
 	return string(c.GetHeader("Token"))
 }
 
-// buildRequestBody 构建转发给 gRPC 的请求体
-// GET 请求: query params → JSON（snake_case 转 camelCase）
-// POST/PUT/DELETE: 读取 body
-// 如果有 token，注入到 body 中
-func (p *Proxy) buildRequestBody(c *app.RequestContext, tokenStr string) json.RawMessage {
+// buildRequestBody
+func (p *Proxy) buildRequestBody(
+	c *app.RequestContext,
+	tokenStr string,
+) json.RawMessage {
+
 	var body json.RawMessage
 
+	// GET -> query params
 	if string(c.Method()) == "GET" {
+
 		params := make(map[string]interface{})
-		c.QueryArgs().VisitAll(func(key, value []byte) {
-			v := string(value)
-			// 数字字符串自动转为 int/float，匹配 proto int32/int64 类型
-			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-				params[toCamelCase(string(key))] = n
-			} else if f, err := strconv.ParseFloat(v, 64); err == nil {
-				params[toCamelCase(string(key))] = f
-			} else {
-				params[toCamelCase(string(key))] = v
-			}
-		})
+
+		c.QueryArgs().VisitAll(
+			func(key, value []byte) {
+
+				v := string(value)
+
+				if n, err := strconv.ParseInt(
+					v,
+					10,
+					64,
+				); err == nil {
+
+					params[toCamelCase(string(key))] = n
+
+				} else if f, err := strconv.ParseFloat(
+					v,
+					64,
+				); err == nil {
+
+					params[toCamelCase(string(key))] = f
+
+				} else {
+
+					params[toCamelCase(string(key))] = v
+				}
+			},
+		)
+
 		body, _ = json.Marshal(params)
+
 	} else {
+
 		body, _ = c.Body()
 	}
 
-	// 将 token 注入 body，供下游 LoginOut 等接口使用
+	// token 注入 body
 	if tokenStr != "" {
+
 		var bodyMap map[string]interface{}
+
 		if len(body) > 0 {
 			_ = json.Unmarshal(body, &bodyMap)
 		}
+
 		if bodyMap == nil {
 			bodyMap = make(map[string]interface{})
 		}
+
 		bodyMap["token"] = tokenStr
+
 		body, _ = json.Marshal(bodyMap)
 	}
 
 	return body
 }
 
-// toRPCMethod snake_case → PascalCase: login_out → LoginOut
+// toRPCMethod
+//
+// snake_case -> PascalCase
 func toRPCMethod(s string) string {
+
 	parts := strings.Split(s, "_")
+
 	for i := range parts {
+
 		if len(parts[i]) > 0 {
-			parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
+
+			parts[i] =
+				strings.ToUpper(parts[i][:1]) +
+					parts[i][1:]
 		}
 	}
+
 	return strings.Join(parts, "")
 }
 
-// toCamelCase snake_case → camelCase: page_size → pageSize
+// toCamelCase
+//
+// snake_case -> camelCase
 func toCamelCase(s string) string {
+
 	parts := strings.Split(s, "_")
+
 	for i := 1; i < len(parts); i++ {
+
 		if len(parts[i]) > 0 {
-			parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
+
+			parts[i] =
+				strings.ToUpper(parts[i][:1]) +
+					parts[i][1:]
 		}
 	}
+
 	return strings.Join(parts, "")
 }
