@@ -10,6 +10,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
 
+	"shopmicro/pkg/logger"
 	"shopmicro/pkg/redis"
 	"shopmicro/pkg/response"
 )
@@ -88,7 +89,9 @@ func (rl *RedisRateLimiter) SetEndpointLimit(endpointKey string, limit int, wind
 }
 
 // Allow checks whether a request from the given key is allowed.
-// P1-3: Falls back to local in-memory rate limiter when Redis is down.
+// P1-3: When Redis is down, FAIL CLOSED (reject requests)
+// instead of falling back to local rate limiter.
+// This prevents rate-limit bypass in distributed environments.
 func (rl *RedisRateLimiter) Allow(ctx context.Context, key string) bool {
 	now := time.Now()
 	windowStart := now.Add(-rl.window)
@@ -103,9 +106,10 @@ func (rl *RedisRateLimiter) Allow(ctx context.Context, key string) bool {
 	).Int()
 
 	if err != nil {
-		// P1-3: Redis down → fall back to local in-memory rate limiter.
-		// Prevents rate limit bypass when Redis is unavailable (e.g. DDoS + brute force).
-		return rl.localAllow(key)
+		// P2-03 fix: Redis down → fail closed.
+		// Reject the request rather than allowing bypass.
+		logger.Warnf("ratelimit: redis unavailable, failing closed (rejecting request)")
+		return false
 	}
 
 	return result == 1
@@ -120,11 +124,22 @@ func (rl *RedisRateLimiter) localAllow(key string) bool {
 	return limiter.(*rate.Limiter).Allow()
 }
 
+// getTrustedIP returns the client IP from the X-Real-IP header set by a
+// trusted reverse proxy (e.g. nginx). Falls back to c.ClientIP() when
+// the header is absent (direct client connection).
+// This prevents rate-limit bypass by spoofing X-Forwarded-For.
+func getTrustedIP(c *app.RequestContext) string {
+	if realIP := string(c.GetHeader("X-Real-IP")); realIP != "" {
+		return realIP
+	}
+	return c.ClientIP()
+}
+
 // RateLimitMiddleware returns a Hertz middleware that performs distributed
 // per-IP sliding window rate limiting via Redis.
 func RateLimitMiddleware(rl *RedisRateLimiter) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		ip := c.ClientIP()
+		ip := getTrustedIP(c)
 		key := fmt.Sprintf("shopmicro:ratelimit:ip:%s", ip)
 
 		if !rl.Allow(ctx, key) {
@@ -154,7 +169,7 @@ func EndpointRateLimitMiddleware(rl *RedisRateLimiter, endpointKey string) app.H
 		window: el.window,
 	}
 	return func(ctx context.Context, c *app.RequestContext) {
-		ip := c.ClientIP()
+		ip := getTrustedIP(c)
 		key := fmt.Sprintf("shopmicro:ratelimit:ep:%s:ip:%s", endpointKey, ip)
 
 		if !dedicated.Allow(ctx, key) {

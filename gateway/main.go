@@ -107,7 +107,6 @@ func Run(configPath string) error {
 	tracer, traceCfg := hertztracing.NewServerTracer()
 
 	h := server.New(
-
 		tracer,
 
 		server.WithHostPorts(

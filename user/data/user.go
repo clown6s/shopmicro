@@ -80,7 +80,10 @@ func (d *UserDal) Update(ctx context.Context, id int64, updates map[string]inter
 	if err != nil {
 		return err
 	}
-	affected, _ := result.RowsAffected()
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
@@ -95,7 +98,10 @@ func (d *UserDal) Delete(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
-	affected, _ := result.RowsAffected()
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
 	if affected == 0 {
 		return sql.ErrNoRows
 	}

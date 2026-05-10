@@ -18,7 +18,13 @@ type CORSConfig struct {
 // Instead, the middleware echoes back the request Origin if it's in the allowed list.
 func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 	if cfg == nil {
-		cfg = &CORSConfig{AllowOrigins: []string{"*"}}
+		if mode == "prod" {
+			// Production: no CORS headers unless explicitly configured
+			cfg = &CORSConfig{AllowOrigins: []string{}}
+		} else {
+			// Dev/staging: allow localhost for convenience
+			cfg = &CORSConfig{AllowOrigins: []string{"http://localhost:3000"}}
+		}
 	}
 	allowAll := len(cfg.AllowOrigins) == 1 && cfg.AllowOrigins[0] == "*"
 	creds := cfg.AllowCredentials

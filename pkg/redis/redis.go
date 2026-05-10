@@ -22,13 +22,12 @@ type Client struct {
 
 func New(cfg Config) (*Client, func(), error) {
 	opt := &redis.Options{
-		Addr:     cfg.Addr,
-		Password: cfg.Password,
-		DB:       cfg.DB,
-		// P1-18: Connection pool configuration for production
-		PoolSize:     100, // max connections
-		MinIdleConns: 10,  // minimum idle connections
-		// PoolTimeout:     4 * time.Second, // wait timeout for getting a connection (default 4s)
+		Addr:            cfg.Addr,
+		Password:        cfg.Password,
+		DB:              cfg.DB,
+		PoolSize:        100,              // max connections
+		MinIdleConns:    10,               // minimum idle connections
+		PoolTimeout:     4 * time.Second,  // wait timeout for getting a connection
 		ConnMaxLifetime: 30 * time.Minute, // max connection age
 		ConnMaxIdleTime: 10 * time.Minute, // max idle connection age
 	}

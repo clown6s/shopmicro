@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/bytedance/gopkg/cloud/metainfo"
+	"github.com/go-sql-driver/mysql"
 	"golang.org/x/crypto/bcrypt"
 
 	"shopmicro/user/data"
@@ -198,24 +198,11 @@ func (s *UserServiceImpl) checkOwnership(ctx context.Context, targetID int64) er
 	if !ok || userIDStr == "" {
 		return errUnauthorized
 	}
-	callerID := parseInt64(userIDStr)
-	if callerID != targetID {
-		return errForbidden
-	}
-	return nil
-}
-
-// checkAdmin verifies the caller has admin privileges.
-// P1 fix: ListUser is admin-only.  TODO: replace with proper RBAC.
-func (s *UserServiceImpl) checkAdmin(ctx context.Context) error {
-	userIDStr, ok := metainfo.GetPersistentValue(ctx, "user_id")
-	if !ok || userIDStr == "" {
+	callerID, err := parseInt64(userIDStr)
+	if err != nil || callerID == 0 {
 		return errUnauthorized
 	}
-	callerID := parseInt64(userIDStr)
-	// TODO: read admin user IDs from config / DB.
-	// For now, user ID 1 is the admin.
-	if callerID != 1 {
+	if callerID != targetID {
 		return errForbidden
 	}
 	return nil
@@ -310,6 +297,7 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 }
 
 func (s *UserServiceImpl) ListUser(ctx context.Context, req *v1.ListUserReq) (*v1.ListUserResp, error) {
+
 	users, total, err := s.userDal.List(ctx, req.GetPage(), req.GetPageSize(), req.GetName(), req.GetPhone())
 	if err != nil {
 		logger.Errorf("list users failed: %v", err)
@@ -347,30 +335,36 @@ func toUserInfo(u *model.User) *v1.UserInfo {
 // =========================
 
 // isDuplicateKeyError checks if an error is a MySQL duplicate key error (code 1062).
+// Uses the mysql driver's typed error instead of fragile string matching.
 func isDuplicateKeyError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// MySQL duplicate key: Error 1062: Duplicate entry '...' for key '...'
-	return strings.Contains(err.Error(), "Error 1062") ||
-		strings.Contains(err.Error(), "Duplicate entry") ||
-		strings.Contains(err.Error(), "UNIQUE constraint failed")
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) {
+		return mysqlErr.Number == 1062
+	}
+	return false
 }
 
 // parseInt64 parses a string to int64.
-// Returns 0 if the string contains any non-digit character.
-func parseInt64(s string) int64 {
+// Returns an error if the string contains any non-digit character or is empty.
+func parseInt64(s string) (int64, error) {
 	if s == "" {
-		return 0
+		return 0, fmt.Errorf("parseInt64: empty string")
 	}
 	var n int64
 	for _, c := range s {
 		if c < '0' || c > '9' {
-			return 0
+			return 0, fmt.Errorf("parseInt64: invalid character %c", c)
+		}
+		// 溢出检查
+		if n > (1<<63-1)/10 {
+			return 0, fmt.Errorf("parseInt64: overflow")
 		}
 		n = n*10 + int64(c-'0')
 	}
-	return n
+	return n, nil
 }
 
 // maskPhone 脱敏手机号：保留后4位，其余用 * 代替
@@ -398,8 +392,8 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 	}
 
 	// P1 fix: use %d format consistently, parse userIDStr to int64 first
-	userID := parseInt64(userIDStr)
-	if userID <= 0 {
+	userID, err := parseInt64(userIDStr)
+	if err != nil || userID <= 0 {
 		logger.Warnf("logout: invalid user_id in metainfo: %s", userIDStr)
 		return nil, errUnauthorized
 	}

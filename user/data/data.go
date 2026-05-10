@@ -21,14 +21,14 @@ type Data struct {
 
 func New(cfg conf.MySQL, redisCfg redis.Config, mode string) (*Data, func(), error) {
 
-	// 显式配置 SpanOptions：开启所有 SQL 相关 span
+	// P1-03 fix: disable SQL tracing to prevent data leakage
 	spanOpts := otelsql.SpanOptions{
-		OmitConnQuery:        false, // 创建 sql.conn.query  span
-		OmitRows:             false, // 创建 sql.rows span
-		OmitConnPrepare:      false, // 创建 sql.conn.prepare span
-		OmitConnectorConnect: false, // 创建 sql.connector.connect span
-		OmitConnResetSession: false,
-		DisableQuery:         false, // 不屏蔽 db.statement
+		OmitConnQuery:        true, // 创建 sql.conn.query  span
+		OmitRows:             true, // P1-03: omit sql.rows span
+		OmitConnPrepare:      true, // P1-03: omit sql.conn.prepare span
+		OmitConnectorConnect: true, // P1-03: omit sql.connector.connect span
+		OmitConnResetSession: true, // P1-03: omit reset session
+		DisableQuery:         true, // P1-03 fix: block db.statement from traces
 	}
 
 	db, err := otelsql.Open(

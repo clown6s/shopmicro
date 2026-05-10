@@ -7,15 +7,15 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 
 	"shopmicro/pkg/logger"
 )
 
 // AccessLogMiddleware records request latency and trace ID for every request.
-// It extracts the trace ID from the OpenTelemetry SpanContext set by
-// hertztracing.ServerMiddleware — no custom TraceMiddleware needed.
+// It uses zap structured fields to prevent log injection attacks
+// (newline/carriage return in method or path).
 func AccessLogMiddleware() app.HandlerFunc {
-
 	return func(ctx context.Context, c *app.RequestContext) {
 
 		start := time.Now()
@@ -31,14 +31,14 @@ func AccessLogMiddleware() app.HandlerFunc {
 			traceID = span.SpanContext().TraceID().String()
 		}
 
-		logger.Infof(
-			"[ACCESS] method=%s path=%s status=%d latency=%s ip=%s trace_id=%s",
-			string(c.Method()),
-			string(c.Path()),
-			c.Response.StatusCode(),
-			latency.String(),
-			c.ClientIP(),
-			traceID,
+		// P1-02 fix: Use structured fields to prevent log injection.
+		logger.C().Desugar().Info("[ACCESS]",
+			zap.String("method", string(c.Method())),
+			zap.String("path", string(c.Path())),
+			zap.Int("status", c.Response.StatusCode()),
+			zap.String("latency", latency.String()),
+			zap.String("ip", c.ClientIP()),
+			zap.String("trace_id", traceID),
 		)
 	}
 }
