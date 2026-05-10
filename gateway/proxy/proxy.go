@@ -447,7 +447,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 				if err != nil {
 					// Redis connection errors fail closed so revoked tokens are not accepted.
 					logger.Warnf("redis sismember failed (fail-closed): user_id=%d err=%v", claims.UserID, err)
-					response.Fail(c, http.StatusServiceUnavailable, 503, "service temporarily unavailable")
+					response.Fail(c, http.StatusServiceUnavailable, int(errcode.CodeGwSrvUnavailable), "service temporarily unavailable")
 					c.Abort()
 					return
 				} else if !isMember {
@@ -480,26 +480,70 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			}
 			// Internal / network error — never expose to client.
 			logger.Errorf("rpc call failed: service=%s method=%s err=%v", service, method, err)
-			response.Fail(c, http.StatusInternalServerError, 500, "internal server error")
+			response.Fail(c, http.StatusInternalServerError, int(errcode.CodeGwServer), "internal server error")
 			return
 		}
 
-		// GenericCall returns the JSON string from downstream.
-		// Parse it back to an object so the wrapper marshal produces
-		// {"data":{...}} instead of {"data":"{...}"}.
-		var data interface{}
+		// P0 fix: correctly handle both wrapped and raw protobuf responses.
+		// Wrapped response:  {"code":0,"message":"","data":{...}}  (has "code" field)
+		// Raw protobuf response: {"id":1,"token":"..."}                 (no "code" field)
 		if s, ok := resp.(string); ok && s != "" {
-			if err := json.Unmarshal([]byte(s), &data); err == nil {
-				// successfully parsed
-			} else {
-				// not valid JSON, keep original
-				data = resp
+			// First: detect if response has "code" field
+			var raw map[string]json.RawMessage
+			hasCodeField := false
+			if err := json.Unmarshal([]byte(s), &raw); err == nil {
+				if _, found := raw["code"]; found {
+					hasCodeField = true
+				}
 			}
-		} else {
-			data = resp
+
+			if hasCodeField {
+				// Wrapped response: parse code/message/data
+				var downstream struct {
+					Code    int         `json:"code"`
+					Message string      `json:"message"`
+					Data    interface{} `json:"data"`
+				}
+				json.Unmarshal([]byte(s), &downstream)
+
+				if downstream.Code != 0 {
+					// Error response — pass through with correct HTTP status
+					statusCode := http.StatusOK
+					switch downstream.Code {
+					case int(errcode.CodeUserUnauthorized):
+						statusCode = http.StatusUnauthorized
+					case int(errcode.CodeUserForbidden):
+						statusCode = http.StatusForbidden
+					default:
+						if downstream.Code < 50000 {
+							statusCode = http.StatusBadRequest
+						} else {
+							statusCode = http.StatusInternalServerError
+						}
+					}
+					c.JSON(statusCode, response.R{
+						Code:    downstream.Code,
+						Message: downstream.Message,
+						Data:    downstream.Data,
+					})
+					return
+				}
+				// Code == 0 (success wrapper): extract data field
+				response.OK(c, downstream.Data)
+				return
+			}
+
+			// Raw protobuf response (LoginResp, RegisterUserResp, etc.)
+			// Wrap the entire response body as "data"
+			var data interface{}
+			if err := json.Unmarshal([]byte(s), &data); err != nil {
+				data = s
+			}
+			response.OK(c, data)
+			return
 		}
 
-		response.OK(c, data)
+		response.OK(c, resp)
 	}
 }
 

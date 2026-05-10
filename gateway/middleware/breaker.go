@@ -1,9 +1,7 @@
 package middleware
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -56,21 +54,12 @@ func CircuitBreakerMiddleware(maxRequests int, interval, timeout time.Duration, 
 		_, err := cb.Execute(func() (interface{}, error) {
 			c.Next(ctx)
 
-			// Check HTTP status code
+			// P1-04 fix: only check HTTP status code.
+			// Reading c.Response.Body() after c.Next() is not reliable
+			// (body may have been flushed). The circuit breaker now trips
+			// on HTTP 5xx responses only.
 			if c.Response.StatusCode() >= 500 {
-				return nil, errors.New("server error")
-			}
-
-			// P1-4: Also check response body for infrastructure error codes (5xxxx).
-			// Downstream may return HTTP 200 but include {"code":50001, ...} in body.
-			body := c.Response.Body()
-			if len(body) > 0 && bytes.Contains(body, []byte(`"code"`)) {
-				var result struct {
-					Code int `json:"code"`
-				}
-				if json.Unmarshal(body, &result) == nil && result.Code >= 50000 {
-					return nil, errors.New("infrastructure error in response")
-				}
+				return nil, errors.New("downstream returned server error")
 			}
 
 			return nil, nil

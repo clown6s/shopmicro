@@ -44,23 +44,28 @@ func Fail(c *app.RequestContext, httpCode int, bizCode int, msg string) {
 }
 
 // Unauthorized sends a 401 response.
+// P0 fix: use errcode.CodeGwToken (50003) instead of hardcoded 401,
+// keeping gateway error codes in the 5xxxx infrastructure range.
 func Unauthorized(c *app.RequestContext, msg string) {
-	c.JSON(http.StatusUnauthorized, R{Code: http.StatusUnauthorized, Message: msg})
+	c.JSON(http.StatusUnauthorized, R{Code: int(errcode.CodeGwToken), Message: msg})
 }
 
 // TooManyRequests sends a 429 response.
+// P0 fix: use errcode.CodeGwRateLimit (50006)
 func TooManyRequests(c *app.RequestContext) {
-	c.JSON(http.StatusTooManyRequests, R{Code: 429, Message: "too many requests"})
+	c.JSON(http.StatusTooManyRequests, R{Code: int(errcode.CodeGwRateLimit), Message: "too many requests"})
 }
 
 // ServiceUnavailable sends a 503 response.
+// P0 fix: use errcode.CodeGwSrvUnavailable (50007)
 func ServiceUnavailable(c *app.RequestContext) {
-	c.JSON(http.StatusServiceUnavailable, R{Code: 503, Message: "service temporarily unavailable"})
+	c.JSON(http.StatusServiceUnavailable, R{Code: int(errcode.CodeGwSrvUnavailable), Message: "service temporarily unavailable"})
 }
 
 // InternalError sends a 500 response with a generic message.
+// P0 fix: use errcode.CodeGwServer (50002)
 func InternalError(c *app.RequestContext) {
-	c.JSON(http.StatusInternalServerError, R{Code: 500, Message: "internal server error"})
+	c.JSON(http.StatusInternalServerError, R{Code: int(errcode.CodeGwServer), Message: "internal server error"})
 }
 
 // httpStatus maps a business error code to the appropriate HTTP status code.

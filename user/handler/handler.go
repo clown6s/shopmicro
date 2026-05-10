@@ -205,6 +205,22 @@ func (s *UserServiceImpl) checkOwnership(ctx context.Context, targetID int64) er
 	return nil
 }
 
+// checkAdmin verifies the caller has admin privileges.
+// P1 fix: ListUser is admin-only.  TODO: replace with proper RBAC.
+func (s *UserServiceImpl) checkAdmin(ctx context.Context) error {
+	userIDStr, ok := metainfo.GetPersistentValue(ctx, "user_id")
+	if !ok || userIDStr == "" {
+		return errUnauthorized
+	}
+	callerID := parseInt64(userIDStr)
+	// TODO: read admin user IDs from config / DB.
+	// For now, user ID 1 is the admin.
+	if callerID != 1 {
+		return errForbidden
+	}
+	return nil
+}
+
 func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq) (*v1.UpdateUserResp, error) {
 	if req.GetId() <= 0 {
 		return nil, errInvalidUserID
@@ -294,7 +310,6 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 }
 
 func (s *UserServiceImpl) ListUser(ctx context.Context, req *v1.ListUserReq) (*v1.ListUserResp, error) {
-
 	users, total, err := s.userDal.List(ctx, req.GetPage(), req.GetPageSize(), req.GetName(), req.GetPhone())
 	if err != nil {
 		logger.Errorf("list users failed: %v", err)

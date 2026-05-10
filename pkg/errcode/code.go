@@ -28,9 +28,11 @@ const (
 
 // Gateway 基础设施: 50000 - 59999 (网关自身错误)
 const (
-	CodeGwParam    uint32 = 50001
-	CodeGwServer   uint32 = 50002
-	CodeGwToken    uint32 = 50003
-	CodeGwNotFound uint32 = 50004
-	CodeGwResponse uint32 = 50005
+	CodeGwParam          uint32 = 50001
+	CodeGwServer         uint32 = 50002
+	CodeGwToken          uint32 = 50003
+	CodeGwNotFound       uint32 = 50004
+	CodeGwResponse       uint32 = 50005
+	CodeGwRateLimit      uint32 = 50006 // 请求频率限制
+	CodeGwSrvUnavailable uint32 = 50007 // 下游服务不可用（熔断）
 )
