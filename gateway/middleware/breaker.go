@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -13,23 +14,37 @@ import (
 	"shopmicro/pkg/response"
 )
 
-// CircuitBreakerMiddleware returns a Hertz middleware with a circuit breaker
-// configured by the given parameters. The breaker is created once per call.
-// P1-4: Also inspects the response body for 5xxxx infrastructure error codes,
-// not just HTTP status — downstream may return 200 with {"code":50001}.
+// perServiceCB stores one circuit breaker per service name.
+var perServiceCB sync.Map // map[string]*gobreaker.CircuitBreaker
+
+// CircuitBreakerMiddleware returns a Hertz middleware with a circuit breaker.
+// P1-02 fix: Creates one CircuitBreaker per downstream service (extracted
+// from the :service URL parameter) instead of one shared breaker.
+// Settings are the same for all services; override per-service by extending
+// this function if needed.
 func CircuitBreakerMiddleware(maxRequests int, interval, timeout time.Duration, consecutiveFailures uint32) app.HandlerFunc {
-
-	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
-		Name:        "gateway",
-		MaxRequests: uint32(maxRequests),
-		Interval:    interval,
-		Timeout:     timeout,
-		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			return counts.ConsecutiveFailures >= consecutiveFailures
-		},
-	})
-
 	return func(ctx context.Context, c *app.RequestContext) {
+		// Extract service name from URL: /api/v1/:service/:method
+		service := c.Param("service")
+		if service == "" {
+			c.Next(ctx)
+			return
+		}
+
+		// Get or create the circuit breaker for this service
+		cbKey := service
+		cbI, _ := perServiceCB.LoadOrStore(cbKey, gobreaker.NewCircuitBreaker(gobreaker.Settings{
+			Name:        "gateway:" + service,
+			MaxRequests: uint32(maxRequests),
+			Interval:    interval,
+			Timeout:     timeout,
+			ReadyToTrip: func(counts gobreaker.Counts) bool {
+				return counts.ConsecutiveFailures >= consecutiveFailures
+			},
+		}))
+
+		cb := cbI.(*gobreaker.CircuitBreaker)
+
 		_, err := cb.Execute(func() (interface{}, error) {
 			c.Next(ctx)
 
@@ -52,10 +67,23 @@ func CircuitBreakerMiddleware(maxRequests int, interval, timeout time.Duration, 
 
 			return nil, nil
 		})
+
 		if err != nil {
 			response.ServiceUnavailable(c)
 			c.Abort()
 			return
 		}
 	}
+}
+
+// GetCircuitBreakerStatus returns a snapshot of all circuit breaker states.
+// Useful for a debug/service-status endpoint.
+func GetCircuitBreakerStatus() map[string]string {
+	result := make(map[string]string)
+	perServiceCB.Range(func(key, value interface{}) bool {
+		cb := value.(*gobreaker.CircuitBreaker)
+		result[key.(string)] = cb.State().String()
+		return true
+	})
+	return result
 }

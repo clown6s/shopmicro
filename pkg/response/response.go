@@ -65,11 +65,19 @@ func InternalError(c *app.RequestContext) {
 
 // httpStatus maps a business error code to the appropriate HTTP status code.
 //   - 0          → 200 OK
-//   - 10000-49999 → 400 Bad Request (business error)
+//   - 10014      → 401 Unauthorized (user service)
+//   - 10015      → 403 Forbidden    (user service)
+//   - 10000-49999 → 400 Bad Request (other business errors)
 //   - 50000+     → 500 Internal Server Error (infrastructure error)
 func httpStatus(code int) int {
 	if code == 0 {
 		return consts.StatusOK
+	}
+	switch code {
+	case int(errcode.CodeUserUnauthorized):
+		return consts.StatusUnauthorized
+	case int(errcode.CodeUserForbidden):
+		return consts.StatusForbidden
 	}
 	if code < 50000 {
 		return consts.StatusBadRequest

@@ -203,9 +203,10 @@ func Run(configPath string) error {
 		return err
 	}
 
-	// watch services — P1-03: pass lifecycle context for cancellation
+	// watch services — lifecycle context; cancel immediately after
+	// shutdown signal so the watch goroutine exits during graceful shutdown,
+	// not sometime after Run() returns.
 	watchCtx, watchCancel := context.WithCancel(context.Background())
-	defer watchCancel()
 
 	p.WatchServices(
 		watchCtx,
@@ -301,6 +302,9 @@ func Run(configPath string) error {
 			"shutdown signal received: %v",
 			sig,
 		)
+
+		// P2-05: cancel watchCtx so WatchServices goroutine exits promptly.
+		watchCancel()
 
 		ctx, cancel := context.WithTimeout(
 			context.Background(),

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -251,6 +252,17 @@ func (p *Proxy) DiscoverAndRegister(
 		seen[svcName] = struct{}{}
 
 		protoPath := buildProtoPath(protoBase, svcName)
+
+		// P2-06: fail-fast if the proto file is missing — the gateway cannot
+		// serve any request to this service without it.
+		if _, err := os.Stat(protoPath); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("proto file not found for service %q: %s (protoBase=%s) — cannot start without it",
+					svcName, protoPath, protoBase)
+			}
+			return fmt.Errorf("stat proto file for service %q: %w", svcName, err)
+		}
+
 		if err := p.registerService(svcName, protoPath, resolver); err != nil {
 			logger.Warnf("failed to register service %s: %v", svcName, err)
 		}
@@ -326,6 +338,20 @@ func (p *Proxy) watchOnce(
 				continue // already registered
 			}
 			protoPath := buildProtoPath(protoBase, svcName)
+
+			// P2-06: warn but do not block — a newly-deployed service may
+			// momentarily appear in etcd before its proto file is copied over
+			// (e.g. rolling update race).  If it persists, the next startup
+			// DiscoverAndRegister will catch the missing file and fail.
+			if _, err := os.Stat(protoPath); err != nil {
+				if os.IsNotExist(err) {
+					logger.Warnf("WatchServices: proto file not found for %s: %s — service registered but not usable until proto is in place", svcName, protoPath)
+					continue
+				}
+				logger.Warnf("WatchServices: stat proto for %s: %v", svcName, err)
+				continue
+			}
+
 			if err := p.registerService(svcName, protoPath, resolver); err != nil {
 				logger.Warnf("WatchServices: failed to register %s: %v", svcName, err)
 			}
@@ -347,9 +373,19 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		method := toMethodName(c.Param("method"))
 
 		// P1-12: Service/method whitelist enforcement
-		if allowed, ok := p.allowedMethods[service]; ok {
+		// If allowedMethods is non-empty, ANY service not explicitly registered is denied.
+		if len(p.allowedMethods) > 0 {
+			allowed, ok := p.allowedMethods[service]
+			if !ok {
+				// Service not in whitelist → reject
+				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwParam),
+					fmt.Sprintf("service %s not allowed", service))
+				c.Abort()
+				return
+			}
 			if !allowed[method] {
-				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwParam), fmt.Sprintf("method %s not allowed for service %s", method, service))
+				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwParam),
+					fmt.Sprintf("method %s not allowed for service %s", method, service))
 				c.Abort()
 				return
 			}

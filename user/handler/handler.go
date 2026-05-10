@@ -341,15 +341,18 @@ func isDuplicateKeyError(err error) bool {
 		strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
-// parseInt64 parses a string to int64, returning 0 on failure.
+// parseInt64 parses a string to int64.
+// Returns 0 if the string contains any non-digit character.
 func parseInt64(s string) int64 {
+	if s == "" {
+		return 0
+	}
 	var n int64
 	for _, c := range s {
-		if c >= '0' && c <= '9' {
-			n = n*10 + int64(c-'0')
-		} else {
+		if c < '0' || c > '9' {
 			return 0
 		}
+		n = n*10 + int64(c-'0')
 	}
 	return n
 }
