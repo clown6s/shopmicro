@@ -1,16 +1,9 @@
 package data
 
 import (
-	"context"
 	"database/sql"
-	"time"
 
-	"shopmicro/user/conf"
-
-	"github.com/XSAM/otelsql"
-	_ "github.com/go-sql-driver/mysql"
-	"go.opentelemetry.io/otel"
-
+	"shopmicro/pkg/mysql"
 	"shopmicro/pkg/redis"
 )
 
@@ -19,40 +12,10 @@ type Data struct {
 	Rdb *redis.Client
 }
 
-func New(cfg conf.MySQL, redisCfg redis.Config, mode string) (*Data, func(), error) {
-
-	// P1-03 fix: disable SQL tracing to prevent data leakage
-	spanOpts := otelsql.SpanOptions{
-		OmitConnQuery:        true, // 创建 sql.conn.query  span
-		OmitRows:             true, // P1-03: omit sql.rows span
-		OmitConnPrepare:      true, // P1-03: omit sql.conn.prepare span
-		OmitConnectorConnect: true, // P1-03: omit sql.connector.connect span
-		OmitConnResetSession: true, // P1-03: omit reset session
-		DisableQuery:         true, // P1-03 fix: block db.statement from traces
-	}
-
-	db, err := otelsql.Open(
-		"mysql",
-		cfg.DSN,
-
-		otelsql.WithTracerProvider(
-			otel.GetTracerProvider(),
-		),
-
-		otelsql.WithSpanOptions(spanOpts),
-	)
-
+func New(cfg mysql.Config, redisCfg redis.Config, mode string) (*Data, func(), error) {
+	// Use pkg/mysql for database connection (OTEL config centralized)
+	db, dbCleanup, err := mysql.New(cfg)
 	if err != nil {
-		return nil, nil, err
-	}
-
-	// mysql pool
-	db.SetMaxIdleConns(10)
-	db.SetMaxOpenConns(100)
-	db.SetConnMaxLifetime(time.Hour)
-
-	// ping mysql
-	if err := db.PingContext(context.Background()); err != nil {
 		return nil, nil, err
 	}
 
@@ -60,12 +23,12 @@ func New(cfg conf.MySQL, redisCfg redis.Config, mode string) (*Data, func(), err
 	redisCfg.EnableTracing = true
 	rc, redisCleanup, err := redis.New(redisCfg)
 	if err != nil {
-		_ = db.Close()
+		dbCleanup()
 		return nil, nil, err
 	}
 
 	cleanup := func() {
-		_ = db.Close()
+		dbCleanup()
 		redisCleanup()
 	}
 

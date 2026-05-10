@@ -2,16 +2,12 @@ package conf
 
 import (
 	"fmt"
-	"strings"
 
 	"shopmicro/pkg/conf"
+	"shopmicro/pkg/mysql"
 	"shopmicro/pkg/redis"
 	"shopmicro/pkg/secrets"
 )
-
-type MySQL struct {
-	DSN string `yaml:"dsn"`
-}
 
 type JWT struct {
 	Secret     string `yaml:"secret"`
@@ -22,7 +18,7 @@ type Config struct {
 	Server     conf.Server         `yaml:"server"`
 	HealthAddr string              `yaml:"healthAddr"`
 	Etcd       conf.Etcd           `yaml:"etcd"`
-	MySQL      MySQL               `yaml:"mysql"`
+	MySQL      mysql.Config        `yaml:"mysql"`
 	Redis      redis.Config        `yaml:"redis"`
 	JWT        JWT                 `yaml:"jwt"`
 	Mode       string              `yaml:"mode"`
@@ -32,7 +28,6 @@ type Config struct {
 // GetHealthAddr returns the health check listen address, defaulting to :8899.
 func (c *Config) GetHealthAddr() string {
 	if c.HealthAddr == "" {
-		// Derive from service addr: if service is 127.0.0.1:8888, health is :8899
 		return ":8899"
 	}
 	return c.HealthAddr
@@ -64,27 +59,11 @@ func (c *Config) ApplyEnv() {
 
 // Validate 校验必填的敏感配置
 func (c *Config) Validate() error {
-	if c.MySQL.DSN == "" {
-		return fmt.Errorf("mysql dsn is required, set MYSQL_DSN env or config.yaml")
+	if err := c.MySQL.Validate(); err != nil {
+		return err
 	}
 	if c.JWT.Secret == "" {
 		return fmt.Errorf("jwt secret is required, set JWT_SECRET env or config.yaml")
-	}
-	// P1-17: Ensure DSN has required parameters
-	allParams := []struct{ key, defaultVal string }{
-		{"parseTime", "true"},
-		{"charset", "utf8mb4"},
-	}
-	for _, p := range allParams {
-		if !strings.Contains(c.MySQL.DSN, p.key+"=") {
-			c.MySQL.DSN += "&" + p.key + "=" + p.defaultVal
-		}
-	}
-	// Ensure timeout params are present for production safety
-	for _, p := range []string{"readTimeout", "writeTimeout", "timeout"} {
-		if !strings.Contains(c.MySQL.DSN, p+"=") {
-			c.MySQL.DSN += "&" + p + "=5s"
-		}
 	}
 	return nil
 }

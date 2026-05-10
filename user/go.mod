@@ -3,15 +3,12 @@ module shopmicro/user
 go 1.26.1
 
 require (
-	github.com/XSAM/otelsql v0.42.0
 	github.com/bytedance/gopkg v0.1.4
 	github.com/cloudwego/kitex v0.16.2
 	github.com/cloudwego/prutal v0.1.3
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/kitex-contrib/obs-opentelemetry v0.3.0
 	github.com/kitex-contrib/registry-etcd v0.3.0
-	go.opentelemetry.io/otel v1.43.0
-	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.51.0
 )
 
@@ -59,11 +56,13 @@ require (
 	go.etcd.io/etcd/client/pkg/v3 v3.6.11 // indirect
 	go.etcd.io/etcd/client/v3 v3.6.11 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/otel v1.43.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.43.0 // indirect
 	go.opentelemetry.io/otel/metric v1.43.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.43.0 // indirect
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/zap v1.28.0 // indirect
 	golang.org/x/arch v0.27.0 // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
