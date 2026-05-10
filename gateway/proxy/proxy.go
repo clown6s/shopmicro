@@ -21,6 +21,7 @@ import (
 	"github.com/cloudwego/kitex/pkg/transmeta"
 	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
 
+	"github.com/cloudwego/kitex/pkg/retry"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"shopmicro/pkg/errcode"
@@ -148,12 +149,18 @@ func (p *Proxy) registerService(
 		return fmt.Errorf("create json-pb generic for %s: %w", serviceName, err)
 	}
 
+	// P2-07: gRPC failure retry — retries on timeout/errors, max 2 retries (3 attempts total)
+	// Default FailurePolicy already retries on timeout; WithMaxRetryTimes adjusts retry count.
+	fp := retry.NewFailurePolicy()
+	fp.WithMaxRetryTimes(2)
+
 	cli, err := genericclient.NewClient(
 		serviceName,
 		g,
 		client.WithResolver(resolver),
 		client.WithRPCTimeout(5*time.Second),
 		client.WithConnectTimeout(3*time.Second),
+		client.WithFailureRetry(fp),
 		client.WithMetaHandler(transmeta.MetainfoClientHandler),
 		client.WithSuite(kotelkitex.NewClientSuite(
 			kotelkitex.WithEnableGRPCMetadata(),

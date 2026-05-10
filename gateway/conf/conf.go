@@ -98,6 +98,10 @@ func (c *Config) ApplyEnv() {
 	if v := conf.Env("JWT_SECRET", ""); v != "" {
 		c.JWT.Secret = v
 	}
+	// P2-09: Docker/K8s 环境下覆盖 proto 基础路径
+	if v := conf.Env("PROTO_BASE", ""); v != "" {
+		c.ProtoBase = v
+	}
 }
 
 func (c *Config) Validate() error {

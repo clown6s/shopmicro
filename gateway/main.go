@@ -224,10 +224,10 @@ func Run(configPath string) error {
 		health.Handler(),
 	)
 
-	// P0-07: Readiness probe for K8s
+	// P0-07: Readiness probe for K8s — checks Redis connectivity
 	h.GET(
 		"/ready",
-		health.ReadyHandler(),
+		health.ReadyHandler(rdb),
 	)
 
 	// =========================

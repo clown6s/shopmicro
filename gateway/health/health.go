@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
+
+	"shopmicro/pkg/redis"
 )
 
 // Handler returns a simple liveness probe — always returns 200.
@@ -18,13 +20,19 @@ func Handler() app.HandlerFunc {
 
 // ReadyHandler returns a readiness probe that checks dependency health.
 // K8s readinessProbe should use this endpoint.
-// P0-07: Returns 200 when all dependencies are reachable.
-func ReadyHandler() app.HandlerFunc {
+// P2-08: Actually checks Redis connectivity.
+func ReadyHandler(rdb *redis.Client) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		// TODO: Add actual dependency checks when deps are injected:
-		//   - Redis Ping
-		//   - etcd status check
-		// For now, always healthy — wire up real checks as infrastructure matures.
+		// Check Redis
+		if rdb == nil || !rdb.Ping(ctx) {
+			c.JSON(503, map[string]interface{}{
+				"status": "not_ready",
+				"failed": "redis",
+			})
+			return
+		}
+
+		// All checks passed
 		c.JSON(200, map[string]interface{}{
 			"status": "ready",
 		})

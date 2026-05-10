@@ -90,6 +90,11 @@ func (c *Client) SIsMember(ctx context.Context, key string, member interface{}) 
 	return c.rdb.SIsMember(ctx, key, member).Result()
 }
 
+// Ping checks Redis connectivity. Returns true if Redis is reachable.
+func (c *Client) Ping(ctx context.Context) bool {
+	return c.rdb.Ping(ctx).Err() == nil
+}
+
 // Expire sets a TTL on an existing key.
 func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	return c.rdb.Expire(ctx, key, ttl).Err()
