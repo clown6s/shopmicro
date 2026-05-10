@@ -102,7 +102,7 @@ func (d *UserDal) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (d *UserDal) List(ctx context.Context, page, pageSize int32) ([]*model.User, int64, error) {
+func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone string) ([]*model.User, int64, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -110,21 +110,33 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32) ([]*model.User
 		pageSize = 20
 	}
 
+	conditions := []string{"deleted_at IS NULL"}
+	args := make([]interface{}, 0, 2)
+	if name != "" {
+		conditions = append(conditions, "real_name LIKE ?")
+		args = append(args, "%"+name+"%")
+	}
+	if phone != "" {
+		conditions = append(conditions, "phone LIKE ?")
+		args = append(args, "%"+phone+"%")
+	}
+	where := strings.Join(conditions, " AND ")
+
 	var total int64
-	if err := d.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM user WHERE deleted_at IS NULL`,
-	).Scan(&total); err != nil {
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM user WHERE %s", where)
+	if err := d.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	offset := int64(page-1) * int64(pageSize)
 	// P1-08: List query does NOT select password column — no need to load hashes into memory
-	rows, err := d.db.QueryContext(ctx,
+	querySQL := fmt.Sprintf(
 		`SELECT id, COALESCE(real_name,''), COALESCE(avatar,''), gender, COALESCE(age,0),
 		        phone, COALESCE(email,''), create_time, update_time, COALESCE(remark,'')
-		 FROM user WHERE deleted_at IS NULL
-		 ORDER BY id DESC LIMIT ? OFFSET ?`, pageSize, offset,
-	)
+		 FROM user WHERE %s
+		 ORDER BY id DESC LIMIT ? OFFSET ?`, where)
+	queryArgs := append(args, pageSize, offset)
+	rows, err := d.db.QueryContext(ctx, querySQL, queryArgs...)
 	if err != nil {
 		return nil, 0, err
 	}

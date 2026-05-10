@@ -357,11 +357,8 @@ func (p *Proxy) Handler() app.HandlerFunc {
 
 		// JWT authentication — skip for public methods.
 		if p.jwtParser != nil && !p.publicMethod[method] {
-			tokenStr := strings.TrimPrefix(
-				string(c.GetHeader("Authorization")),
-				"Bearer ",
-			)
-			if tokenStr == "" {
+			tokenStr, ok := bearerToken(string(c.GetHeader("Authorization")))
+			if !ok {
 				response.Unauthorized(c, "missing token")
 				c.Abort()
 				return
@@ -380,8 +377,11 @@ func (p *Proxy) Handler() app.HandlerFunc {
 				tokenKey := fmt.Sprintf("%s%d", tokenPrefix, claims.UserID)
 				isMember, err := p.rdb.SIsMember(ctx, tokenKey, tokenStr)
 				if err != nil {
-					// Redis connection error → fail-open (Redis not SPOF).
-					logger.Warnf("redis sismember failed (fail-open): user_id=%d err=%v", claims.UserID, err)
+					// Redis connection errors fail closed so revoked tokens are not accepted.
+					logger.Warnf("redis sismember failed (fail-closed): user_id=%d err=%v", claims.UserID, err)
+					response.Fail(c, http.StatusServiceUnavailable, 503, "service temporarily unavailable")
+					c.Abort()
+					return
 				} else if !isMember {
 					// Token not in the user's active set → revoked or expired.
 					response.Unauthorized(c, "token revoked")
@@ -445,6 +445,18 @@ func toMethodName(method string) string {
 		return method
 	}
 	return strings.ToUpper(method[:1]) + method[1:]
+}
+
+func bearerToken(authHeader string) (string, bool) {
+	authHeader = strings.TrimSpace(authHeader)
+	if authHeader == "" {
+		return "", false
+	}
+	parts := strings.Fields(authHeader)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return "", false
+	}
+	return parts[1], true
 }
 
 // buildProtoPath returns {protoBase}/{service}/api/{service}.proto.

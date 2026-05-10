@@ -56,13 +56,13 @@ message LogoutResp {}
 
 message UpdateUserReq {
   int64 id = 1;
-  string realName = 2;
-  string avatar = 3;
-  Gender gender = 4;
-  int32 age = 5;
-  string phone = 6;
-  string email = 7;
-  string remark = 8;
+  optional string realName = 2;
+  optional string avatar = 3;
+  optional Gender gender = 4;
+  optional int32 age = 5;
+  optional string phone = 6;
+  optional string email = 7;
+  optional string remark = 8;
 }
 
 message UpdateUserResp {}

@@ -216,33 +216,30 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 
 	updates := make(map[string]interface{})
 
-	// P1-06: Use req.HasField-style checks where available.
-	// For proto3 without optional, we check against the zero value of the
-	// underlying wire type. Since we can't distinguish "not sent" from "sent as zero",
-	// we use a sentinel approach: caller must explicitly set fields they want to update.
-	if v, ok := getFieldUpdateString(req.GetRealName); ok {
-		updates["real_name"] = v
+	if req.RealName != nil {
+		updates["real_name"] = req.GetRealName()
 	}
-	if v, ok := getFieldUpdateString(req.GetAvatar); ok {
-		updates["avatar"] = v
+	if req.Avatar != nil {
+		updates["avatar"] = req.GetAvatar()
 	}
-	if v, ok := getFieldUpdateInt32(func() int32 { return int32(req.GetGender()) }); ok {
-		updates["gender"] = int8(v)
+	if req.Gender != nil {
+		updates["gender"] = int8(req.GetGender())
 	}
-	if v, ok := getFieldUpdateInt32(req.GetAge); ok {
-		updates["age"] = int8(v)
+	if req.Age != nil {
+		updates["age"] = int8(req.GetAge())
 	}
-	if v, ok := getFieldUpdateString(req.GetPhone); ok {
+	if req.Phone != nil {
+		v := req.GetPhone()
 		if !phoneRegex.MatchString(v) {
 			return nil, errPhoneFormat
 		}
 		updates["phone"] = v
 	}
-	if v, ok := getFieldUpdateString(req.GetEmail); ok {
-		updates["email"] = v
+	if req.Email != nil {
+		updates["email"] = req.GetEmail()
 	}
-	if v, ok := getFieldUpdateString(req.GetRemark); ok {
-		updates["remark"] = v
+	if req.Remark != nil {
+		updates["remark"] = req.GetRemark()
 	}
 
 	if len(updates) == 0 {
@@ -297,7 +294,7 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 
 func (s *UserServiceImpl) ListUser(ctx context.Context, req *v1.ListUserReq) (*v1.ListUserResp, error) {
 
-	users, total, err := s.userDal.List(ctx, req.GetPage(), req.GetPageSize())
+	users, total, err := s.userDal.List(ctx, req.GetPage(), req.GetPageSize(), req.GetName(), req.GetPhone())
 	if err != nil {
 		logger.Errorf("list users failed: %v", err)
 		return nil, errInternal
@@ -342,22 +339,6 @@ func isDuplicateKeyError(err error) bool {
 	return strings.Contains(err.Error(), "Error 1062") ||
 		strings.Contains(err.Error(), "Duplicate entry") ||
 		strings.Contains(err.Error(), "UNIQUE constraint failed")
-}
-
-// getFieldUpdateString returns the value and true if the proto field getter returns
-// a non-zero string. This is a workaround for proto3's zero-value problem (P1-06).
-// NOTE: This still can't distinguish "not sent" from "sent as empty string".
-// For true zero-value support, the proto should use `optional` keyword or wrapper types.
-func getFieldUpdateString(getter func() string) (string, bool) {
-	v := getter()
-	return v, v != ""
-}
-
-// getFieldUpdateInt32 returns the value and true if the proto field getter returns
-// a non-zero int32.
-func getFieldUpdateInt32(getter func() int32) (int32, bool) {
-	v := getter()
-	return v, v != 0
 }
 
 // parseInt64 parses a string to int64, returning 0 on failure.

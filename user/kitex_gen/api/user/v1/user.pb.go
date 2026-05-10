@@ -240,14 +240,14 @@ func (x *LogoutResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalA
 func (x *LogoutResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
 
 type UpdateUserReq struct {
-	Id       int64  `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
-	RealName string `protobuf:"bytes,2,opt,name=realName" json:"realName,omitempty"`
-	Avatar   string `protobuf:"bytes,3,opt,name=avatar" json:"avatar,omitempty"`
-	Gender   Gender `protobuf:"varint,4,opt,name=gender" json:"gender,omitempty"`
-	Age      int32  `protobuf:"varint,5,opt,name=age" json:"age,omitempty"`
-	Phone    string `protobuf:"bytes,6,opt,name=phone" json:"phone,omitempty"`
-	Email    string `protobuf:"bytes,7,opt,name=email" json:"email,omitempty"`
-	Remark   string `protobuf:"bytes,8,opt,name=remark" json:"remark,omitempty"`
+	Id       int64   `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
+	RealName *string `protobuf:"bytes,2,opt,name=realName" json:"realName,omitempty"`
+	Avatar   *string `protobuf:"bytes,3,opt,name=avatar" json:"avatar,omitempty"`
+	Gender   *Gender `protobuf:"varint,4,opt,name=gender" json:"gender,omitempty"`
+	Age      *int32  `protobuf:"varint,5,opt,name=age" json:"age,omitempty"`
+	Phone    *string `protobuf:"bytes,6,opt,name=phone" json:"phone,omitempty"`
+	Email    *string `protobuf:"bytes,7,opt,name=email" json:"email,omitempty"`
+	Remark   *string `protobuf:"bytes,8,opt,name=remark" json:"remark,omitempty"`
 }
 
 func (x *UpdateUserReq) Reset() { *x = UpdateUserReq{} }
@@ -264,50 +264,50 @@ func (x *UpdateUserReq) GetId() int64 {
 }
 
 func (x *UpdateUserReq) GetRealName() string {
-	if x != nil {
-		return x.RealName
+	if x != nil && x.RealName != nil {
+		return *x.RealName
 	}
 	return ""
 }
 
 func (x *UpdateUserReq) GetAvatar() string {
-	if x != nil {
-		return x.Avatar
+	if x != nil && x.Avatar != nil {
+		return *x.Avatar
 	}
 	return ""
 }
 
 func (x *UpdateUserReq) GetGender() Gender {
-	if x != nil {
-		return x.Gender
+	if x != nil && x.Gender != nil {
+		return *x.Gender
 	}
 	return Gender_GENDER_UNKNOWN
 }
 
 func (x *UpdateUserReq) GetAge() int32 {
-	if x != nil {
-		return x.Age
+	if x != nil && x.Age != nil {
+		return *x.Age
 	}
 	return 0
 }
 
 func (x *UpdateUserReq) GetPhone() string {
-	if x != nil {
-		return x.Phone
+	if x != nil && x.Phone != nil {
+		return *x.Phone
 	}
 	return ""
 }
 
 func (x *UpdateUserReq) GetEmail() string {
-	if x != nil {
-		return x.Email
+	if x != nil && x.Email != nil {
+		return *x.Email
 	}
 	return ""
 }
 
 func (x *UpdateUserReq) GetRemark() string {
-	if x != nil {
-		return x.Remark
+	if x != nil && x.Remark != nil {
+		return *x.Remark
 	}
 	return ""
 }
