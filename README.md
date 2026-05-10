@@ -1,6 +1,6 @@
 # shopmicro 开发指南
 
-> 技术栈：Hertz (HTTP 网关) + Kitex (gRPC RPC) + Protobuf + Etcd (服务发现) + MySQL (GORM) + OpenTelemetry
+> 技术栈：Hertz (HTTP 网关) + Kitex (gRPC RPC) + Protobuf + Etcd (服务发现) + MySQL + OpenTelemetry
 
 ## 项目结构
 
@@ -378,6 +378,134 @@ user/
 | user 服务端口 | `user/conf/config.yaml` → `server.addr` |
 | user MySQL 连接 | `user/conf/config.yaml` → `mysql.dsn` |
 | 新增配置字段 | 对应服务 `conf/conf.go` 结构体 + `config.yaml` |
+
+---
+
+## 五、OpenTelemetry 埋点
+
+### 5.1 已自动埋点的链路
+
+| 层级 | 组件 | 埋点方式 |
+|------|------|---------|
+| Gateway HTTP | Hertz 请求 | `hertztracing.ServerMiddleware` 自动创建根 span |
+| Gateway → RPC | Kitex gRPC 调用 | `kotelkitex.NewClientSuite` 自动 |
+| User RPC | Kitex Server 处理器 | `kotelkitex.NewServerSuite` 自动 |
+| MySQL | SQL 查询 | `otelsql`（全部 span 类型开启） |
+| Redis | Redis 调用 | `redisotel.InstrumentTracing` 自动 |
+
+整条请求链路（HTTPS → Gateway → gRPC → DB/Redis）的 trace ID 自动串联。
+
+### 5.2 手动埋点：在 handler 中添加 span
+
+业务逻辑（`user/handler.go`）默认没有 span，需要手动开启：
+
+```go
+import (
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/attribute"
+    "go.opentelemetry.io/otel/trace"
+)
+
+func (s *UserServiceImpl) SearchUser(ctx context.Context, req *v1.SearchUserReq) (resp *v1.SearchUserResp, err error) {
+    // 从 context 获取 tracer（全局已初始化，直接用 otel.Tracer()）
+    tracer := otel.Tracer("user-handler")
+
+    // 开启子 span，跟随 HTTP→gRPC 的根 span
+    ctx, span := tracer.Start(ctx, "UserService.SearchUser")
+    defer span.End()
+
+    // 添加业务属性（key-value metadata）
+    span.SetAttributes(
+        attribute.Int64("user.query.page", int64(req.Page)),
+        attribute.Int64("user.query.page_size", int64(req.PageSize)),
+        attribute.String("user.query.real_name", req.RealName),
+    )
+
+    // 业务逻辑
+    users, total, err := userDal.SearchByName(ctx, req.RealName, req.Page, req.PageSize)
+    if err != nil {
+        // 记录错误，自动标记 span 状态为 Error
+        span.RecordError(err)
+        return nil, err
+    }
+
+    span.SetAttributes(attribute.Int64("user.result.total", total))
+
+    list := make([]*v1.UserInfo, 0, len(users))
+    for _, u := range users {
+        list = append(list, modelToProto(u))
+    }
+
+    return &v1.SearchUserResp{Users: list, Total: total}, nil
+}
+```
+
+### 5.3 在中间件中埋点
+
+在 gateway 中间件里加 span，例如记录关键决策点：
+
+```go
+import (
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/attribute"
+    "go.opentelemetry.io/otel/trace"
+)
+
+func JWTMiddleware() app.HandlerFunc {
+    tracer := otel.Tracer("gateway")
+    return func(ctx context.Context, c *app.RequestContext) {
+        ctx, span := tracer.Start(ctx, "JWT.Validate")
+        defer span.End()
+
+        tokenStr, ok := bearerToken(string(c.GetHeader("Authorization")))
+        if !ok {
+            span.SetAttributes(attribute.String("jwt.result", "missing"))
+            span.RecordError(errors.New("missing token"))
+            c.Abort()
+            return
+        }
+
+        claims, err := jwtParser.Parse(tokenStr)
+        if err != nil {
+            span.SetAttributes(attribute.String("jwt.result", "invalid"))
+            span.RecordError(err)
+            c.Abort()
+            return
+        }
+
+        span.SetAttributes(
+            attribute.String("jwt.result", "valid"),
+            attribute.Int64("user.id", claims.UserID),
+        )
+        c.Next(ctx)
+    }
+}
+```
+
+### 5.4 Span 常见操作
+
+| 操作 | 代码 |
+|------|------|
+| 开启子 span | `ctx, span := tracer.Start(ctx, "operation.name")` |
+| 添加属性 | `span.SetAttributes(attribute.String("key", "value"))` |
+| 记录错误 | `span.RecordError(err)` |
+| 添加日志事件 | `span.AddEvent("cache miss", trace.WithAttributes(...))` |
+| 结束 span | `defer span.End()` |
+
+### 5.5 查看 trace
+
+1. 启动 collector（如 Jaeger）：`docker run -p 16686:16686 -p 4317:4317 jaegertracing/all-in-one`
+2. 设置环境变量：`OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317`
+3. 访问 Jaeger UI：`http://localhost:16686`
+4. Gateway 响应头会返回 `X-Trace-Id`，在 Jaeger 里直接搜索 trace ID
+
+### 5.6 配置项
+
+| 环境变量 | 说明 | 默认值 |
+|---------|------|--------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector 地址 | `localhost:4317` |
+| `OTEL_TRACE_SAMPLE_RATE` | 采样率 0.0–1.0 | `0.1`（生产），`1.0`（dev 模式） |
+| `OTEL_EXPORTER_OTLP_INSECURE` | 是否跳过 TLS 验证 | `true`（非生产建议配证书） |
 
 ---
 
