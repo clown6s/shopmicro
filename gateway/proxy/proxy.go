@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -21,7 +22,6 @@ import (
 	"github.com/cloudwego/kitex/pkg/transmeta"
 	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
 
-	"github.com/cloudwego/kitex/pkg/retry"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"shopmicro/pkg/errcode"
@@ -149,18 +149,14 @@ func (p *Proxy) registerService(
 		return fmt.Errorf("create json-pb generic for %s: %w", serviceName, err)
 	}
 
-	// P2-07: gRPC failure retry — retries on timeout/errors, max 2 retries (3 attempts total)
-	// Default FailurePolicy already retries on timeout; WithMaxRetryTimes adjusts retry count.
-	fp := retry.NewFailurePolicy()
-	fp.WithMaxRetryTimes(2)
-
+	// P2-07: Manual retry in Call() instead of client.WithFailureRetry —
+	// this gives us full control over which errors are retryable.
 	cli, err := genericclient.NewClient(
 		serviceName,
 		g,
 		client.WithResolver(resolver),
 		client.WithRPCTimeout(5*time.Second),
 		client.WithConnectTimeout(3*time.Second),
-		client.WithFailureRetry(fp),
 		client.WithMetaHandler(transmeta.MetainfoClientHandler),
 		client.WithSuite(kotelkitex.NewClientSuite(
 			kotelkitex.WithEnableGRPCMetadata(),
@@ -199,6 +195,9 @@ func (p *Proxy) getClient(service string) (*ServiceClient, bool) {
 // req must be a JSON-encoded string (for JSONPbGeneric).
 // method must be the CamelCase protobuf RPC name (e.g. "ListUser", NOT
 // a gRPC full path like "api.user.v1.UserService/ListUser").
+//
+// P2-07: Manual retry (max 2 retries, 3 attempts total) only on timeout/network
+// errors — NOT on business errors (InvalidArgument, NotFound, etc.).
 func (p *Proxy) Call(
 	ctx context.Context,
 	service string,
@@ -210,14 +209,35 @@ func (p *Proxy) Call(
 		return nil, fmt.Errorf("service not found: %s", service)
 	}
 
-	// JSONPbGeneric: WriteJSON.Write calls LookupMethodByName(method)
-	// which expects CamelCase method name, NOT gRPC full path.
-	// Use method directly; the generic client already knows the service.
-	resp, err := cli.Client.GenericCall(ctx, method, req)
-	if err != nil {
-		return nil, err
+	const maxRetries = 2
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Brief backoff before retry
+			time.Sleep(time.Duration(attempt*50) * time.Millisecond)
+		}
+
+		// JSONPbGeneric: WriteJSON.Write calls LookupMethodByName(method)
+		// which expects CamelCase method name, NOT gRPC full path.
+		// Use method directly; the generic client already knows the service.
+		resp, err := cli.Client.GenericCall(ctx, method, req)
+		if err == nil {
+			return resp, nil
+		}
+
+		lastErr = err
+
+		// Only retry on timeout/network errors; business errors are final
+		if !shouldRetryGRPC(err) {
+			return nil, err
+		}
+
+		logger.Warnf("rpc call failed (attempt %d/%d), retrying: service=%s method=%s err=%v",
+			attempt+1, maxRetries+1, service, method, err)
 	}
-	return resp, nil
+
+	return nil, lastErr
 }
 
 // =========================
@@ -516,6 +536,59 @@ func extractServiceName(key, prefix string) string {
 		return ""
 	}
 	return parts[0]
+}
+
+// shouldRetryGRPC decides whether a gRPC call error is retryable.
+// Only timeout and network errors are retryable; business errors (InvalidArgument,
+// NotFound, etc.) are NOT retryable because retrying them is useless and may cause duplicates.
+func shouldRetryGRPC(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Timeout errors — always retryable
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	// Network/connection errors — retryable
+	retryableKeywords := []string{
+		"timeout",
+		"deadline exceeded",
+		"connection refused",
+		"connection reset",
+		"no such host",
+		"i/o timeout",
+		"temporary failure",
+		"unavailable",
+	}
+	for _, kw := range retryableKeywords {
+		if strings.Contains(errStr, kw) {
+			return true
+		}
+	}
+
+	// gRPC status codes that are NOT retryable (business errors)
+	nonRetryableKeywords := []string{
+		"invalid argument",
+		"not found",
+		"already exists",
+		"permission denied",
+		"unauthenticated",
+		"unimplemented",
+		"out of range",
+		"failed precondition",
+	}
+	for _, kw := range nonRetryableKeywords {
+		if strings.Contains(errStr, kw) {
+			return false
+		}
+	}
+
+	// For unknown errors: don't retry (safe default)
+	return false
 }
 
 // newEtcdClient creates a minimal etcd v3 client.

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -16,6 +17,8 @@ import (
 	hertztracing "github.com/hertz-contrib/obs-opentelemetry/tracing"
 
 	"github.com/kitex-contrib/registry-etcd"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"shopmicro/gateway/conf"
 	"shopmicro/gateway/health"
@@ -81,6 +84,16 @@ func Run(configPath string) error {
 	if err != nil {
 		return err
 	}
+
+	// Etcd client for health check (readiness probe)
+	etcdClient, err := clientv3.New(clientv3.Config{
+		Endpoints:   cfg.Etcd.Addrs,
+		DialTimeout: 3 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("create etcd client for health: %w", err)
+	}
+	defer etcdClient.Close()
 
 	// =========================
 	// hertz
@@ -224,10 +237,10 @@ func Run(configPath string) error {
 		health.Handler(),
 	)
 
-	// P0-07: Readiness probe for K8s — checks Redis connectivity
+	// P0-07: Readiness probe for K8s — checks Redis + Etcd connectivity
 	h.GET(
 		"/ready",
-		health.ReadyHandler(rdb),
+		health.ReadyHandler(rdb, etcdClient),
 	)
 
 	// =========================
