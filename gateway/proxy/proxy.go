@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -21,6 +20,8 @@ import (
 	"github.com/cloudwego/kitex/pkg/generic"
 	"github.com/cloudwego/kitex/pkg/transmeta"
 	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -214,8 +215,12 @@ func (p *Proxy) Call(
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
-			// Brief backoff before retry
-			time.Sleep(time.Duration(attempt*50) * time.Millisecond)
+			// P2 fix: exponential backoff: 50ms → 100ms → 200ms, capped at 500ms
+			backoff := time.Duration(50*(1<<uint(attempt-1))) * time.Millisecond
+			if backoff > 500*time.Millisecond {
+				backoff = 500 * time.Millisecond
+			}
+			time.Sleep(backoff)
 		}
 
 		// JSONPbGeneric: WriteJSON.Write calls LookupMethodByName(method)
@@ -538,57 +543,33 @@ func extractServiceName(key, prefix string) string {
 	return parts[0]
 }
 
-// shouldRetryGRPC decides whether a gRPC call error is retryable.
-// Only timeout and network errors are retryable; business errors (InvalidArgument,
-// NotFound, etc.) are NOT retryable because retrying them is useless and may cause duplicates.
+// shouldRetryGRPC decides whether a gRPC call error is retryable, based on the
+// gRPC status code.  Only transient/network errors are retried; business errors
+// (e.g. INVALID_ARGUMENT, NOT_FOUND) are returned immediately to avoid duplicates.
+//
+// Retryable: DEADLINE_EXCEEDED, UNAVAILABLE, INTERNAL, RESOURCE_EXHAUSTED.
+// Not retryable: all other codes including INVALID_ARGUMENT, NOT_FOUND, etc.
 func shouldRetryGRPC(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	// Timeout errors — always retryable
-	if errors.Is(err, context.DeadlineExceeded) {
+	// Extract gRPC status code
+	st, ok := status.FromError(err)
+	if !ok {
+		// Not a gRPC error — treat as network error (retry).
 		return true
 	}
 
-	errStr := strings.ToLower(err.Error())
-
-	// Network/connection errors — retryable
-	retryableKeywords := []string{
-		"timeout",
-		"deadline exceeded",
-		"connection refused",
-		"connection reset",
-		"no such host",
-		"i/o timeout",
-		"temporary failure",
-		"unavailable",
+	switch st.Code() {
+	case codes.DeadlineExceeded,
+		codes.Unavailable,
+		codes.Internal,
+		codes.ResourceExhausted:
+		return true
+	default:
+		return false
 	}
-	for _, kw := range retryableKeywords {
-		if strings.Contains(errStr, kw) {
-			return true
-		}
-	}
-
-	// gRPC status codes that are NOT retryable (business errors)
-	nonRetryableKeywords := []string{
-		"invalid argument",
-		"not found",
-		"already exists",
-		"permission denied",
-		"unauthenticated",
-		"unimplemented",
-		"out of range",
-		"failed precondition",
-	}
-	for _, kw := range nonRetryableKeywords {
-		if strings.Contains(errStr, kw) {
-			return false
-		}
-	}
-
-	// For unknown errors: don't retry (safe default)
-	return false
 }
 
 // newEtcdClient creates a minimal etcd v3 client.

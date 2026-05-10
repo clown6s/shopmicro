@@ -15,7 +15,15 @@ import (
 )
 
 // perServiceCB stores one circuit breaker per service name.
+// Value is *gobreaker.CircuitBreaker.
 var perServiceCB sync.Map // map[string]*gobreaker.CircuitBreaker
+
+// RemoveCircuitBreaker removes the circuit breaker for a service.
+// Call this when a service is deregistered (e.g. etcd watch delete event)
+// to prevent unbounded memory growth in perServiceCB.
+func RemoveCircuitBreaker(service string) {
+	perServiceCB.Delete(service)
+}
 
 // CircuitBreakerMiddleware returns a Hertz middleware with a circuit breaker.
 // P1-02 fix: Creates one CircuitBreaker per downstream service (extracted

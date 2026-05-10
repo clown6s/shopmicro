@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bytedance/gopkg/cloud/metainfo"
-	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 
 	"shopmicro/user/data"
@@ -151,6 +150,7 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 	user, err := s.userDal.GetByPhone(ctx, req.GetPhone())
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			logger.Warnf("login failed: phone not found (%s)", maskPhone(req.GetPhone()))
 			return nil, errPhonePwdWrong
 		}
 		logger.Errorf("login get user failed: %v", err)
@@ -158,6 +158,7 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.GetPassword())); err != nil {
+		logger.Warnf("login failed: wrong password (phone: %s)", maskPhone(req.GetPhone()))
 		return nil, errPhonePwdWrong
 	}
 
@@ -357,13 +358,21 @@ func parseInt64(s string) int64 {
 	return n
 }
 
+// maskPhone 脱敏手机号：保留后4位，其余用 * 代替
+func maskPhone(phone string) string {
+	if len(phone) <= 4 {
+		return "****"
+	}
+	return "****" + phone[len(phone)-4:]
+}
+
 // Logout removes the caller's specific token from Redis.
 // Gateway forwards user_id AND token via metainfo, so we only invalidate
 // the current device's session (multi-device support).
 func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *v1.LogoutResp, err error) {
 	userIDStr, ok := metainfo.GetPersistentValue(ctx, "user_id")
 	if !ok || userIDStr == "" {
-		logger.Warn("logout: user_id not found in metainfo, request may bypass gateway", zap.String("user_id", userIDStr))
+		logger.Warn("logout: user_id not found in metainfo, request may bypass gateway")
 		return nil, errUnauthorized
 	}
 
@@ -373,10 +382,17 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 		return nil, errUnauthorized
 	}
 
-	tokenKey := fmt.Sprintf("%s%s", tokenPrefix, userIDStr)
+	// P1 fix: use %d format consistently, parse userIDStr to int64 first
+	userID := parseInt64(userIDStr)
+	if userID <= 0 {
+		logger.Warnf("logout: invalid user_id in metainfo: %s", userIDStr)
+		return nil, errUnauthorized
+	}
+
+	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, userID)
 	// P1-1: Remove only the current device's token from the SET.
 	if err := s.rdb.SRem(ctx, tokenKey, tokenStr); err != nil {
-		logger.Warnf("logout: failed to remove token from redis (user_id=%s): %v", userIDStr, err)
+		logger.Warnf("logout: failed to remove token from redis (user_id=%d): %v", userID, err)
 	}
 
 	return &v1.LogoutResp{}, nil

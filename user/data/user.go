@@ -67,7 +67,7 @@ func (d *UserDal) Update(ctx context.Context, id int64, updates map[string]inter
 		if !ok {
 			continue
 		}
-		setParts = append(setParts, fmt.Sprintf("%s = ?", col))
+		setParts = append(setParts, fmt.Sprintf("`%s` = ?", col))
 		args = append(args, v)
 	}
 	if len(setParts) == 0 {
