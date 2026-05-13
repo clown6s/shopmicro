@@ -1,0 +1,90 @@
+package errcode
+
+import (
+	"errors"
+	"testing"
+)
+
+func TestNewBizError(t *testing.T) {
+	err := NewBizError(CodeUserPhoneRequired, "phone is required")
+	if err == nil {
+		t.Fatal("expected non-nil BizError")
+	}
+	if err.Code != CodeUserPhoneRequired {
+		t.Fatalf("expected code %d, got %d", CodeUserPhoneRequired, err.Code)
+	}
+	if err.Message != "phone is required" {
+		t.Fatalf("expected msg 'phone is required', got %q", err.Message)
+	}
+}
+
+func TestBizError_Error(t *testing.T) {
+	err := NewBizError(10001, "test")
+	s := err.Error()
+	if s != "BIZ/10001: test" {
+		t.Fatalf("expected 'BIZ/10001: test', got %q", s)
+	}
+}
+
+func TestParseBizError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantOK   bool
+		wantCode uint32
+		wantMsg  string
+	}{
+		{
+			name:     "valid BizError",
+			err:      NewBizError(10001, "phone is required"),
+			wantOK:   true,
+			wantCode: 10001,
+			wantMsg:  "phone is required",
+		},
+		{
+			name:   "nil error",
+			err:    nil,
+			wantOK: false,
+		},
+		{
+			name:   "non-BizError",
+			err:    errors.New("some other error"),
+			wantOK: false,
+		},
+		{
+			name:     "zero code",
+			err:      NewBizError(0, "ok"),
+			wantOK:   true, // ParseBizError parses any BIZ/ prefixed error
+			wantCode: 0,
+			wantMsg:  "ok",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			biz, ok := ParseBizError(tt.err)
+			if ok != tt.wantOK {
+				t.Fatalf("expected ok=%v, got %v", tt.wantOK, ok)
+			}
+			if tt.wantOK {
+				if biz.Code != tt.wantCode {
+					t.Fatalf("expected code %d, got %d", tt.wantCode, biz.Code)
+				}
+				if biz.Message != tt.wantMsg {
+					t.Fatalf("expected msg %q, got %q", tt.wantMsg, biz.Message)
+				}
+			}
+		})
+	}
+}
+
+func TestCodeRanges(t *testing.T) {
+	// User codes: 10000-19999
+	if CodeUserPhoneRequired < 10000 || CodeUserPhoneRequired >= 20000 {
+		t.Fatal("user code out of range")
+	}
+	// Gateway codes: 50000-59999
+	if CodeGwParam < 50000 || CodeGwParam >= 60000 {
+		t.Fatal("gateway code out of range")
+	}
+}

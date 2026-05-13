@@ -16,8 +16,7 @@ var (
 
 // Claims 自定义 JWT 载荷
 type Claims struct {
-	UserID int64  `json:"user_id"`
-	Phone  string `json:"phone"`
+	UserID int64 `json:"user_id"`
 	jwt.RegisteredClaims
 }
 
@@ -34,11 +33,10 @@ func NewGenerator(secret string, expiration time.Duration) (*Generator, error) {
 	return &Generator{secret: []byte(secret), expiration: expiration}, nil
 }
 
-func (g *Generator) Generate(userID int64, phone string) (string, error) {
+func (g *Generator) Generate(userID int64) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		UserID: userID,
-		Phone:  phone,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(now.Add(g.expiration)),
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -55,6 +53,16 @@ type Parser struct {
 
 func NewParser(secret string) *Parser {
 	return &Parser{secret: []byte(secret)}
+}
+
+// InitError Parse validates the parser's secret length before parsing.
+// Callers should check InitError after calling NewParser if strict
+// startup validation is desired.
+func (p *Parser) InitError() error {
+	if len(p.secret) < 32 {
+		return ErrSecretWeak
+	}
+	return nil
 }
 
 func (p *Parser) Parse(tokenStr string) (*Claims, error) {

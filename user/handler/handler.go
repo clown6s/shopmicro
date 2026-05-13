@@ -70,6 +70,8 @@ type UserServiceImpl struct {
 	userDal   *data.UserDal
 	jwtGen    *jwt.Generator
 	jwtExpHrs int
+	rtGen     *jwt.Generator // refresh token generator
+	rtExpHrs  int            // refresh token expiration hours
 	rdb       *redis.Client
 }
 
@@ -78,15 +80,27 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int) *UserServic
 	if err != nil {
 		logger.Fatalf("init jwt generator failed: %v", err)
 	}
+	// Refresh token: 7 days default (must be >= access token)
+	rtExpHrs := jwtExpHours * 7
+	if rtExpHrs < 24 {
+		rtExpHrs = 168 // at least 7 days
+	}
+	rtGen, err := jwt.NewGenerator(jwtSecret, time.Duration(rtExpHrs)*time.Hour)
+	if err != nil {
+		logger.Fatalf("init refresh token generator failed: %v", err)
+	}
 	return &UserServiceImpl{
 		userDal:   d.User(),
 		jwtGen:    gen,
 		jwtExpHrs: jwtExpHours,
+		rtGen:     rtGen,
+		rtExpHrs:  rtExpHrs,
 		rdb:       d.Rdb,
 	}
 }
 
 const tokenPrefix = "shopmicro:user:token:"
+const refreshTokenPrefix = "shopmicro:user:refresh:"
 
 func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUserReq) (*v1.RegisterUserResp, error) {
 	if req.GetPhone() == "" {
@@ -162,14 +176,20 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 		return nil, errPhonePwdWrong
 	}
 
-	token, err := s.jwtGen.Generate(user.ID, user.Phone)
+	token, err := s.jwtGen.Generate(user.ID)
 	if err != nil {
 		logger.Errorf("generate token failed: %v", err)
 		return nil, errInternal
 	}
 
-	// P1-1: Store token in a Redis SET (multi-device support).
-	// Each user has a SET of active tokens. Login adds the new token.
+	// Generate refresh token (7-day lifetime)
+	refreshToken, err := s.rtGen.Generate(user.ID)
+	if err != nil {
+		logger.Errorf("generate refresh token failed: %v", err)
+		return nil, errInternal
+	}
+
+	// P1-1: Store tokens in Redis SET (multi-device support).
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, user.ID)
 	ttl := time.Duration(s.jwtExpHrs) * time.Hour
 	if err := s.rdb.SAdd(ctx, tokenKey, token); err != nil {
@@ -178,16 +198,24 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 		logger.Warnf("login: set token ttl failed: %v", err)
 	}
 
+	// Store refresh token in Redis (1:1 mapping: refreshToken -> userID)
+	rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, refreshToken)
+	rtTTL := time.Duration(s.rtExpHrs) * time.Hour
+	if err := s.rdb.Set(ctx, rtKey, user.ID, rtTTL); err != nil {
+		logger.Warnf("login: store refresh token to redis failed: %v", err)
+	}
+
 	return &v1.LoginResp{
-		Id:       user.ID,
-		RealName: user.RealName,
-		Avatar:   user.Avatar,
-		Gender:   v1.Gender(user.Gender),
-		Age:      int32(user.Age),
-		Phone:    user.Phone,
-		Email:    user.Email,
-		Remark:   user.Remark,
-		Token:    token,
+		Id:           user.ID,
+		RealName:     user.RealName,
+		Avatar:       user.Avatar,
+		Gender:       v1.Gender(user.Gender),
+		Age:          int32(user.Age),
+		Phone:        user.Phone,
+		Email:        user.Email,
+		Remark:       user.Remark,
+		Token:        token,
+		RefreshToken: refreshToken,
 	}, nil
 }
 
@@ -405,4 +433,68 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 	}
 
 	return &v1.LogoutResp{}, nil
+}
+
+var errRefreshTokenRequired = newBiz(errcode.CodeUserTokenRequired, "refresh token is required")
+var errRefreshTokenInvalid = newBiz(errcode.CodeUserTokenInvalid, "invalid or expired refresh token")
+
+// RefreshToken issues a new access token + refresh token pair.
+// The old refresh token is rotated (deleted from Redis) to prevent replay.
+func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshTokenReq) (resp *v1.RefreshTokenResp, err error) {
+	rt := req.GetRefreshToken()
+	if rt == "" {
+		return nil, errRefreshTokenRequired
+	}
+
+	// Look up userID from Redis (refreshToken -> userID)
+	rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, rt)
+	userIDStr, err := s.rdb.Get(ctx, rtKey)
+	if err != nil {
+		return nil, errRefreshTokenInvalid
+	}
+
+	userID, err := parseInt64(userIDStr)
+	if err != nil || userID <= 0 {
+		return nil, errRefreshTokenInvalid
+	}
+
+	// Rotate: delete old refresh token immediately
+	if delErr := s.rdb.Del(ctx, rtKey); delErr != nil {
+		logger.Warnf("refresh token: failed to delete old refresh token: %v", delErr)
+	}
+
+	// Issue new access token
+	token, err := s.jwtGen.Generate(userID)
+	if err != nil {
+		logger.Errorf("refresh token: generate new access token failed: %v", err)
+		return nil, errInternal
+	}
+
+	// Issue new refresh token
+	newRT, err := s.rtGen.Generate(userID)
+	if err != nil {
+		logger.Errorf("refresh token: generate new refresh token failed: %v", err)
+		return nil, errInternal
+	}
+
+	// Store new access token in user's token SET
+	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, userID)
+	ttl := time.Duration(s.jwtExpHrs) * time.Hour
+	if err := s.rdb.SAdd(ctx, tokenKey, token); err != nil {
+		logger.Warnf("refresh token: store new access token failed: %v", err)
+	} else if err := s.rdb.Expire(ctx, tokenKey, ttl); err != nil {
+		logger.Warnf("refresh token: set token ttl failed: %v", err)
+	}
+
+	// Store new refresh token
+	newRTKey := fmt.Sprintf("%s%s", refreshTokenPrefix, newRT)
+	rtTTL := time.Duration(s.rtExpHrs) * time.Hour
+	if err := s.rdb.Set(ctx, newRTKey, userID, rtTTL); err != nil {
+		logger.Warnf("refresh token: store new refresh token failed: %v", err)
+	}
+
+	return &v1.RefreshTokenResp{
+		Token:        token,
+		RefreshToken: newRT,
+	}, nil
 }

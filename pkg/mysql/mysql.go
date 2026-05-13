@@ -39,9 +39,10 @@ func New(cfg Config) (*sql.DB, func(), error) {
 	}
 
 	// MySQL connection pool configuration
-	db.SetMaxIdleConns(10)
-	db.SetMaxOpenConns(100)
-	db.SetConnMaxLifetime(time.Hour)
+	db.SetMaxIdleConns(cfg.MaxIdleConns)
+	db.SetMaxOpenConns(cfg.MaxOpenConns)
+	db.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
+	db.SetConnMaxIdleTime(time.Duration(cfg.ConnMaxIdleTime) * time.Second)
 
 	// Ping MySQL to verify connection
 	if err := db.PingContext(context.Background()); err != nil {

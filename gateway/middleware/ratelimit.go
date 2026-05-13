@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -137,18 +138,128 @@ func getTrustedIP(c *app.RequestContext) string {
 
 // RateLimitMiddleware returns a Hertz middleware that performs distributed
 // per-IP sliding window rate limiting via Redis.
+// If a JWT Bearer token is present in the Authorization header, an additional
+// per-user rate limit check is applied using the user_id from the token.
 func RateLimitMiddleware(rl *RedisRateLimiter) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		ip := getTrustedIP(c)
-		key := fmt.Sprintf("shopmicro:ratelimit:ip:%s", ip)
+		ipKey := fmt.Sprintf("shopmicro:ratelimit:ip:%s", ip)
 
-		if !rl.Allow(ctx, key) {
+		if !rl.Allow(ctx, ipKey) {
 			response.TooManyRequests(c)
 			c.Abort()
 			return
 		}
+
+		// Per-user rate limiting: extract user_id from Bearer token for
+		// authenticated requests. Only the user_id sub-field is read (no
+		// full JWT verification — that is done later by the proxy handler).
+		// This prevents token replay but mainly throttles authenticated users.
+		if userID := extractUserIDFromToken(c); userID != "" {
+			userKey := fmt.Sprintf("shopmicro:ratelimit:user:%s", userID)
+			if !rl.Allow(ctx, userKey) {
+				response.TooManyRequests(c)
+				c.Abort()
+				return
+			}
+		}
+
 		c.Next(ctx)
 	}
+}
+
+// extractUserIDFromToken extracts the user_id claim from a JWT Bearer token
+// without full verification (the proxy handler handles verification).
+// Returns empty string if no token or parse fails.
+func extractUserIDFromToken(c *app.RequestContext) string {
+	authHeader := strings.TrimSpace(string(c.GetHeader("Authorization")))
+	if authHeader == "" {
+		return ""
+	}
+	parts := strings.Fields(authHeader)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return ""
+	}
+	// JWT is base64url-encoded payload between two dots
+	// Format: header.payload.signature
+	token := parts[1]
+	dot1 := strings.IndexByte(token, '.')
+	dot2 := strings.LastIndexByte(token, '.')
+	if dot1 < 0 || dot2 <= dot1+1 {
+		return ""
+	}
+	payload := token[dot1+1 : dot2]
+	// Decode base64url (no padding)
+	decoded, err := base64urlDecode(payload)
+	if err != nil {
+		return ""
+	}
+	// Extract user_id from JSON (simple extraction, no full JSON parse overhead)
+	needle := `"user_id":`
+	idx := strings.Index(string(decoded), needle)
+	if idx < 0 {
+		return ""
+	}
+	rest := string(decoded)[idx+len(needle):]
+	// Skip whitespace
+	rest = strings.TrimLeft(rest, " ")
+	if len(rest) == 0 || rest[0] < '0' || rest[0] > '9' {
+		return ""
+	}
+	// Read digits
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	return rest[:end]
+}
+
+func base64urlDecode(s string) ([]byte, error) {
+	// Add padding if needed
+	switch len(s) % 4 {
+	case 2:
+		s += "=="
+	case 3:
+		s += "="
+	}
+	decoded := make([]byte, len(s)*3/4)
+	n, err := base64urlDecodeInto(decoded, s)
+	return decoded[:n], err
+}
+
+func base64urlDecodeInto(dst []byte, src string) (int, error) {
+	v, err := base64urlDecodeString(src)
+	if err != nil {
+		return 0, err
+	}
+	return copy(dst, v), nil
+}
+
+func base64urlDecodeString(s string) (string, error) {
+	// Minimal base64url decoder
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	var buf strings.Builder
+	buf.Grow(len(s) * 3 / 4)
+
+	var n uint
+	var nr int
+	for _, c := range s {
+		if c == '=' {
+			break
+		}
+		idx := strings.IndexByte(alphabet, byte(c))
+		if idx < 0 {
+			continue
+		}
+		n = n<<6 | uint(idx)
+		nr += 6
+		if nr >= 8 {
+			nr -= 8
+			buf.WriteByte(byte(n >> uint(nr)))
+			n &= (1 << uint(nr)) - 1
+		}
+	}
+	return buf.String(), nil
 }
 
 // P1-15: EndpointRateLimitMiddleware creates a middleware that applies

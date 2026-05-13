@@ -14,6 +14,30 @@ type Config struct {
 	DB            int      `yaml:"db"`
 	Addrs         []string `yaml:"addrs"`
 	EnableTracing bool     `yaml:"enableTracing"`
+	// Pool parameters (zero-value falls back to sensible defaults)
+	PoolSize       int `yaml:"poolSize"`
+	MinIdleConns   int `yaml:"minIdleConns"`
+	PoolTimeoutSec int `yaml:"poolTimeoutSec"`
+	ConnMaxLifeSec int `yaml:"connMaxLifetimeSec"`
+	ConnMaxIdleSec int `yaml:"connMaxIdleTimeSec"`
+}
+
+func (c *Config) setDefaults() {
+	if c.PoolSize <= 0 {
+		c.PoolSize = 100
+	}
+	if c.MinIdleConns <= 0 {
+		c.MinIdleConns = 10
+	}
+	if c.PoolTimeoutSec <= 0 {
+		c.PoolTimeoutSec = 4
+	}
+	if c.ConnMaxLifeSec <= 0 {
+		c.ConnMaxLifeSec = 1800 // 30 min
+	}
+	if c.ConnMaxIdleSec <= 0 {
+		c.ConnMaxIdleSec = 600 // 10 min
+	}
 }
 
 type Client struct {
@@ -21,15 +45,16 @@ type Client struct {
 }
 
 func New(cfg Config) (*Client, func(), error) {
+	cfg.setDefaults()
 	opt := &redis.Options{
 		Addr:            cfg.Addr,
 		Password:        cfg.Password,
 		DB:              cfg.DB,
-		PoolSize:        100,              // max connections
-		MinIdleConns:    10,               // minimum idle connections
-		PoolTimeout:     4 * time.Second,  // wait timeout for getting a connection
-		ConnMaxLifetime: 30 * time.Minute, // max connection age
-		ConnMaxIdleTime: 10 * time.Minute, // max idle connection age
+		PoolSize:        cfg.PoolSize,
+		MinIdleConns:    cfg.MinIdleConns,
+		PoolTimeout:     time.Duration(cfg.PoolTimeoutSec) * time.Second,
+		ConnMaxLifetime: time.Duration(cfg.ConnMaxLifeSec) * time.Second,
+		ConnMaxIdleTime: time.Duration(cfg.ConnMaxIdleSec) * time.Second,
 	}
 	rdb := redis.NewClient(opt)
 

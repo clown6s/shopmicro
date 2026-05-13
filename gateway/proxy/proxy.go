@@ -461,6 +461,9 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			// Forward identity to downstream service via Kitex metainfo.
 			ctx = metainfo.WithPersistentValue(ctx, "token", tokenStr)
 			ctx = metainfo.WithPersistentValue(ctx, "user_id", fmt.Sprintf("%d", claims.UserID))
+
+			// Set user_id in Hertz request context for downstream middleware (e.g. per-user rate limiting)
+			c.Set("user_id", fmt.Sprintf("%d", claims.UserID))
 		}
 
 		// Pass the raw JSON request body to the generic client.

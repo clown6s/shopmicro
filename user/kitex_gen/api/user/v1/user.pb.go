@@ -133,15 +133,16 @@ func (x *LoginReq) GetPhone() string {
 }
 
 type LoginResp struct {
-	Id       int64  `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
-	RealName string `protobuf:"bytes,2,opt,name=realName" json:"realName,omitempty"`
-	Avatar   string `protobuf:"bytes,3,opt,name=avatar" json:"avatar,omitempty"`
-	Gender   Gender `protobuf:"varint,4,opt,name=gender" json:"gender,omitempty"`
-	Age      int32  `protobuf:"varint,5,opt,name=age" json:"age,omitempty"`
-	Phone    string `protobuf:"bytes,6,opt,name=phone" json:"phone,omitempty"`
-	Email    string `protobuf:"bytes,7,opt,name=email" json:"email,omitempty"`
-	Remark   string `protobuf:"bytes,8,opt,name=remark" json:"remark,omitempty"`
-	Token    string `protobuf:"bytes,9,opt,name=token" json:"token,omitempty"`
+	Id           int64  `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
+	RealName     string `protobuf:"bytes,2,opt,name=realName" json:"realName,omitempty"`
+	Avatar       string `protobuf:"bytes,3,opt,name=avatar" json:"avatar,omitempty"`
+	Gender       Gender `protobuf:"varint,4,opt,name=gender" json:"gender,omitempty"`
+	Age          int32  `protobuf:"varint,5,opt,name=age" json:"age,omitempty"`
+	Phone        string `protobuf:"bytes,6,opt,name=phone" json:"phone,omitempty"`
+	Email        string `protobuf:"bytes,7,opt,name=email" json:"email,omitempty"`
+	Remark       string `protobuf:"bytes,8,opt,name=remark" json:"remark,omitempty"`
+	Token        string `protobuf:"bytes,9,opt,name=token" json:"token,omitempty"`
+	RefreshToken string `protobuf:"bytes,10,opt,name=refreshToken" json:"refreshToken,omitempty"`
 }
 
 func (x *LoginResp) Reset() { *x = LoginResp{} }
@@ -209,6 +210,55 @@ func (x *LoginResp) GetRemark() string {
 func (x *LoginResp) GetToken() string {
 	if x != nil {
 		return x.Token
+	}
+	return ""
+}
+
+func (x *LoginResp) GetRefreshToken() string {
+	if x != nil {
+		return x.RefreshToken
+	}
+	return ""
+}
+
+type RefreshTokenReq struct {
+	RefreshToken string `protobuf:"bytes,1,opt,name=refreshToken" json:"refreshToken,omitempty"`
+}
+
+func (x *RefreshTokenReq) Reset() { *x = RefreshTokenReq{} }
+
+func (x *RefreshTokenReq) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *RefreshTokenReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *RefreshTokenReq) GetRefreshToken() string {
+	if x != nil {
+		return x.RefreshToken
+	}
+	return ""
+}
+
+type RefreshTokenResp struct {
+	Token        string `protobuf:"bytes,1,opt,name=token" json:"token,omitempty"`
+	RefreshToken string `protobuf:"bytes,2,opt,name=refreshToken" json:"refreshToken,omitempty"`
+}
+
+func (x *RefreshTokenResp) Reset() { *x = RefreshTokenResp{} }
+
+func (x *RefreshTokenResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *RefreshTokenResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *RefreshTokenResp) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *RefreshTokenResp) GetRefreshToken() string {
+	if x != nil {
+		return x.RefreshToken
 	}
 	return ""
 }
@@ -506,6 +556,7 @@ func (x *UserInfo) GetRemark() string {
 type UserService interface {
 	RegisterUser(ctx context.Context, req *RegisterUserReq) (res *RegisterUserResp, err error)
 	Login(ctx context.Context, req *LoginReq) (res *LoginResp, err error)
+	RefreshToken(ctx context.Context, req *RefreshTokenReq) (res *RefreshTokenResp, err error)
 	Logout(ctx context.Context, req *LogoutReq) (res *LogoutResp, err error)
 	UpdateUser(ctx context.Context, req *UpdateUserReq) (res *UpdateUserResp, err error)
 	DeleteUser(ctx context.Context, req *DeleteUserReq) (res *DeleteUserResp, err error)

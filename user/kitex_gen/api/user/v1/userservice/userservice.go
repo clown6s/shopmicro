@@ -29,6 +29,13 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingUnary),
 	),
+	"RefreshToken": kitex.NewMethodInfo(
+		refreshTokenHandler,
+		newRefreshTokenArgs,
+		newRefreshTokenResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingUnary),
+	),
 	"Logout": kitex.NewMethodInfo(
 		logoutHandler,
 		newLogoutArgs,
@@ -342,6 +349,117 @@ func (p *LoginResult) IsSetSuccess() bool {
 }
 
 func (p *LoginResult) GetResult() interface{} {
+	return p.Success
+}
+
+func refreshTokenHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	switch s := arg.(type) {
+	case *streaming.Args:
+		st := s.Stream
+		req := new(v1.RefreshTokenReq)
+		if err := st.RecvMsg(req); err != nil {
+			return err
+		}
+		resp, err := handler.(v1.UserService).RefreshToken(ctx, req)
+		if err != nil {
+			return err
+		}
+		return st.SendMsg(resp)
+	case *RefreshTokenArgs:
+		success, err := handler.(v1.UserService).RefreshToken(ctx, s.Req)
+		if err != nil {
+			return err
+		}
+		realResult := result.(*RefreshTokenResult)
+		realResult.Success = success
+		return nil
+	default:
+		return errInvalidMessageType
+	}
+}
+func newRefreshTokenArgs() interface{} {
+	return &RefreshTokenArgs{}
+}
+
+func newRefreshTokenResult() interface{} {
+	return &RefreshTokenResult{}
+}
+
+type RefreshTokenArgs struct {
+	Req *v1.RefreshTokenReq
+}
+
+func (p *RefreshTokenArgs) Marshal(out []byte) ([]byte, error) {
+	if !p.IsSetReq() {
+		return out, nil
+	}
+	return proto.Marshal(p.Req)
+}
+
+func (p *RefreshTokenArgs) Unmarshal(in []byte) error {
+	msg := new(v1.RefreshTokenReq)
+	if err := proto.Unmarshal(in, msg); err != nil {
+		return err
+	}
+	p.Req = msg
+	return nil
+}
+
+var RefreshTokenArgs_Req_DEFAULT *v1.RefreshTokenReq
+
+func (p *RefreshTokenArgs) GetReq() *v1.RefreshTokenReq {
+	if !p.IsSetReq() {
+		return RefreshTokenArgs_Req_DEFAULT
+	}
+	return p.Req
+}
+
+func (p *RefreshTokenArgs) IsSetReq() bool {
+	return p.Req != nil
+}
+
+func (p *RefreshTokenArgs) GetFirstArgument() interface{} {
+	return p.Req
+}
+
+type RefreshTokenResult struct {
+	Success *v1.RefreshTokenResp
+}
+
+var RefreshTokenResult_Success_DEFAULT *v1.RefreshTokenResp
+
+func (p *RefreshTokenResult) Marshal(out []byte) ([]byte, error) {
+	if !p.IsSetSuccess() {
+		return out, nil
+	}
+	return proto.Marshal(p.Success)
+}
+
+func (p *RefreshTokenResult) Unmarshal(in []byte) error {
+	msg := new(v1.RefreshTokenResp)
+	if err := proto.Unmarshal(in, msg); err != nil {
+		return err
+	}
+	p.Success = msg
+	return nil
+}
+
+func (p *RefreshTokenResult) GetSuccess() *v1.RefreshTokenResp {
+	if !p.IsSetSuccess() {
+		return RefreshTokenResult_Success_DEFAULT
+	}
+	return p.Success
+}
+
+func (p *RefreshTokenResult) SetSuccess(x interface{}) {
+	p.Success = x.(*v1.RefreshTokenResp)
+}
+
+func (p *RefreshTokenResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RefreshTokenResult) GetResult() interface{} {
 	return p.Success
 }
 
@@ -814,6 +932,16 @@ func (p *kClient) Login(ctx context.Context, Req *v1.LoginReq) (r *v1.LoginResp,
 	_args.Req = Req
 	var _result LoginResult
 	if err = p.c.Call(ctx, "Login", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) RefreshToken(ctx context.Context, Req *v1.RefreshTokenReq) (r *v1.RefreshTokenResp, err error) {
+	var _args RefreshTokenArgs
+	_args.Req = Req
+	var _result RefreshTokenResult
+	if err = p.c.Call(ctx, "RefreshToken", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

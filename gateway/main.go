@@ -148,10 +148,16 @@ func Run(configPath string) error {
 	h.Use(
 		middleware.CORS(
 			&middleware.CORSConfig{
-				AllowOrigins: cfg.CORS.AllowOrigins,
+				AllowOrigins:     cfg.CORS.AllowOrigins,
+				AllowCredentials: cfg.CORS.AllowCredentials,
 			},
 			cfg.Mode,
 		),
+	)
+
+	// security headers (HSTS, CSP, X-Frame-Options, etc.)
+	h.Use(
+		middleware.SecurityHeadersMiddleware(cfg.Mode),
 	)
 
 	// access log
@@ -192,12 +198,14 @@ func Run(configPath string) error {
 		proxy.WithPublicMethods(
 			"RegisterUser",
 			"Login",
+			"RefreshToken",
 		),
 
 		// P1-12: Explicit method whitelist for user service
 		proxy.WithAllowedMethods("user",
 			"RegisterUser",
 			"Login",
+			"RefreshToken",
 			"Logout",
 			"UpdateUser",
 			"DeleteUser",

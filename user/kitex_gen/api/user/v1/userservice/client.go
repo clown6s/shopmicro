@@ -13,6 +13,7 @@ import (
 type Client interface {
 	RegisterUser(ctx context.Context, Req *v1.RegisterUserReq, callOptions ...callopt.Option) (r *v1.RegisterUserResp, err error)
 	Login(ctx context.Context, Req *v1.LoginReq, callOptions ...callopt.Option) (r *v1.LoginResp, err error)
+	RefreshToken(ctx context.Context, Req *v1.RefreshTokenReq, callOptions ...callopt.Option) (r *v1.RefreshTokenResp, err error)
 	Logout(ctx context.Context, Req *v1.LogoutReq, callOptions ...callopt.Option) (r *v1.LogoutResp, err error)
 	UpdateUser(ctx context.Context, Req *v1.UpdateUserReq, callOptions ...callopt.Option) (r *v1.UpdateUserResp, err error)
 	DeleteUser(ctx context.Context, Req *v1.DeleteUserReq, callOptions ...callopt.Option) (r *v1.DeleteUserResp, err error)
@@ -56,6 +57,11 @@ func (p *kUserServiceClient) RegisterUser(ctx context.Context, Req *v1.RegisterU
 func (p *kUserServiceClient) Login(ctx context.Context, Req *v1.LoginReq, callOptions ...callopt.Option) (r *v1.LoginResp, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Login(ctx, Req)
+}
+
+func (p *kUserServiceClient) RefreshToken(ctx context.Context, Req *v1.RefreshTokenReq, callOptions ...callopt.Option) (r *v1.RefreshTokenResp, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.RefreshToken(ctx, Req)
 }
 
 func (p *kUserServiceClient) Logout(ctx context.Context, Req *v1.LogoutReq, callOptions ...callopt.Option) (r *v1.LogoutResp, err error) {
