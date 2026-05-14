@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/cloudwego/kitex/pkg/generic"
 	"github.com/cloudwego/kitex/pkg/transmeta"
 	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
+	"github.com/sony/gobreaker"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -37,6 +39,10 @@ const (
 	etcdRegistryPrefix = "kitex/registry-etcd"
 	tokenPrefix        = "shopmicro:user:token:"
 )
+
+// ErrBreakerOpen is returned by Call() when the circuit breaker for a
+// service is open (downstream has failed too many times consecutively).
+var ErrBreakerOpen = errors.New("circuit breaker open")
 
 // ServiceClient bundles a kitex generic client with its descriptor.
 type ServiceClient struct {
@@ -57,15 +63,32 @@ type Proxy struct {
 	allowedServices map[string]bool
 	// P1-12: Allowed methods per service (nil = allow all methods)
 	allowedMethods map[string]map[string]bool
+
+	// perServiceCB stores one circuit breaker per service.
+	perServiceCB sync.Map // map[string]*gobreaker.CircuitBreaker
+	cbSettings   *cbConfig
+}
+
+// cbConfig holds circuit breaker configuration.
+type cbConfig struct {
+	maxRequests         uint32
+	interval            time.Duration
+	timeout             time.Duration
+	consecutiveFailures uint32
 }
 
 // Option configures Proxy at construction time.
 type Option func(*Proxy)
 
 // WithJWT sets the JWT secret used to validate inbound tokens.
+// Panics at startup if the secret is too short (< 32 chars).
 func WithJWT(secret string) Option {
+	parser, err := pkgjwt.NewParser(secret)
+	if err != nil {
+		logger.Fatalf("jwt parser init failed: %v", err)
+	}
 	return func(p *Proxy) {
-		p.jwtParser = pkgjwt.NewParser(secret)
+		p.jwtParser = parser
 	}
 }
 
@@ -73,6 +96,20 @@ func WithJWT(secret string) Option {
 func WithRedis(rdb *redis.Client) Option {
 	return func(p *Proxy) {
 		p.rdb = rdb
+	}
+}
+
+// WithCircuitBreaker enables per-service circuit breaking on RPC calls.
+// When too many consecutive RPC failures occur for a service, subsequent
+// calls are fast-rejected with ErrBreakerOpen instead of waiting for timeout.
+func WithCircuitBreaker(maxRequests int, interval, timeout time.Duration, consecutiveFailures uint32) Option {
+	return func(p *Proxy) {
+		p.cbSettings = &cbConfig{
+			maxRequests:         uint32(maxRequests),
+			interval:            interval,
+			timeout:             timeout,
+			consecutiveFailures: consecutiveFailures,
+		}
 	}
 }
 
@@ -188,6 +225,22 @@ func (p *Proxy) getClient(service string) (*ServiceClient, bool) {
 	return c, ok
 }
 
+func (p *Proxy) getBreaker(service string) *gobreaker.CircuitBreaker {
+	if p.cbSettings == nil {
+		return nil
+	}
+	cbI, _ := p.perServiceCB.LoadOrStore(service, gobreaker.NewCircuitBreaker(gobreaker.Settings{
+		Name:        "gateway:" + service,
+		MaxRequests: p.cbSettings.maxRequests,
+		Interval:    p.cbSettings.interval,
+		Timeout:     p.cbSettings.timeout,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures >= p.cbSettings.consecutiveFailures
+		},
+	}))
+	return cbI.(*gobreaker.CircuitBreaker)
+}
+
 // =========================
 // call RPC
 // =========================
@@ -197,8 +250,11 @@ func (p *Proxy) getClient(service string) (*ServiceClient, bool) {
 // method must be the CamelCase protobuf RPC name (e.g. "ListUser", NOT
 // a gRPC full path like "api.user.v1.UserService/ListUser").
 //
-// P2-07: Manual retry (max 2 retries, 3 attempts total) only on timeout/network
-// errors — NOT on business errors (InvalidArgument, NotFound, etc.).
+// Kitex handles connection-level retry internally (middlewares.go),
+// so no manual retry loop is needed here — a single call suffices.
+//
+// If circuit breaker is enabled (via WithCircuitBreaker) and the breaker
+// for the service is open, returns ErrBreakerOpen immediately.
 func (p *Proxy) Call(
 	ctx context.Context,
 	service string,
@@ -210,39 +266,21 @@ func (p *Proxy) Call(
 		return nil, fmt.Errorf("service not found: %s", service)
 	}
 
-	const maxRetries = 2
-	var lastErr error
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			// P2 fix: exponential backoff: 50ms → 100ms → 200ms, capped at 500ms
-			backoff := time.Duration(50*(1<<uint(attempt-1))) * time.Millisecond
-			if backoff > 500*time.Millisecond {
-				backoff = 500 * time.Millisecond
-			}
-			time.Sleep(backoff)
-		}
-
+	call := func() (interface{}, error) {
 		// JSONPbGeneric: WriteJSON.Write calls LookupMethodByName(method)
 		// which expects CamelCase method name, NOT gRPC full path.
 		// Use method directly; the generic client already knows the service.
-		resp, err := cli.Client.GenericCall(ctx, method, req)
-		if err == nil {
-			return resp, nil
-		}
-
-		lastErr = err
-
-		// Only retry on timeout/network errors; business errors are final
-		if !shouldRetryGRPC(err) {
-			return nil, err
-		}
-
-		logger.Warnf("rpc call failed (attempt %d/%d), retrying: service=%s method=%s err=%v",
-			attempt+1, maxRetries+1, service, method, err)
+		return cli.Client.GenericCall(ctx, method, req)
 	}
 
-	return nil, lastErr
+	cb := p.getBreaker(service)
+	if cb == nil {
+		return call()
+	}
+
+	return cb.Execute(func() (interface{}, error) {
+		return call()
+	})
 }
 
 // =========================
@@ -476,6 +514,19 @@ func (p *Proxy) Handler() app.HandlerFunc {
 
 		resp, err := p.Call(ctx, service, method, body)
 		if err != nil {
+			// Circuit breaker is open — fast reject with 503.
+			if errors.Is(err, ErrBreakerOpen) {
+				response.ServiceUnavailable(c)
+				return
+			}
+			// gobreaker wraps the inner error — unwrap before checking.
+			unwrapped := errors.Unwrap(err)
+			if unwrapped != nil {
+				if biz, ok := errcode.ParseBizError(unwrapped); ok {
+					response.BizErr(c, biz)
+					return
+				}
+			}
 			// Try to parse downstream BizError for proper status code.
 			if biz, ok := errcode.ParseBizError(err); ok {
 				response.BizErr(c, biz)
@@ -594,8 +645,8 @@ func extractServiceName(key, prefix string) string {
 // gRPC status code.  Only transient/network errors are retried; business errors
 // (e.g. INVALID_ARGUMENT, NOT_FOUND) are returned immediately to avoid duplicates.
 //
-// Retryable: DEADLINE_EXCEEDED, UNAVAILABLE, INTERNAL, RESOURCE_EXHAUSTED.
-// Not retryable: all other codes including INVALID_ARGUMENT, NOT_FOUND, etc.
+// Retryable: DEADLINE_EXCEEDED, UNAVAILABLE, RESOURCE_EXHAUSTED.
+// NOT retryable: INTERNAL (server bug), INVALID_ARGUMENT, NOT_FOUND, etc.
 func shouldRetryGRPC(err error) bool {
 	if err == nil {
 		return false
@@ -611,7 +662,6 @@ func shouldRetryGRPC(err error) bool {
 	switch st.Code() {
 	case codes.DeadlineExceeded,
 		codes.Unavailable,
-		codes.Internal,
 		codes.ResourceExhausted:
 		return true
 	default:
@@ -629,4 +679,22 @@ func newEtcdClient(addrs []string) (*clientv3.Client, error) {
 		return nil, fmt.Errorf("connect to etcd %v: %w", addrs, err)
 	}
 	return cli, nil
+}
+
+// GetCircuitBreakerStatus returns a snapshot of all circuit breaker states.
+// Useful for a debug/service-status endpoint.
+func (p *Proxy) GetCircuitBreakerStatus() map[string]string {
+	result := make(map[string]string)
+	p.perServiceCB.Range(func(key, value interface{}) bool {
+		cb := value.(*gobreaker.CircuitBreaker)
+		result[key.(string)] = cb.State().String()
+		return true
+	})
+	return result
+}
+
+// RemoveCircuitBreaker removes the circuit breaker for a service.
+// Call this when a service is deregistered to prevent unbounded memory growth.
+func (p *Proxy) RemoveCircuitBreaker(service string) {
+	p.perServiceCB.Delete(service)
 }

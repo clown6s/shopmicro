@@ -187,6 +187,8 @@ func Run(configPath string) error {
 	// proxy
 	// =========================
 
+	cbInterval, cbTimeout := cfg.CircuitBreakerDurations()
+
 	p := proxy.New(
 
 		proxy.WithJWT(
@@ -210,6 +212,15 @@ func Run(configPath string) error {
 			"UpdateUser",
 			"DeleteUser",
 			"ListUser",
+		),
+
+		// Circuit breaker wraps RPC calls inside proxy.Call(),
+		// not HTTP handlers — eliminates double-response bug.
+		proxy.WithCircuitBreaker(
+			cfg.CircuitBreaker.MaxRequests,
+			cbInterval,
+			cbTimeout,
+			uint32(cfg.CircuitBreaker.ConsecutiveFailures),
 		),
 	)
 
@@ -255,17 +266,6 @@ func Run(configPath string) error {
 	// =========================
 
 	api := h.Group("/api/v1")
-
-	// P0-5: Circuit breaker only on API routes — /health must remain reachable.
-	cbInterval, cbTimeout := cfg.CircuitBreakerDurations()
-	api.Use(
-		middleware.CircuitBreakerMiddleware(
-			cfg.CircuitBreaker.MaxRequests,
-			cbInterval,
-			cbTimeout,
-			uint32(cfg.CircuitBreaker.ConsecutiveFailures),
-		),
-	)
 
 	// P1-15: Login endpoint gets stricter rate limiting
 	api.POST(

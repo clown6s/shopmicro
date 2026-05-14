@@ -2,14 +2,13 @@ package middleware
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	goredis "github.com/redis/go-redis/v9"
-	"golang.org/x/time/rate"
 
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/redis"
@@ -59,8 +58,6 @@ type RedisRateLimiter struct {
 	limit             int           // max requests per window (default)
 	window            time.Duration // sliding window duration (default)
 	endpointOverrides map[string]*endpointLimit
-	// P1-3: Local fallback rate limiters (token bucket) when Redis is down.
-	localLimiters sync.Map // map[string]*rate.Limiter
 }
 
 // endpointLimit holds per-endpoint rate limit configuration
@@ -114,15 +111,6 @@ func (rl *RedisRateLimiter) Allow(ctx context.Context, key string) bool {
 	}
 
 	return result == 1
-}
-
-// localAllow provides in-memory token-bucket rate limiting as a fallback
-// when Redis is unavailable. Uses per-key limiters stored in a sync.Map.
-func (rl *RedisRateLimiter) localAllow(key string) bool {
-	// tokens per second = limit / window_seconds
-	r := rate.Limit(float64(rl.limit) / rl.window.Seconds())
-	limiter, _ := rl.localLimiters.LoadOrStore(key, rate.NewLimiter(r, 1))
-	return limiter.(*rate.Limiter).Allow()
 }
 
 // getTrustedIP returns the client IP from the X-Real-IP header set by a
@@ -189,8 +177,8 @@ func extractUserIDFromToken(c *app.RequestContext) string {
 		return ""
 	}
 	payload := token[dot1+1 : dot2]
-	// Decode base64url (no padding)
-	decoded, err := base64urlDecode(payload)
+	// Decode base64url (no padding) using standard library
+	decoded, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
 		return ""
 	}
@@ -212,54 +200,6 @@ func extractUserIDFromToken(c *app.RequestContext) string {
 		end++
 	}
 	return rest[:end]
-}
-
-func base64urlDecode(s string) ([]byte, error) {
-	// Add padding if needed
-	switch len(s) % 4 {
-	case 2:
-		s += "=="
-	case 3:
-		s += "="
-	}
-	decoded := make([]byte, len(s)*3/4)
-	n, err := base64urlDecodeInto(decoded, s)
-	return decoded[:n], err
-}
-
-func base64urlDecodeInto(dst []byte, src string) (int, error) {
-	v, err := base64urlDecodeString(src)
-	if err != nil {
-		return 0, err
-	}
-	return copy(dst, v), nil
-}
-
-func base64urlDecodeString(s string) (string, error) {
-	// Minimal base64url decoder
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-	var buf strings.Builder
-	buf.Grow(len(s) * 3 / 4)
-
-	var n uint
-	var nr int
-	for _, c := range s {
-		if c == '=' {
-			break
-		}
-		idx := strings.IndexByte(alphabet, byte(c))
-		if idx < 0 {
-			continue
-		}
-		n = n<<6 | uint(idx)
-		nr += 6
-		if nr >= 8 {
-			nr -= 8
-			buf.WriteByte(byte(n >> uint(nr)))
-			n &= (1 << uint(nr)) - 1
-		}
-	}
-	return buf.String(), nil
 }
 
 // P1-15: EndpointRateLimitMiddleware creates a middleware that applies

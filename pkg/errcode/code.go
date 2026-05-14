@@ -22,6 +22,7 @@ const (
 	CodeUserInternal      uint32 = 10013
 	CodeUserUnauthorized  uint32 = 10014
 	CodeUserForbidden     uint32 = 10015
+	CodeUserEmailFormat   uint32 = 10016
 )
 
 // Product 服务: 20000 - 29999 (预留)

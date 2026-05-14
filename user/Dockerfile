@@ -3,7 +3,7 @@
 # ============================================================
 # 使用项目根目录（shopmicro/）作为 build context，
 # 这样才能访问 go.work 以及 pkg/ 模块。
-FROM golang:1.23-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /build
 

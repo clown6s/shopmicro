@@ -8,17 +8,6 @@ import (
 	"github.com/cloudwego/hertz/pkg/common/test/assert"
 )
 
-func TestBase64URLDecode(t *testing.T) {
-	encoded := base64.RawURLEncoding.EncodeToString([]byte("hello"))
-	decoded, err := base64urlDecode(encoded)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if string(decoded) != "hello" {
-		t.Fatalf("expected 'hello', got %q", string(decoded))
-	}
-}
-
 func TestExtractUserIDFromToken_MissingHeader(t *testing.T) {
 	c := &app.RequestContext{}
 	uid := extractUserIDFromToken(c)

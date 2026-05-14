@@ -3,7 +3,7 @@
 # ============================================================
 # 使用项目根目录（shopmicro/）作为 build context，
 # 这样才能访问 go.work、gateway/、pkg/ 以及各服务的 proto 文件。
-FROM golang:1.23-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /build
 

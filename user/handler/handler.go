@@ -38,10 +38,14 @@ var (
 	errUserNotFound     = newBiz(errcode.CodeUserNotFound, "user not found")
 	errUnauthorized     = newBiz(errcode.CodeUserUnauthorized, "unauthorized: missing user identity")
 	errForbidden        = newBiz(errcode.CodeUserForbidden, "forbidden: cannot operate other user's data")
+	errEmailFormat      = newBiz(errcode.CodeUserEmailFormat, "invalid email format")
 )
 
 // P1-21: phone number regex — Chinese mobile format
 var phoneRegex = regexp.MustCompile(`^1[3-9]\d{9}$`)
+
+// emailRegex validates basic email format (RFC 5322 simplified)
+var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
 // passwordRegex enforces at least one letter + one digit, 8-128 chars
 var passwordRegex = regexp.MustCompile(`^[a-zA-Z\d]{8,128}$`)
@@ -122,6 +126,10 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 	}
 	if !passwordValid(req.GetPassword()) {
 		return nil, errPasswordWeak
+	}
+
+	if req.GetEmail() != "" && !emailRegex.MatchString(req.GetEmail()) {
+		return nil, errEmailFormat
 	}
 
 	hashed, err := bcrypt.GenerateFromPassword([]byte(req.GetPassword()), 12) // P1-21: cost 12
@@ -268,7 +276,11 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 		updates["phone"] = v
 	}
 	if req.Email != nil {
-		updates["email"] = req.GetEmail()
+		v := req.GetEmail()
+		if v != "" && !emailRegex.MatchString(v) {
+			return nil, errEmailFormat
+		}
+		updates["email"] = v
 	}
 	if req.Remark != nil {
 		updates["remark"] = req.GetRemark()
@@ -447,20 +459,18 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 	}
 
 	// Look up userID from Redis (refreshToken -> userID)
+	// Use atomic GET+DEL to prevent concurrent replay attacks.
+	// Two concurrent requests with the same refresh token will race;
+	// only the first GETDEL succeeds, the second gets "" and fails.
 	rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, rt)
-	userIDStr, err := s.rdb.Get(ctx, rtKey)
-	if err != nil {
+	userIDStr, err := s.rdb.GetDel(ctx, rtKey)
+	if err != nil || userIDStr == "" {
 		return nil, errRefreshTokenInvalid
 	}
 
 	userID, err := parseInt64(userIDStr)
 	if err != nil || userID <= 0 {
 		return nil, errRefreshTokenInvalid
-	}
-
-	// Rotate: delete old refresh token immediately
-	if delErr := s.rdb.Del(ctx, rtKey); delErr != nil {
-		logger.Warnf("refresh token: failed to delete old refresh token: %v", delErr)
 	}
 
 	// Issue new access token

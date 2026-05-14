@@ -24,6 +24,23 @@ func TestNewGenerator_ValidSecret(t *testing.T) {
 	}
 }
 
+func TestNewParser_ShortSecret(t *testing.T) {
+	_, err := NewParser("short")
+	if err != ErrSecretWeak {
+		t.Fatalf("expected ErrSecretWeak, got %v", err)
+	}
+}
+
+func TestNewParser_ValidSecret(t *testing.T) {
+	parser, err := NewParser(testSecret)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if parser == nil {
+		t.Fatal("expected non-nil parser")
+	}
+}
+
 func TestGenerateAndParse(t *testing.T) {
 	gen, err := NewGenerator(testSecret, 24*time.Hour)
 	if err != nil {
@@ -38,7 +55,10 @@ func TestGenerateAndParse(t *testing.T) {
 		t.Fatal("expected non-empty token")
 	}
 
-	parser := NewParser(testSecret)
+	parser, err := NewParser(testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
 	claims, err := parser.Parse(token)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +82,10 @@ func TestParse_ExpiredToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	parser := NewParser(testSecret)
+	parser, err := NewParser(testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = parser.Parse(token)
 	if err != ErrTokenExpired {
 		t.Fatalf("expected ErrTokenExpired, got %v", err)
@@ -80,7 +103,10 @@ func TestParse_WrongSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wrongParser := NewParser("wrong_secret_01234567890abcdef")
+	wrongParser, err := NewParser("wrong_secret_01234567890abcdefXX")
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = wrongParser.Parse(token)
 	if err != ErrTokenInvalid {
 		t.Fatalf("expected ErrTokenInvalid, got %v", err)
@@ -88,8 +114,11 @@ func TestParse_WrongSecret(t *testing.T) {
 }
 
 func TestParse_MalformedToken(t *testing.T) {
-	parser := NewParser(testSecret)
-	_, err := parser.Parse("not.a.valid.jwt")
+	parser, err := NewParser(testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = parser.Parse("not.a.valid.jwt")
 	if err != ErrTokenInvalid {
 		t.Fatalf("expected ErrTokenInvalid, got %v", err)
 	}
@@ -99,22 +128,13 @@ func TestParse_AlgorithmConfusion(t *testing.T) {
 	// Create a token signed with "none" algorithm (algorithm confusion attack)
 	malformedToken := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyX2lkIjoxfQ."
 
-	parser := NewParser(testSecret)
-	_, err := parser.Parse(malformedToken)
+	parser, err := NewParser(testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = parser.Parse(malformedToken)
 	if err != ErrTokenInvalid {
 		t.Fatalf("expected ErrTokenInvalid (algorithm confusion blocked), got %v", err)
-	}
-}
-
-func TestParser_InitError(t *testing.T) {
-	parser := NewParser("short")
-	if err := parser.InitError(); err != ErrSecretWeak {
-		t.Fatalf("expected ErrSecretWeak for short secret, got %v", err)
-	}
-
-	goodParser := NewParser(testSecret)
-	if err := goodParser.InitError(); err != nil {
-		t.Fatalf("expected no error for valid secret, got %v", err)
 	}
 }
 
@@ -122,7 +142,7 @@ func TestClaims_UserIDOnly(t *testing.T) {
 	// Verify that Claims only contains UserID (no PII fields like Phone)
 	gen, _ := NewGenerator(testSecret, time.Hour)
 	token, _ := gen.Generate(99)
-	parser := NewParser(testSecret)
+	parser, _ := NewParser(testSecret)
 	claims, err := parser.Parse(token)
 	if err != nil {
 		t.Fatal(err)

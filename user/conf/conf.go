@@ -2,6 +2,7 @@ package conf
 
 import (
 	"fmt"
+	"strings"
 
 	"shopmicro/pkg/conf"
 	"shopmicro/pkg/mysql"
@@ -54,6 +55,12 @@ func (c *Config) ApplyEnv() {
 	}
 	if v := conf.Env("JWT_SECRET", ""); v != "" {
 		c.JWT.Secret = v
+	}
+	if v := conf.Env("SERVER_ADDR", ""); v != "" {
+		c.Server.Addr = v
+	}
+	if v := conf.Env("ETCD_ADDRS", ""); v != "" {
+		c.Etcd.Addrs = strings.Split(v, ",")
 	}
 }
 

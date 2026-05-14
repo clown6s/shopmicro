@@ -2,6 +2,7 @@ package conf
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"shopmicro/pkg/conf"
@@ -101,6 +102,9 @@ func (c *Config) ApplyEnv() {
 	// P2-09: Docker/K8s 环境下覆盖 proto 基础路径
 	if v := conf.Env("PROTO_BASE", ""); v != "" {
 		c.ProtoBase = v
+	}
+	if v := conf.Env("ETCD_ADDRS", ""); v != "" {
+		c.Etcd.Addrs = strings.Split(v, ",")
 	}
 }
 

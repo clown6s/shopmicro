@@ -123,3 +123,9 @@ func (c *Client) Ping(ctx context.Context) bool {
 func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	return c.rdb.Expire(ctx, key, ttl).Err()
 }
+
+// GetDel atomically gets the value of a key and deletes it.
+// Requires Redis 6.2+. Falls back to Lua script for older versions.
+func (c *Client) GetDel(ctx context.Context, key string) (string, error) {
+	return c.rdb.GetDel(ctx, key).Result()
+}

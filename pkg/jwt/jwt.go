@@ -51,18 +51,13 @@ type Parser struct {
 	secret []byte
 }
 
-func NewParser(secret string) *Parser {
-	return &Parser{secret: []byte(secret)}
-}
-
-// InitError Parse validates the parser's secret length before parsing.
-// Callers should check InitError after calling NewParser if strict
-// startup validation is desired.
-func (p *Parser) InitError() error {
-	if len(p.secret) < 32 {
-		return ErrSecretWeak
+// NewParser creates a JWT parser with the given HMAC secret.
+// Returns an error if the secret is shorter than 32 characters.
+func NewParser(secret string) (*Parser, error) {
+	if len(secret) < 32 {
+		return nil, ErrSecretWeak
 	}
-	return nil
+	return &Parser{secret: []byte(secret)}, nil
 }
 
 func (p *Parser) Parse(tokenStr string) (*Claims, error) {
