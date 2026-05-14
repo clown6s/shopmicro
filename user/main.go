@@ -133,6 +133,7 @@ func Run(configPath string) error {
 			dataProvider,
 			cfg.JWT.Secret,
 			cfg.JWT.Expiration,
+			cfg.JWT.Issuer,
 		),
 
 		server.WithServerBasicInfo(
@@ -181,18 +182,36 @@ func Run(configPath string) error {
 	healthy := &atomic.Bool{}
 	healthy.Store(true)
 	healthMux := http.NewServeMux()
+	// R4-P1-05: Health check now verifies MySQL + Redis connectivity
 	healthMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		if healthy.Load() {
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, `{"status":"ok"}`)
-		} else {
+		if !healthy.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprintf(w, `{"status":"shutting_down"}`)
+			return
 		}
+		// Check MySQL connectivity (2s timeout)
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := dataProvider.DB.PingContext(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, `{"status":"unhealthy","failed":["mysql"]}`)
+			return
+		}
+		// Check Redis connectivity
+		if !dataProvider.Rdb.Ping(ctx) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, `{"status":"unhealthy","failed":["redis"]}`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"status":"ok"}`)
 	})
 	healthSrv := &http.Server{
-		Addr:    cfg.GetHealthAddr(),
-		Handler: healthMux,
+		Addr:         cfg.GetHealthAddr(),
+		Handler:      healthMux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+		IdleTimeout:  30 * time.Second,
 	}
 	go func() {
 		if err := healthSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -248,8 +267,10 @@ func Run(configPath string) error {
 			logger.Warnf("kitex shutdown timed out after 5s, forcing exit")
 		}
 
-		// Shutdown health check server
-		healthSrv.Shutdown(context.Background())
+		// Shutdown health check server with timeout
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = healthSrv.Shutdown(shutdownCtx)
+		shutdownCancel()
 	}()
 
 	// =========================

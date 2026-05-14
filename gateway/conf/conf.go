@@ -29,8 +29,8 @@ type CORS struct {
 }
 
 type JWT struct {
-	Secret     string `yaml:"secret"`
-	Expiration int    `yaml:"expiration"`
+	Secret string `yaml:"secret"`
+	Issuer string `yaml:"issuer"`
 }
 
 // RateLimit 分布式限流配置 (Redis 滑动窗口)
@@ -111,6 +111,9 @@ func (c *Config) ApplyEnv() {
 func (c *Config) Validate() error {
 	if c.JWT.Secret == "" {
 		return fmt.Errorf("jwt secret is required, set JWT_SECRET env or config.yaml")
+	}
+	if c.Redis.Addr == "" {
+		return fmt.Errorf("redis addr is required, set REDIS_ADDR env or config.yaml")
 	}
 	if len(c.Etcd.Addrs) == 0 {
 		return fmt.Errorf("etcd addresses are required, set ETCD_ADDRS env or config.yaml")

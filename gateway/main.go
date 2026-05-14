@@ -86,9 +86,10 @@ func Run(configPath string) error {
 	}
 
 	// Etcd client for health check (readiness probe)
+	// R4-P3-05: Unified DialTimeout (5s) — same as proxy.newEtcdClient
 	etcdClient, err := clientv3.New(clientv3.Config{
 		Endpoints:   cfg.Etcd.Addrs,
-		DialTimeout: 3 * time.Second,
+		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		return fmt.Errorf("create etcd client for health: %w", err)
@@ -193,6 +194,7 @@ func Run(configPath string) error {
 
 		proxy.WithJWT(
 			cfg.JWT.Secret,
+			cfg.JWT.Issuer,
 		),
 
 		proxy.WithRedis(rdb),

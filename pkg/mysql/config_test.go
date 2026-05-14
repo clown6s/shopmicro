@@ -72,6 +72,23 @@ func TestValidate_PoolCustomValues(t *testing.T) {
 	}
 }
 
+// R4-P1-04: "readTimeout" contains "timeout" — boundary-aware check must not skip "timeout"
+func TestValidate_DSN_TimeoutNotConfusedByReadTimeout(t *testing.T) {
+	cfg := Config{DSN: "user:pass@tcp(127.0.0.1:3306)/mydb?parseTime=true&readTimeout=5s&writeTimeout=5s"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// Must add "timeout=5s" (connect timeout) — old logic would skip it because
+	// "readTimeout" contains the substring "timeout"
+	if !contains(cfg.DSN, "&timeout=5s") && !contains(cfg.DSN, "?timeout=5s") {
+		t.Fatalf("DSN missing connect timeout (confused by readTimeout): %s", cfg.DSN)
+	}
+	// Should NOT duplicate readTimeout
+	if countSubstring(cfg.DSN, "readTimeout=") != 1 {
+		t.Fatalf("DSN has duplicate readTimeout: %s", cfg.DSN)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

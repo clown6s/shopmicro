@@ -9,6 +9,7 @@ redis:
 
 jwt:
   secret: ""  # 通过 JWT_SECRET 环境变量或 .env 设置
+  issuer: "shopmicro"
 
 cors:
   allowOrigins:

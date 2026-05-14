@@ -13,6 +13,7 @@ redis:
 jwt:
   secret: ""  # 通过 JWT_SECRET 环境变量或 .env 设置
   expiration: 24
+  issuer: "shopmicro"
 
 etcd:
   addrs:

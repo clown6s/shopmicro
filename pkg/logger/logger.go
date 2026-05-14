@@ -1,7 +1,6 @@
 package logger
 
 import (
-	"fmt"
 	"sync"
 
 	"go.uber.org/zap"
@@ -53,8 +52,3 @@ func Debugf(template string, args ...interface{}) { C().Debugf(template, args...
 func Warn(args ...interface{})                    { C().Warn(args...) }
 func Warnf(template string, args ...interface{})  { C().Warnf(template, args...) }
 func Sync()                                       { _ = C().Sync() }
-
-// Fatalf2 替代 Fatalf，返回 error 而不是调用 os.Exit
-func Fatalf2(format string, args ...interface{}) error {
-	return fmt.Errorf(format, args...)
-}

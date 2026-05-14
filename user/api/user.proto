@@ -59,9 +59,7 @@ message RefreshTokenResp {
   string refreshToken = 2;
 }
 
-message LogoutReq {
-  string token = 1;
-}
+message LogoutReq {}
 
 message LogoutResp {}
 

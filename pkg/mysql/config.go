@@ -39,9 +39,14 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Ensure timeout params are present for production safety
+	// Ensure timeout params are present for production safety.
+	// R4-P1-04: Use boundary-aware check — "readTimeout" contains "timeout"
+	// so a naive Contains check would skip adding the "timeout" (connect timeout) param.
+	hasDSNParam := func(dsn, param string) bool {
+		return strings.Contains(dsn, "?"+param+"=") || strings.Contains(dsn, "&"+param+"=")
+	}
 	for _, p := range []string{"readTimeout", "writeTimeout", "timeout"} {
-		if !strings.Contains(c.DSN, p+"=") {
+		if !hasDSNParam(c.DSN, p) {
 			c.DSN += sep + p + "=5s"
 			sep = "&"
 		}

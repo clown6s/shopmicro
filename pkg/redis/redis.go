@@ -9,11 +9,10 @@ import (
 )
 
 type Config struct {
-	Addr          string   `yaml:"addr"`
-	Password      string   `yaml:"password"`
-	DB            int      `yaml:"db"`
-	Addrs         []string `yaml:"addrs"`
-	EnableTracing bool     `yaml:"enableTracing"`
+	Addr          string `yaml:"addr"`
+	Password      string `yaml:"password"`
+	DB            int    `yaml:"db"`
+	EnableTracing bool   `yaml:"enableTracing"`
 	// Pool parameters (zero-value falls back to sensible defaults)
 	PoolSize       int `yaml:"poolSize"`
 	MinIdleConns   int `yaml:"minIdleConns"`
@@ -125,11 +124,11 @@ func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) erro
 }
 
 // SAddExpire atomically adds members to a SET and sets its TTL.
-// Uses a Redis pipeline so SAdd and Expire are sent together,
-// preventing the race where a process crash between SAdd and Expire
+// Uses a Redis TxPipeline (MULTI/EXEC) so both commands execute atomically,
+// preventing the race where a server crash between SAdd and Expire
 // leaves the SET without a TTL (tokens would never expire).
 func (c *Client) SAddExpire(ctx context.Context, key string, ttl time.Duration, members ...interface{}) error {
-	pipe := c.rdb.Pipeline()
+	pipe := c.rdb.TxPipeline()
 	pipe.SAdd(ctx, key, members...)
 	pipe.Expire(ctx, key, ttl)
 	_, err := pipe.Exec(ctx)
@@ -145,4 +144,19 @@ func (c *Client) SMembers(ctx context.Context, key string) ([]string, error) {
 // Requires Redis 6.2+.
 func (c *Client) GetDel(ctx context.Context, key string) (string, error) {
 	return c.rdb.GetDel(ctx, key).Result()
+}
+
+// NewScript creates a Redis Lua script that can be executed atomically.
+func NewScript(src string) *Script {
+	return &Script{s: redis.NewScript(src)}
+}
+
+// Script wraps a redis.Script for atomic Lua execution.
+type Script struct {
+	s *redis.Script
+}
+
+// Run executes the Lua script. keys are KEYS[], args are ARGV[].
+func (sc *Script) Run(ctx context.Context, c *Client, keys []string, args ...interface{}) (interface{}, error) {
+	return sc.s.Run(ctx, c.rdb, keys, args...).Result()
 }

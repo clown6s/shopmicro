@@ -13,6 +13,7 @@ import (
 type JWT struct {
 	Secret     string `yaml:"secret"`
 	Expiration int    `yaml:"expiration"`
+	Issuer     string `yaml:"issuer"`
 }
 
 type Config struct {
@@ -71,6 +72,11 @@ func (c *Config) Validate() error {
 	}
 	if c.JWT.Secret == "" {
 		return fmt.Errorf("jwt secret is required, set JWT_SECRET env or config.yaml")
+	}
+	// R4-P3-01: Mode 校验，与 Gateway 保持一致
+	mode := strings.ToLower(c.Mode)
+	if mode != "dev" && mode != "prod" && mode != "staging" {
+		return fmt.Errorf("invalid mode %q, expected dev/prod/staging", c.Mode)
 	}
 	return nil
 }

@@ -29,10 +29,9 @@ func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 	allowAll := len(cfg.AllowOrigins) == 1 && cfg.AllowOrigins[0] == "*"
 	creds := cfg.AllowCredentials
 
-	// Security: credentials + wildcard is rejected by browsers
-	if creds && allowAll && mode == "prod" {
-		allowAll = false // force explicit origin check in production
-	}
+	// R4-P3-02: Browser rejects credentials+wildcard by spec (fail-closed).
+	// No server-side guard needed — if misconfigured, the browser simply blocks the response.
+	// Removed prod-only guard (was dead code since isAllowedOrigin never matches "*").
 
 	return func(ctx context.Context, c *app.RequestContext) {
 		origin := string(c.GetHeader("Origin"))

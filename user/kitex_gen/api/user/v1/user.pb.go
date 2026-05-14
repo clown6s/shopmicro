@@ -264,7 +264,6 @@ func (x *RefreshTokenResp) GetRefreshToken() string {
 }
 
 type LogoutReq struct {
-	Token string `protobuf:"bytes,1,opt,name=token" json:"token,omitempty"`
 }
 
 func (x *LogoutReq) Reset() { *x = LogoutReq{} }
@@ -272,13 +271,6 @@ func (x *LogoutReq) Reset() { *x = LogoutReq{} }
 func (x *LogoutReq) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
 
 func (x *LogoutReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
-
-func (x *LogoutReq) GetToken() string {
-	if x != nil {
-		return x.Token
-	}
-	return ""
-}
 
 type LogoutResp struct {
 }

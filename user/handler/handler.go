@@ -81,8 +81,8 @@ type UserServiceImpl struct {
 	rdb       *redis.Client
 }
 
-func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int) *UserServiceImpl {
-	gen, err := jwt.NewGenerator(jwtSecret, time.Duration(jwtExpHours)*time.Hour)
+func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer string) *UserServiceImpl {
+	gen, err := jwt.NewGenerator(jwtSecret, time.Duration(jwtExpHours)*time.Hour, jwtIssuer)
 	if err != nil {
 		logger.Fatalf("init jwt generator failed: %v", err)
 	}
@@ -91,7 +91,7 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int) *UserServic
 	if rtExpHrs < 24 {
 		rtExpHrs = 168 // at least 7 days
 	}
-	rtGen, err := jwt.NewGenerator(jwtSecret, time.Duration(rtExpHrs)*time.Hour)
+	rtGen, err := jwt.NewGenerator(jwtSecret, time.Duration(rtExpHrs)*time.Hour, jwtIssuer)
 	if err != nil {
 		logger.Fatalf("init refresh token generator failed: %v", err)
 	}
@@ -184,10 +184,18 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 	if req.GetPassword() == "" {
 		return nil, errPasswordRequired
 	}
+	// R4-P3-08: 校验手机号格式，无效格式不查DB，返回统一错误信息
+	if !phoneRegex.MatchString(req.GetPhone()) {
+		_ = bcrypt.CompareHashAndPassword([]byte("$2a$12$dummyhashthatwontwork00000000000000000000000000000"), []byte(req.GetPassword()))
+		return nil, errPhonePwdWrong
+	}
 
 	user, err := s.userDal.GetByPhone(ctx, req.GetPhone())
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			// R4-P1-01: 防止时序侧信道 — 即使用户不存在也执行 dummy bcrypt，
+			// 使响应时间与"用户存在但密码错误"一致，防止通过计时攻击枚举手机号。
+			_ = bcrypt.CompareHashAndPassword([]byte("$2a$12$dummyhashthatwontwork00000000000000000000000000000"), []byte(req.GetPassword()))
 			logger.Warnf("login failed: phone not found (%s)", maskPhone(req.GetPhone()))
 			return nil, errPhonePwdWrong
 		}
@@ -387,17 +395,18 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
 	rtTokens, err := s.rdb.SMembers(ctx, rtSetKey)
 	if err != nil {
+		// R4-P1-02: 不删除 rtSetKey，保留反向映射供后续重试
 		logger.Errorf("delete user: failed to read refresh token set (user_id=%d): %v", req.GetId(), err)
-	} else if len(rtTokens) > 0 {
+	} else {
 		for _, t := range rtTokens {
 			rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, t)
-			if err := s.rdb.Del(ctx, rtKey); err != nil {
-				logger.Warnf("delete user: failed to revoke refresh token (user_id=%d): %v", req.GetId(), err)
+			if delErr := s.rdb.Del(ctx, rtKey); delErr != nil {
+				logger.Warnf("delete user: failed to revoke refresh token (user_id=%d): %v", req.GetId(), delErr)
 			}
 		}
+		// 仅在成功清理后删除反向映射 SET
+		_ = s.rdb.Del(ctx, rtSetKey)
 	}
-	// Delete the reverse mapping SET itself
-	s.rdb.Del(ctx, rtSetKey)
 
 	return &v1.DeleteUserResp{}, nil
 }
@@ -540,6 +549,15 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 		return nil, errRefreshTokenInvalid
 	}
 
+	// R4-P1-03: 验证用户仍存在且未被删除
+	if _, err := s.userDal.GetByID(ctx, userID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errRefreshTokenInvalid
+		}
+		logger.Errorf("refresh token: check user existence failed (user_id=%d): %v", userID, err)
+		return nil, errInternal
+	}
+
 	// Issue new access token
 	token, err := s.jwtGen.Generate(userID)
 	if err != nil {
@@ -570,13 +588,17 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 		return nil, errInternal
 	}
 
-	// P1-3 fix: Update reverse mapping SET — remove old, add new
+	// R4-P2-03: Atomically update reverse mapping SET (remove old, add new, reset TTL)
+	// using Lua script to prevent data loss if SRem succeeds but SAdd fails.
 	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", userID)
-	if err := s.rdb.SRem(ctx, rtSetKey, rt); err != nil {
-		// Non-fatal: old token already deleted by GetDel
-	}
-	if err := s.rdb.SAddExpire(ctx, rtSetKey, rtTTL, newRT); err != nil {
-		// Non-fatal
+	refreshRtSetLua := redis.NewScript(`
+redis.call('SREM', KEYS[1], ARGV[1])
+redis.call('SADD', KEYS[1], ARGV[2])
+redis.call('EXPIRE', KEYS[1], ARGV[3])
+return 1
+`)
+	if _, err := refreshRtSetLua.Run(ctx, s.rdb, []string{rtSetKey}, rt, newRT, int(rtTTL.Seconds())); err != nil {
+		logger.Warnf("refresh token: update reverse set failed (user_id=%d): %v", userID, err)
 	}
 
 	return &v1.RefreshTokenResp{

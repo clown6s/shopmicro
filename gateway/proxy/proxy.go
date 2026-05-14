@@ -78,8 +78,9 @@ type Option func(*Proxy)
 
 // WithJWT sets the JWT secret used to validate inbound tokens.
 // Panics at startup if the secret is too short (< 32 chars).
-func WithJWT(secret string) Option {
-	parser, err := pkgjwt.NewParser(secret)
+// issuer is optional — if non-empty, tokens with a different "iss" are rejected.
+func WithJWT(secret string, issuer string) Option {
+	parser, err := pkgjwt.NewParser(secret, issuer)
 	if err != nil {
 		logger.Fatalf("jwt parser init failed: %v", err)
 	}
@@ -561,16 +562,20 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		// Wrapped response:  {"code":0,"message":"","data":{...}}  (has "code" field)
 		// Raw protobuf response: {"id":1,"token":"..."}                 (no "code" field)
 		if s, ok := resp.(string); ok && s != "" {
-			// First: detect if response has "code" field
-			var raw map[string]json.RawMessage
-			hasCodeField := false
-			if err := json.Unmarshal([]byte(s), &raw); err == nil {
-				if _, found := raw["code"]; found {
-					hasCodeField = true
-				}
+			// R4-P3-06: Single-pass detection — use json.RawMessage to check for "code"
+			// field without a full second unmarshal.
+			var raw struct {
+				Code    json.RawMessage `json:"code"`
+				Message json.RawMessage `json:"message"`
+				Data    json.RawMessage `json:"data"`
+			}
+			if err := json.Unmarshal([]byte(s), &raw); err != nil {
+				// Unmarshal failed — return raw string as data
+				response.OK(c, s)
+				return
 			}
 
-			if hasCodeField {
+			if raw.Code != nil {
 				// Wrapped response: parse code/message/data
 				var downstream struct {
 					Code    int         `json:"code"`
