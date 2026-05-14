@@ -279,6 +279,11 @@ func Run(configPath string) error {
 		p.Handler(),
 	)
 
+	api.GET(
+		"/:service/:method",
+		p.Handler(),
+	)
+
 	api.PUT(
 		"/:service/:method",
 		p.Handler(),
