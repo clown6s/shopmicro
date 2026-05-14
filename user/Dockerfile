@@ -40,6 +40,10 @@ EXPOSE 8888 8899
 COPY --from=builder /user-bin ./
 COPY user/conf ./conf
 
+# 创建非 root 用户运行应用（安全最佳实践）
+RUN adduser -D -H -s /sbin/nologin appuser
+USER appuser
+
 # 环境变量覆盖敏感配置（无需重新构建镜像）
 # MYSQL_DSN, JWT_SECRET, REDIS_ADDR, REDIS_PASSWORD, ETCD_ADDRS
 ENV SERVER_ADDR=0.0.0.0:8888

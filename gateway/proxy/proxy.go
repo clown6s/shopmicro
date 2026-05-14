@@ -53,8 +53,6 @@ type Proxy struct {
 	jwtParser    *pkgjwt.Parser
 	rdb          *redis.Client
 	publicMethod map[string]bool
-	// P1-12: Allowed service names (nil = allow all discovered)
-	allowedServices map[string]bool
 	// P1-12: Allowed methods per service (nil = allow all methods)
 	allowedMethods map[string]map[string]bool
 

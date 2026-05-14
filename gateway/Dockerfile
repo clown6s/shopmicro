@@ -38,10 +38,14 @@ WORKDIR /app
 COPY --from=builder /gateway-bin ./
 COPY gateway/conf ./conf
 
+# 创建非 root 用户运行应用（安全最佳实践）
+RUN adduser -D -H -s /sbin/nologin appuser
+USER appuser
+
 # 复制服务 proto 文件（供 generic proxy 运行时使用）
 # proto 约定路径: {protoBase}{service}/api/{service}.proto
 # 设置 PROTO_BASE=/app/service-protos 以使用容器内路径
-COPY user/api /app/service-protos/user/api
+COPY --from=builder /build/user/api /app/service-protos/user/api
 
 EXPOSE 8080
 

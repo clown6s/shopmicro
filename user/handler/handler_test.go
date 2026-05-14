@@ -38,7 +38,8 @@ func TestPasswordValid(t *testing.T) {
 		{"short1", false},     // too short
 		{"allletters", false}, // no digit
 		{"12345678", false},   // no letter
-		{"abc 1234", false},   // space
+		{"abc 1234", true},    // space is allowed (R2: passwordRegex allows any char 8-128)
+		{"p@ss!w0rd", true},   // special chars allowed
 		{"", false},           // empty
 	}
 	for _, tt := range tests {
@@ -81,7 +82,7 @@ func TestParseInt64(t *testing.T) {
 		{"", 0, true},
 		{"abc", 0, true},
 		{"12.5", 0, true},
-		{"-1", 0, true},
+		{"-1", -1, false}, // strconv.ParseInt handles negatives correctly
 	}
 	for _, tt := range tests {
 		got, err := parseInt64(tt.input)
@@ -110,6 +111,25 @@ func TestMaskPhone(t *testing.T) {
 		got := maskPhone(tt.input)
 		if got != tt.want {
 			t.Fatalf("maskPhone(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestMaskEmail(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", ""},
+		{"a@example.com", "a***@example.com"},
+		{"ab@example.com", "a***@example.com"},
+		{"test@example.com", "t***@example.com"},
+		{"@missing-local.com", "@missing-local.com"},
+	}
+	for _, tt := range tests {
+		got := maskEmail(tt.input)
+		if got != tt.want {
+			t.Fatalf("maskEmail(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }

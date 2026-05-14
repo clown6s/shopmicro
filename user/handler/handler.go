@@ -213,15 +213,13 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 		return nil, errInternal
 	}
 
-	// P1-1: Store tokens in Redis SET (multi-device support).
+	// P3-R3: Store tokens in Redis SET (multi-device support).
+	// Use SAddExpire (pipeline) to prevent crash between SAdd and Expire
+	// leaving tokens without TTL (would cause tokens to never expire).
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, user.ID)
 	ttl := time.Duration(s.jwtExpHrs) * time.Hour
-	if err := s.rdb.SAdd(ctx, tokenKey, token); err != nil {
+	if err := s.rdb.SAddExpire(ctx, tokenKey, ttl, token); err != nil {
 		logger.Errorf("login: store token to redis failed: %v", err)
-		return nil, errInternal
-	}
-	if err := s.rdb.Expire(ctx, tokenKey, ttl); err != nil {
-		logger.Errorf("login: set token ttl failed: %v", err)
 		return nil, errInternal
 	}
 
@@ -231,6 +229,15 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 	if err := s.rdb.Set(ctx, rtKey, user.ID, rtTTL); err != nil {
 		logger.Errorf("login: store refresh token to redis failed: %v", err)
 		return nil, errInternal
+	}
+
+	// P1-3 fix: Maintain reverse mapping SET so DeleteUser can invalidate
+	// all refresh tokens for a user (prevents refresh token replay after
+	// account deletion). Key: shopmicro:user:rtset:{userID} → {refreshToken, ...}
+	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", user.ID)
+	if err := s.rdb.SAddExpire(ctx, rtSetKey, rtTTL, refreshToken); err != nil {
+		logger.Errorf("login: store refresh token to reverse set failed: %v", err)
+		// Non-fatal: access token still works; worst case refresh survives deletion until TTL
 	}
 
 	return &v1.LoginResp{
@@ -320,6 +327,9 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 		updates["email"] = v
 	}
 	if req.Remark != nil {
+		if len(req.GetRemark()) > 500 {
+			return nil, newBiz(errcode.CodeUserParam, "remark too long (max 500)")
+		}
 		updates["remark"] = req.GetRemark()
 	}
 
@@ -366,11 +376,28 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 
 	logger.Infof("user deleted: user_id=%d", req.GetId())
 
-	// P2-05: Clear ALL Redis tokens for this user (DELETE on SET key removes the whole set).
+	// P1-3 fix: Clear ALL Redis tokens for this user (DELETE on SET key removes the whole set).
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
 	if err := s.rdb.Del(ctx, tokenKey); err != nil {
 		logger.Errorf("delete user: failed to clear redis tokens (user_id=%d): %v", req.GetId(), err)
 	}
+
+	// P1-3 fix: Invalidate ALL refresh tokens for this user by reading
+	// the reverse mapping SET and deleting each individual refresh token key.
+	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
+	rtTokens, err := s.rdb.SMembers(ctx, rtSetKey)
+	if err != nil {
+		logger.Errorf("delete user: failed to read refresh token set (user_id=%d): %v", req.GetId(), err)
+	} else if len(rtTokens) > 0 {
+		for _, t := range rtTokens {
+			rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, t)
+			if err := s.rdb.Del(ctx, rtKey); err != nil {
+				logger.Warnf("delete user: failed to revoke refresh token (user_id=%d): %v", req.GetId(), err)
+			}
+		}
+	}
+	// Delete the reverse mapping SET itself
+	s.rdb.Del(ctx, rtSetKey)
 
 	return &v1.DeleteUserResp{}, nil
 }
@@ -396,19 +423,6 @@ func (s *UserServiceImpl) ListUser(ctx context.Context, req *v1.ListUserReq) (*v
 	}, nil
 }
 
-func toUserInfo(u *model.User) *v1.UserInfo {
-	return &v1.UserInfo{
-		Id:       u.ID,
-		RealName: u.RealName,
-		Avatar:   u.Avatar,
-		Gender:   v1.Gender(u.Gender),
-		Age:      int32(u.Age),
-		Phone:    u.Phone,
-		Email:    u.Email,
-		Remark:   u.Remark,
-	}
-}
-
 // toUserInfoMasked returns user info with phone and email masked.
 // Used by ListUser to prevent PII exposure.
 func toUserInfoMasked(u *model.User) *v1.UserInfo {
@@ -425,13 +439,14 @@ func toUserInfoMasked(u *model.User) *v1.UserInfo {
 }
 
 // maskEmail masks email: a***@example.com
+// For any local part, shows first char + "***" + domain.
 func maskEmail(email string) string {
 	if email == "" {
 		return ""
 	}
 	at := strings.Index(email, "@")
-	if at <= 1 {
-		return email
+	if at < 1 {
+		return email // no local part before "@"
 	}
 	return email[:1] + "***" + email[at:]
 }
@@ -539,15 +554,11 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 		return nil, errInternal
 	}
 
-	// Store new access token in user's token SET
+	// Store new access token in user's token SET (atomic pipeline)
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, userID)
 	ttl := time.Duration(s.jwtExpHrs) * time.Hour
-	if err := s.rdb.SAdd(ctx, tokenKey, token); err != nil {
+	if err := s.rdb.SAddExpire(ctx, tokenKey, ttl, token); err != nil {
 		logger.Errorf("refresh token: store new access token failed: %v", err)
-		return nil, errInternal
-	}
-	if err := s.rdb.Expire(ctx, tokenKey, ttl); err != nil {
-		logger.Errorf("refresh token: set token ttl failed: %v", err)
 		return nil, errInternal
 	}
 
@@ -557,6 +568,15 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 	if err := s.rdb.Set(ctx, newRTKey, userID, rtTTL); err != nil {
 		logger.Errorf("refresh token: store new refresh token failed: %v", err)
 		return nil, errInternal
+	}
+
+	// P1-3 fix: Update reverse mapping SET — remove old, add new
+	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", userID)
+	if err := s.rdb.SRem(ctx, rtSetKey, rt); err != nil {
+		// Non-fatal: old token already deleted by GetDel
+	}
+	if err := s.rdb.SAddExpire(ctx, rtSetKey, rtTTL, newRT); err != nil {
+		// Non-fatal
 	}
 
 	return &v1.RefreshTokenResp{

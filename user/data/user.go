@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"shopmicro/user/model"
+
+	"shopmicro/pkg/logger"
 )
 
 type UserDal struct {
@@ -25,8 +27,13 @@ func (d *UserDal) Create(ctx context.Context, user *model.User) error {
 	if err != nil {
 		return err
 	}
-	id, _ := result.LastInsertId()
-	user.ID = id
+	id, err := result.LastInsertId()
+	if err != nil {
+		logger.Warnf("create user: LastInsertId failed: %v", err)
+		user.ID = 0
+	} else {
+		user.ID = id
+	}
 	return nil
 }
 

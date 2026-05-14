@@ -271,18 +271,9 @@ func Run(configPath string) error {
 
 	api := h.Group("/api/v1")
 
-	// P1-15: Login endpoint gets stricter rate limiting
-	api.POST(
-		"/user/Login",
-		middleware.EndpointRateLimitMiddleware(rl, "user/Login"),
-		p.Handler(),
-	)
-
-	api.GET(
-		"/:service/:method",
-		p.Handler(),
-	)
-
+	// P1-15: Login endpoint — per-endpoint rate limit is enforced in
+	// proxy.Handler() via WithEndpointRateLimit, so no additional middleware
+	// is needed here. The generic routes below handle all methods uniformly.
 	api.POST(
 		"/:service/:method",
 		p.Handler(),

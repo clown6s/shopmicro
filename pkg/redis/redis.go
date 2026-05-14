@@ -124,6 +124,23 @@ func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) erro
 	return c.rdb.Expire(ctx, key, ttl).Err()
 }
 
+// SAddExpire atomically adds members to a SET and sets its TTL.
+// Uses a Redis pipeline so SAdd and Expire are sent together,
+// preventing the race where a process crash between SAdd and Expire
+// leaves the SET without a TTL (tokens would never expire).
+func (c *Client) SAddExpire(ctx context.Context, key string, ttl time.Duration, members ...interface{}) error {
+	pipe := c.rdb.Pipeline()
+	pipe.SAdd(ctx, key, members...)
+	pipe.Expire(ctx, key, ttl)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// SMembers returns all members of a Redis SET.
+func (c *Client) SMembers(ctx context.Context, key string) ([]string, error) {
+	return c.rdb.SMembers(ctx, key).Result()
+}
+
 // GetDel atomically gets the value of a key and deletes it.
 // Requires Redis 6.2+.
 func (c *Client) GetDel(ctx context.Context, key string) (string, error) {
