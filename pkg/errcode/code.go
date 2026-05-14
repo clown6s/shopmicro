@@ -23,6 +23,7 @@ const (
 	CodeUserUnauthorized  uint32 = 10014
 	CodeUserForbidden     uint32 = 10015
 	CodeUserEmailFormat   uint32 = 10016
+	CodeUserParam         uint32 = 10017 // 参数校验失败（字段超长、格式错误等）
 )
 
 // Product 服务: 20000 - 29999 (预留)

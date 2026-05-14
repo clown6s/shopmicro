@@ -27,9 +27,15 @@ func ReadyHandler(rdb *redis.Client, etcdClient *clientv3.Client) app.HandlerFun
 	return func(ctx context.Context, c *app.RequestContext) {
 		failed := make([]string, 0)
 
-		// Check Redis
-		if rdb == nil || !rdb.Ping(ctx) {
-			failed = append(failed, "redis")
+		// Check Redis — with independent timeout to avoid blocking on dead connections
+		if rdb != nil {
+			pingCtx, pingCancel := context.WithTimeout(ctx, 2*time.Second)
+			defer pingCancel()
+			if !rdb.Ping(pingCtx) {
+				failed = append(failed, "redis")
+			}
+		} else {
+			failed = append(failed, "redis (nil)")
 		}
 
 		// Check Etcd — lightweight Get with short timeout

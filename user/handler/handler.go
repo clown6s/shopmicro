@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bytedance/gopkg/cloud/metainfo"
@@ -47,8 +49,8 @@ var phoneRegex = regexp.MustCompile(`^1[3-9]\d{9}$`)
 // emailRegex validates basic email format (RFC 5322 simplified)
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
-// passwordRegex enforces at least one letter + one digit, 8-128 chars
-var passwordRegex = regexp.MustCompile(`^[a-zA-Z\d]{8,128}$`)
+// passwordRegex enforces at least one letter + one digit + special chars ok, 8-128 chars
+var passwordRegex = regexp.MustCompile(`^.{8,128}$`)
 
 // passwordValid checks that the password contains at least one letter AND one digit.
 func passwordValid(pwd string) bool {
@@ -131,6 +133,12 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 	if req.GetEmail() != "" && !emailRegex.MatchString(req.GetEmail()) {
 		return nil, errEmailFormat
 	}
+	if len(req.GetRealName()) > 64 {
+		return nil, newBiz(errcode.CodeUserParam, "realName too long (max 64)")
+	}
+	if len(req.GetEmail()) > 128 {
+		return nil, newBiz(errcode.CodeUserParam, "email too long (max 128)")
+	}
 
 	hashed, err := bcrypt.GenerateFromPassword([]byte(req.GetPassword()), 12) // P1-21: cost 12
 	if err != nil {
@@ -145,6 +153,14 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 		Age:      int8(req.GetAge()),
 		Phone:    req.GetPhone(),
 		Email:    req.GetEmail(),
+	}
+
+	// 范围校验
+	if user.Gender < 0 || user.Gender > 3 {
+		return nil, newBiz(errcode.CodeUserParam, "gender must be 0-3")
+	}
+	if req.GetAge() < 0 || req.GetAge() > 150 {
+		return nil, newBiz(errcode.CodeUserParam, "age must be 0-150")
 	}
 
 	// P0-04: Rely on DB unique constraint for phone uniqueness.
@@ -201,16 +217,20 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, user.ID)
 	ttl := time.Duration(s.jwtExpHrs) * time.Hour
 	if err := s.rdb.SAdd(ctx, tokenKey, token); err != nil {
-		logger.Warnf("login: store token to redis failed (user still logged in): %v", err)
-	} else if err := s.rdb.Expire(ctx, tokenKey, ttl); err != nil {
-		logger.Warnf("login: set token ttl failed: %v", err)
+		logger.Errorf("login: store token to redis failed: %v", err)
+		return nil, errInternal
+	}
+	if err := s.rdb.Expire(ctx, tokenKey, ttl); err != nil {
+		logger.Errorf("login: set token ttl failed: %v", err)
+		return nil, errInternal
 	}
 
 	// Store refresh token in Redis (1:1 mapping: refreshToken -> userID)
 	rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, refreshToken)
 	rtTTL := time.Duration(s.rtExpHrs) * time.Hour
 	if err := s.rdb.Set(ctx, rtKey, user.ID, rtTTL); err != nil {
-		logger.Warnf("login: store refresh token to redis failed: %v", err)
+		logger.Errorf("login: store refresh token to redis failed: %v", err)
+		return nil, errInternal
 	}
 
 	return &v1.LoginResp{
@@ -257,16 +277,30 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 	updates := make(map[string]interface{})
 
 	if req.RealName != nil {
+		if len(req.GetRealName()) > 64 {
+			return nil, newBiz(errcode.CodeUserParam, "realName too long (max 64)")
+		}
 		updates["real_name"] = req.GetRealName()
 	}
 	if req.Avatar != nil {
+		if len(req.GetAvatar()) > 512 {
+			return nil, newBiz(errcode.CodeUserParam, "avatar too long (max 512)")
+		}
 		updates["avatar"] = req.GetAvatar()
 	}
 	if req.Gender != nil {
-		updates["gender"] = int8(req.GetGender())
+		g := int8(req.GetGender())
+		if g < 0 || g > 3 {
+			return nil, newBiz(errcode.CodeUserParam, "gender must be 0-3")
+		}
+		updates["gender"] = g
 	}
 	if req.Age != nil {
-		updates["age"] = int8(req.GetAge())
+		a := req.GetAge()
+		if a < 0 || a > 150 {
+			return nil, newBiz(errcode.CodeUserParam, "age must be 0-150")
+		}
+		updates["age"] = int8(a)
 	}
 	if req.Phone != nil {
 		v := req.GetPhone()
@@ -279,6 +313,9 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 		v := req.GetEmail()
 		if v != "" && !emailRegex.MatchString(v) {
 			return nil, errEmailFormat
+		}
+		if len(v) > 128 {
+			return nil, newBiz(errcode.CodeUserParam, "email too long (max 128)")
 		}
 		updates["email"] = v
 	}
@@ -327,10 +364,12 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 		return nil, errInternal
 	}
 
+	logger.Infof("user deleted: user_id=%d", req.GetId())
+
 	// P2-05: Clear ALL Redis tokens for this user (DELETE on SET key removes the whole set).
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
 	if err := s.rdb.Del(ctx, tokenKey); err != nil {
-		logger.Warnf("delete user: failed to clear redis tokens (user_id=%d): %v", req.GetId(), err)
+		logger.Errorf("delete user: failed to clear redis tokens (user_id=%d): %v", req.GetId(), err)
 	}
 
 	return &v1.DeleteUserResp{}, nil
@@ -346,7 +385,7 @@ func (s *UserServiceImpl) ListUser(ctx context.Context, req *v1.ListUserReq) (*v
 
 	list := make([]*v1.UserInfo, 0, len(users))
 	for _, u := range users {
-		list = append(list, toUserInfo(u))
+		list = append(list, toUserInfoMasked(u))
 	}
 
 	return &v1.ListUserResp{
@@ -370,6 +409,33 @@ func toUserInfo(u *model.User) *v1.UserInfo {
 	}
 }
 
+// toUserInfoMasked returns user info with phone and email masked.
+// Used by ListUser to prevent PII exposure.
+func toUserInfoMasked(u *model.User) *v1.UserInfo {
+	return &v1.UserInfo{
+		Id:       u.ID,
+		RealName: u.RealName,
+		Avatar:   u.Avatar,
+		Gender:   v1.Gender(u.Gender),
+		Age:      int32(u.Age),
+		Phone:    maskPhone(u.Phone),
+		Email:    maskEmail(u.Email),
+		Remark:   u.Remark,
+	}
+}
+
+// maskEmail masks email: a***@example.com
+func maskEmail(email string) string {
+	if email == "" {
+		return ""
+	}
+	at := strings.Index(email, "@")
+	if at <= 1 {
+		return email
+	}
+	return email[:1] + "***" + email[at:]
+}
+
 // =========================
 // helpers
 // =========================
@@ -387,24 +453,9 @@ func isDuplicateKeyError(err error) bool {
 	return false
 }
 
-// parseInt64 parses a string to int64.
-// Returns an error if the string contains any non-digit character or is empty.
+// parseInt64 parses a string to int64 using strconv.
 func parseInt64(s string) (int64, error) {
-	if s == "" {
-		return 0, fmt.Errorf("parseInt64: empty string")
-	}
-	var n int64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("parseInt64: invalid character %c", c)
-		}
-		// 溢出检查
-		if n > (1<<63-1)/10 {
-			return 0, fmt.Errorf("parseInt64: overflow")
-		}
-		n = n*10 + int64(c-'0')
-	}
-	return n, nil
+	return strconv.ParseInt(s, 10, 64)
 }
 
 // maskPhone 脱敏手机号：保留后4位，其余用 * 代替
@@ -441,7 +492,8 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, userID)
 	// P1-1: Remove only the current device's token from the SET.
 	if err := s.rdb.SRem(ctx, tokenKey, tokenStr); err != nil {
-		logger.Warnf("logout: failed to remove token from redis (user_id=%d): %v", userID, err)
+		logger.Errorf("logout: failed to remove token from redis (user_id=%d): %v", userID, err)
+		return nil, errInternal
 	}
 
 	return &v1.LogoutResp{}, nil
@@ -491,16 +543,20 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, userID)
 	ttl := time.Duration(s.jwtExpHrs) * time.Hour
 	if err := s.rdb.SAdd(ctx, tokenKey, token); err != nil {
-		logger.Warnf("refresh token: store new access token failed: %v", err)
-	} else if err := s.rdb.Expire(ctx, tokenKey, ttl); err != nil {
-		logger.Warnf("refresh token: set token ttl failed: %v", err)
+		logger.Errorf("refresh token: store new access token failed: %v", err)
+		return nil, errInternal
+	}
+	if err := s.rdb.Expire(ctx, tokenKey, ttl); err != nil {
+		logger.Errorf("refresh token: set token ttl failed: %v", err)
+		return nil, errInternal
 	}
 
 	// Store new refresh token
 	newRTKey := fmt.Sprintf("%s%s", refreshTokenPrefix, newRT)
 	rtTTL := time.Duration(s.rtExpHrs) * time.Hour
 	if err := s.rdb.Set(ctx, newRTKey, userID, rtTTL); err != nil {
-		logger.Warnf("refresh token: store new refresh token failed: %v", err)
+		logger.Errorf("refresh token: store new refresh token failed: %v", err)
+		return nil, errInternal
 	}
 
 	return &v1.RefreshTokenResp{

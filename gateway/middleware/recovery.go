@@ -21,7 +21,8 @@ func RecoveryMiddleware() app.HandlerFunc {
 			if err := recover(); err != nil {
 
 				logger.Errorf(
-					"[PANIC] err=%v stack=%s",
+					"[PANIC] method=%s path=%s err=%v stack=%s",
+					string(c.Method()), string(c.Path()),
 					err,
 					string(debug.Stack()),
 				)

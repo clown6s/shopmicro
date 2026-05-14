@@ -112,6 +112,13 @@ func (c *Config) Validate() error {
 	if c.JWT.Secret == "" {
 		return fmt.Errorf("jwt secret is required, set JWT_SECRET env or config.yaml")
 	}
+	if len(c.Etcd.Addrs) == 0 {
+		return fmt.Errorf("etcd addresses are required, set ETCD_ADDRS env or config.yaml")
+	}
+	mode := strings.ToLower(c.Mode)
+	if mode != "dev" && mode != "prod" && mode != "staging" {
+		return fmt.Errorf("invalid mode %q, expected dev/prod/staging", c.Mode)
+	}
 	return nil
 }
 

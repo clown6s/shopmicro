@@ -22,8 +22,6 @@ import (
 	"github.com/cloudwego/kitex/pkg/transmeta"
 	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
 	"github.com/sony/gobreaker"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -39,10 +37,6 @@ const (
 	etcdRegistryPrefix = "kitex/registry-etcd"
 	tokenPrefix        = "shopmicro:user:token:"
 )
-
-// ErrBreakerOpen is returned by Call() when the circuit breaker for a
-// service is open (downstream has failed too many times consecutively).
-var ErrBreakerOpen = errors.New("circuit breaker open")
 
 // ServiceClient bundles a kitex generic client with its descriptor.
 type ServiceClient struct {
@@ -67,6 +61,10 @@ type Proxy struct {
 	// perServiceCB stores one circuit breaker per service.
 	perServiceCB sync.Map // map[string]*gobreaker.CircuitBreaker
 	cbSettings   *cbConfig
+
+	// epRateLimitFn checks per-endpoint rate limits from the proxy handler.
+	// Returns true if allowed, false if rejected. nil = no endpoint limiting.
+	epRateLimitFn func(ctx context.Context, endpointKey, ip string) bool
 }
 
 // cbConfig holds circuit breaker configuration.
@@ -101,7 +99,7 @@ func WithRedis(rdb *redis.Client) Option {
 
 // WithCircuitBreaker enables per-service circuit breaking on RPC calls.
 // When too many consecutive RPC failures occur for a service, subsequent
-// calls are fast-rejected with ErrBreakerOpen instead of waiting for timeout.
+// calls are fast-rejected with gobreaker.ErrOpenState instead of waiting for timeout.
 func WithCircuitBreaker(maxRequests int, interval, timeout time.Duration, consecutiveFailures uint32) Option {
 	return func(p *Proxy) {
 		p.cbSettings = &cbConfig{
@@ -110,6 +108,15 @@ func WithCircuitBreaker(maxRequests int, interval, timeout time.Duration, consec
 			timeout:             timeout,
 			consecutiveFailures: consecutiveFailures,
 		}
+	}
+}
+
+// WithEndpointRateLimit injects a per-endpoint rate limit checker.
+// The checker receives (ctx, "service/method", clientIP) and returns true=allowed.
+// This ensures endpoint limits are enforced regardless of HTTP method.
+func WithEndpointRateLimit(fn func(ctx context.Context, endpointKey, ip string) bool) Option {
+	return func(p *Proxy) {
+		p.epRateLimitFn = fn
 	}
 }
 
@@ -254,7 +261,7 @@ func (p *Proxy) getBreaker(service string) *gobreaker.CircuitBreaker {
 // so no manual retry loop is needed here — a single call suffices.
 //
 // If circuit breaker is enabled (via WithCircuitBreaker) and the breaker
-// for the service is open, returns ErrBreakerOpen immediately.
+// for the service is open, returns gobreaker.ErrOpenState immediately.
 func (p *Proxy) Call(
 	ctx context.Context,
 	service string,
@@ -366,7 +373,11 @@ func (p *Proxy) WatchServices(
 
 			// Watch channel closed (etcd connection lost or other error)
 			logger.Warnf("WatchServices: watch channel closed, reconnecting in %v: %v", backoff, err)
-			time.Sleep(backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
 			backoff *= 2
 			if backoff > maxBackoff {
 				backoff = maxBackoff
@@ -461,6 +472,16 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			}
 		}
 
+		// Per-endpoint rate limit (method-independent — works for GET/POST/PUT/DELETE).
+		if p.epRateLimitFn != nil {
+			epKey := service + "/" + method
+			if !p.epRateLimitFn(ctx, epKey, c.ClientIP()) {
+				response.Fail(c, http.StatusTooManyRequests, int(errcode.CodeGwRateLimit), "too many requests")
+				c.Abort()
+				return
+			}
+		}
+
 		// JWT authentication — skip for public methods.
 		if p.jwtParser != nil && !p.publicMethod[method] {
 			tokenStr, ok := bearerToken(string(c.GetHeader("Authorization")))
@@ -515,7 +536,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		resp, err := p.Call(ctx, service, method, body)
 		if err != nil {
 			// Circuit breaker is open — fast reject with 503.
-			if errors.Is(err, ErrBreakerOpen) {
+			if errors.Is(err, gobreaker.ErrOpenState) {
 				response.ServiceUnavailable(c)
 				return
 			}
@@ -558,7 +579,13 @@ func (p *Proxy) Handler() app.HandlerFunc {
 					Message string      `json:"message"`
 					Data    interface{} `json:"data"`
 				}
-				json.Unmarshal([]byte(s), &downstream)
+				if err := json.Unmarshal([]byte(s), &downstream); err != nil {
+					logger.Warnf("proxy: failed to unmarshal wrapped response: %v", err)
+					var data interface{}
+					json.Unmarshal([]byte(s), &data)
+					response.OK(c, data)
+					return
+				}
 
 				if downstream.Code != 0 {
 					// Error response — pass through with correct HTTP status
@@ -639,34 +666,6 @@ func extractServiceName(key, prefix string) string {
 		return ""
 	}
 	return parts[0]
-}
-
-// shouldRetryGRPC decides whether a gRPC call error is retryable, based on the
-// gRPC status code.  Only transient/network errors are retried; business errors
-// (e.g. INVALID_ARGUMENT, NOT_FOUND) are returned immediately to avoid duplicates.
-//
-// Retryable: DEADLINE_EXCEEDED, UNAVAILABLE, RESOURCE_EXHAUSTED.
-// NOT retryable: INTERNAL (server bug), INVALID_ARGUMENT, NOT_FOUND, etc.
-func shouldRetryGRPC(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	// Extract gRPC status code
-	st, ok := status.FromError(err)
-	if !ok {
-		// Not a gRPC error — treat as network error (retry).
-		return true
-	}
-
-	switch st.Code() {
-	case codes.DeadlineExceeded,
-		codes.Unavailable,
-		codes.ResourceExhausted:
-		return true
-	default:
-		return false
-	}
 }
 
 // newEtcdClient creates a minimal etcd v3 client.

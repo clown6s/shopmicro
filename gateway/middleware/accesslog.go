@@ -15,8 +15,16 @@ import (
 // AccessLogMiddleware records request latency and trace ID for every request.
 // It uses zap structured fields to prevent log injection attacks
 // (newline/carriage return in method or path).
+// Health check endpoints (/health, /ready) are skipped to reduce log noise.
 func AccessLogMiddleware() app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
+
+		// Skip health check endpoints to reduce log noise.
+		path := string(c.Path())
+		if path == "/health" || path == "/ready" {
+			c.Next(ctx)
+			return
+		}
 
 		start := time.Now()
 

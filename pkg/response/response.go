@@ -30,12 +30,10 @@ func OK(c *app.RequestContext, data interface{}) {
 }
 
 // BizErr sends a downstream business error using the parsed BizError.
+// Uses httpStatus() to map biz error codes to proper HTTP status codes
+// (e.g. 10014 Unauthorized → 401, 10015 Forbidden → 403).
 func BizErr(c *app.RequestContext, biz *errcode.BizError) {
-	statusCode := http.StatusBadRequest
-	if biz.Code >= 50000 {
-		statusCode = http.StatusInternalServerError
-	}
-	c.JSON(statusCode, R{Code: int(biz.Code), Message: biz.Message})
+	c.JSON(httpStatus(int(biz.Code)), R{Code: int(biz.Code), Message: biz.Message})
 }
 
 // Fail sends a generic error with custom HTTP status code.

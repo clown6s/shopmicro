@@ -222,6 +222,10 @@ func Run(configPath string) error {
 			cbTimeout,
 			uint32(cfg.CircuitBreaker.ConsecutiveFailures),
 		),
+
+		// Per-endpoint rate limit enforced in proxy handler (method-independent).
+		// Prevents GET bypass of Login's strict rate limit.
+		proxy.WithEndpointRateLimit(rl.NewEndpointCheckFn()),
 	)
 
 	// discover services

@@ -86,20 +86,49 @@ func (rl *RedisRateLimiter) SetEndpointLimit(endpointKey string, limit int, wind
 	rl.endpointOverrides[endpointKey] = &endpointLimit{limit: limit, window: w}
 }
 
+// GetEndpointLimit returns the per-endpoint limit if one is configured.
+func (rl *RedisRateLimiter) GetEndpointLimit(endpointKey string) *endpointLimit {
+	el, ok := rl.endpointOverrides[endpointKey]
+	if !ok {
+		return nil
+	}
+	return el
+}
+
+// NewEndpointCheckFn returns a function compatible with proxy.WithEndpointRateLimit.
+// It checks if the endpointKey has a per-endpoint override and applies strict rate limiting.
+func (rl *RedisRateLimiter) NewEndpointCheckFn() func(ctx context.Context, endpointKey, ip string) bool {
+	return func(ctx context.Context, endpointKey, ip string) bool {
+		el := rl.GetEndpointLimit(endpointKey)
+		if el == nil {
+			return true // no endpoint-specific limit configured
+		}
+		key := fmt.Sprintf("shopmicro:ratelimit:ep:%s:ip:%s", endpointKey, ip)
+		now := time.Now()
+		member := fmt.Sprintf("%d:%06d", now.UnixNano(), now.Nanosecond()%1000000)
+		return rl.allowWithConfig(ctx, key, now, el.window, el.limit, member)
+	}
+}
+
 // Allow checks whether a request from the given key is allowed.
 // P1-3: When Redis is down, FAIL CLOSED (reject requests)
 // instead of falling back to local rate limiter.
 // This prevents rate-limit bypass in distributed environments.
 func (rl *RedisRateLimiter) Allow(ctx context.Context, key string) bool {
 	now := time.Now()
-	windowStart := now.Add(-rl.window)
 	member := fmt.Sprintf("%d:%06d", now.UnixNano(), now.Nanosecond()%1000000)
+	return rl.allowWithConfig(ctx, key, now, rl.window, rl.limit, member)
+}
+
+// allowWithConfig checks rate limiting with custom window/limit.
+func (rl *RedisRateLimiter) allowWithConfig(ctx context.Context, key string, now time.Time, window time.Duration, limit int, member string) bool {
+	windowStart := now.Add(-window)
 
 	result, err := slidingWindowLua.Run(ctx, rl.rdb.RawClient(), []string{key},
 		windowStart.UnixMilli(),
 		now.UnixMilli(),
-		rl.limit,
-		rl.window.Milliseconds(),
+		limit,
+		window.Milliseconds(),
 		member,
 	).Int()
 

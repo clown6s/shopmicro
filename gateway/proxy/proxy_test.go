@@ -1,64 +1,9 @@
 package proxy
 
 import (
-	"errors"
 	"path/filepath"
 	"testing"
-
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
-
-func TestShouldRetryGRPC_NilError(t *testing.T) {
-	if shouldRetryGRPC(nil) {
-		t.Fatal("nil error should not be retryable")
-	}
-}
-
-func TestShouldRetryGRPC_NonGRPCError(t *testing.T) {
-	// Non-gRPC errors (network errors) are retryable
-	if !shouldRetryGRPC(errors.New("connection refused")) {
-		t.Fatal("non-gRPC error should be retryable")
-	}
-}
-
-func TestShouldRetryGRPC_RetryableCodes(t *testing.T) {
-	retryable := []codes.Code{
-		codes.DeadlineExceeded,
-		codes.Unavailable,
-		codes.ResourceExhausted,
-	}
-	for _, code := range retryable {
-		err := status.Error(code, "test")
-		if !shouldRetryGRPC(err) {
-			t.Fatalf("code %v should be retryable", code)
-		}
-	}
-}
-
-func TestShouldRetryGRPC_NonRetryableCodes(t *testing.T) {
-	nonRetryable := []codes.Code{
-		codes.Internal,
-		codes.InvalidArgument,
-		codes.NotFound,
-		codes.PermissionDenied,
-		codes.Unauthenticated,
-		codes.AlreadyExists,
-		codes.FailedPrecondition,
-		codes.Aborted,
-		codes.OutOfRange,
-		codes.Unimplemented,
-		codes.DataLoss,
-		codes.Canceled,
-		codes.Unknown,
-	}
-	for _, code := range nonRetryable {
-		err := status.Error(code, "test")
-		if shouldRetryGRPC(err) {
-			t.Fatalf("code %v should NOT be retryable", code)
-		}
-	}
-}
 
 func TestBearerToken_Valid(t *testing.T) {
 	token, ok := bearerToken("Bearer abc123")
