@@ -170,33 +170,3 @@ func RateLimitMiddleware(rl *RedisRateLimiter) app.HandlerFunc {
 		c.Next(ctx)
 	}
 }
-
-// P1-15: EndpointRateLimitMiddleware creates a middleware that applies
-// a specific rate limit to a single endpoint (service/method).
-// Use this for sensitive endpoints like Login.
-func EndpointRateLimitMiddleware(rl *RedisRateLimiter, endpointKey string) app.HandlerFunc {
-	el, ok := rl.endpointOverrides[endpointKey]
-	if !ok {
-		// No override configured, fall through to global rate limit
-		return func(ctx context.Context, c *app.RequestContext) {
-			c.Next(ctx)
-		}
-	}
-	// Create a dedicated limiter for this endpoint
-	dedicated := &RedisRateLimiter{
-		rdb:    rl.rdb,
-		limit:  el.limit,
-		window: el.window,
-	}
-	return func(ctx context.Context, c *app.RequestContext) {
-		ip := getClientIP(c)
-		key := fmt.Sprintf("shopmicro:ratelimit:ep:%s:ip:%s", endpointKey, ip)
-
-		if !dedicated.Allow(ctx, key) {
-			response.TooManyRequests(c)
-			c.Abort()
-			return
-		}
-		c.Next(ctx)
-	}
-}
