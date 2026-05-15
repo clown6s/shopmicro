@@ -1,4 +1,4 @@
-.PHONY: gen user gateway tidy clean
+.PHONY: gen user gateway tidy clean setup
 
 gen:
 	cd user && kitex -module shopmicro/user -service user -type protobuf api/user.proto
@@ -13,6 +13,12 @@ tidy:
 	cd pkg && go mod tidy
 	cd user && go mod tidy
 	cd gateway && go mod tidy
+
+setup: go.work
+	@echo "setup: workspace ready (run 'go work sync' to download dependencies)"
+
+go.work:
+	@echo 'go 1.26.1\n\nuse (\n\t./gateway\n\t./pkg\n\t./user\n)' > go.work
 
 clean:
 	rm -rf user/kitex_gen gateway/kitex_gen

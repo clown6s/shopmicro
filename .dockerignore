@@ -1,0 +1,34 @@
+# Version control
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go build artifacts
+*.exe
+*.exe~
+*.test
+*.out
+vendor
+
+# Generated code
+*/kitex_gen/
+
+# Logs
+*.log
+
+# Environment files (secrets)
+.env
+*.env
+
+# Docker files (each Dockerfile has its own build context)
+gateway/Dockerfile
+user/Dockerfile

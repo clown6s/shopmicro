@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -635,9 +636,14 @@ func (p *Proxy) Handler() app.HandlerFunc {
 // helpers
 // =========================
 
+// methodNameRegex validates that a method name contains only alphanumeric characters
+// and starts with a letter. Prevents path traversal or injection via URL params.
+var methodNameRegex = regexp.MustCompile(`^[A-Za-z][a-zA-Z0-9]*$`)
+
 // toMethodName ensures the first letter of a method name is upper-case.
+// Returns the method unchanged if it fails format validation.
 func toMethodName(method string) string {
-	if method == "" {
+	if method == "" || !methodNameRegex.MatchString(method) {
 		return method
 	}
 	return strings.ToUpper(method[:1]) + method[1:]

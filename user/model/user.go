@@ -8,7 +8,7 @@ type User struct {
 	RealName   string    `json:"real_name"`
 	Avatar     string    `json:"avatar"`
 	Gender     int8      `json:"gender"`
-	Age        int8      `json:"age"`
+	Age        int16     `json:"age"`
 	Phone      string    `json:"phone"`
 	Email      string    `json:"email"`
 	CreateTime time.Time `json:"create_time"`

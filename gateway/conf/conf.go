@@ -122,6 +122,10 @@ func (c *Config) Validate() error {
 	if mode != "dev" && mode != "prod" && mode != "staging" {
 		return fmt.Errorf("invalid mode %q, expected dev/prod/staging", c.Mode)
 	}
+	// P2-08: Production requires Redis password
+	if mode == "prod" && c.Redis.Password == "" {
+		return fmt.Errorf("redis password is required in production mode, set REDIS_PASSWORD env")
+	}
 	return nil
 }
 

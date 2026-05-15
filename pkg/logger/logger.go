@@ -36,7 +36,7 @@ func Init(mode string) error {
 
 func C() *zap.SugaredLogger {
 	if L == nil {
-		_ = Init("dev")
+		return zap.NewNop().Sugar()
 	}
 	return L
 }

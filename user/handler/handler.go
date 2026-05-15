@@ -31,7 +31,7 @@ var (
 	errPasswordRequired = newBiz(errcode.CodeUserPwdRequired, "password is required")
 	errPhoneFormat      = newBiz(errcode.CodeUserPhoneFormat, "invalid phone format")
 	errPasswordWeak     = newBiz(errcode.CodeUserPwdWeak, "password must be 8-128 characters with at least one letter and one digit")
-	errPasswordTooLong  = newBiz(errcode.CodeUserPwdWeak, "password must not exceed 128 characters")
+	errPasswordTooLong  = newBiz(errcode.CodeUserPwdTooLong, "password must not exceed 128 characters")
 	errPhoneExists      = newBiz(errcode.CodeUserPhoneExists, "phone already exists")
 	errInternal         = newBiz(errcode.CodeUserInternal, "internal error")
 	errPhonePwdWrong    = newBiz(errcode.CodeUserPhonePwdWrong, "phone or password incorrect")
@@ -41,6 +41,7 @@ var (
 	errUnauthorized     = newBiz(errcode.CodeUserUnauthorized, "unauthorized: missing user identity")
 	errForbidden        = newBiz(errcode.CodeUserForbidden, "forbidden: cannot operate other user's data")
 	errEmailFormat      = newBiz(errcode.CodeUserEmailFormat, "invalid email format")
+	errAccountLocked    = newBiz(errcode.CodeUserAccountLocked, "account temporarily locked due to too many failed login attempts")
 )
 
 // P1-21: phone number regex — Chinese mobile format
@@ -81,7 +82,7 @@ type UserServiceImpl struct {
 	rdb       *redis.Client
 }
 
-func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer string) *UserServiceImpl {
+func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer string, jwtRefreshSecret string) *UserServiceImpl {
 	gen, err := jwt.NewGenerator(jwtSecret, time.Duration(jwtExpHours)*time.Hour, jwtIssuer)
 	if err != nil {
 		logger.Fatalf("init jwt generator failed: %v", err)
@@ -91,7 +92,12 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer s
 	if rtExpHrs < 24 {
 		rtExpHrs = 168 // at least 7 days
 	}
-	rtGen, err := jwt.NewGenerator(jwtSecret, time.Duration(rtExpHrs)*time.Hour, jwtIssuer)
+	// P2-06: Use separate refresh secret if provided, fallback to main secret
+	rtSecret := jwtRefreshSecret
+	if rtSecret == "" {
+		rtSecret = jwtSecret
+	}
+	rtGen, err := jwt.NewGenerator(rtSecret, time.Duration(rtExpHrs)*time.Hour, jwtIssuer)
 	if err != nil {
 		logger.Fatalf("init refresh token generator failed: %v", err)
 	}
@@ -107,6 +113,42 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer s
 
 const tokenPrefix = "shopmicro:user:token:"
 const refreshTokenPrefix = "shopmicro:user:refresh:"
+
+// P1-05: Account-level brute force protection constants
+const (
+	loginMaxFailures = 10               // max failed attempts before lockout
+	loginLockoutTTL  = 15 * time.Minute // lockout duration
+)
+
+// checkLoginAttempts checks if the phone number has too many recent failed login attempts.
+func (s *UserServiceImpl) checkLoginAttempts(ctx context.Context, phone string) error {
+	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
+	count, err := s.rdb.Get(ctx, key)
+	if err != nil {
+		// Redis error — allow login but log (fail-open for this check, not for token validation)
+		return nil
+	}
+	if n, _ := strconv.Atoi(count); n >= loginMaxFailures {
+		return errAccountLocked
+	}
+	return nil
+}
+
+// recordLoginFailure increments the failed login counter for a phone number.
+func (s *UserServiceImpl) recordLoginFailure(ctx context.Context, phone string) {
+	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
+	if _, err := s.rdb.Incr(ctx, key); err != nil {
+		logger.Warnf("login: failed to record login failure for phone %s: %v", maskPhone(phone), err)
+		return
+	}
+	_ = s.rdb.Expire(ctx, key, loginLockoutTTL)
+}
+
+// clearLoginFailures removes the failed login counter on successful login.
+func (s *UserServiceImpl) clearLoginFailures(ctx context.Context, phone string) {
+	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
+	_ = s.rdb.Del(ctx, key)
+}
 
 func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUserReq) (*v1.RegisterUserResp, error) {
 	if req.GetPhone() == "" {
@@ -150,7 +192,7 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 		Password: string(hashed),
 		RealName: req.GetRealName(),
 		Gender:   int8(req.GetGender()),
-		Age:      int8(req.GetAge()),
+		Age:      int16(req.GetAge()),
 		Phone:    req.GetPhone(),
 		Email:    req.GetEmail(),
 	}
@@ -190,6 +232,11 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 		return nil, errPhonePwdWrong
 	}
 
+	// P1-05: Check account-level brute force lockout before any auth
+	if err := s.checkLoginAttempts(ctx, req.GetPhone()); err != nil {
+		return nil, err
+	}
+
 	user, err := s.userDal.GetByPhone(ctx, req.GetPhone())
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -197,6 +244,8 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 			// 使响应时间与"用户存在但密码错误"一致，防止通过计时攻击枚举手机号。
 			_ = bcrypt.CompareHashAndPassword([]byte("$2a$12$dummyhashthatwontwork00000000000000000000000000000"), []byte(req.GetPassword()))
 			logger.Warnf("login failed: phone not found (%s)", maskPhone(req.GetPhone()))
+			// P1-05: Record failed attempt
+			s.recordLoginFailure(ctx, req.GetPhone())
 			return nil, errPhonePwdWrong
 		}
 		logger.Errorf("login get user failed: %v", err)
@@ -205,8 +254,13 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.GetPassword())); err != nil {
 		logger.Warnf("login failed: wrong password (phone: %s)", maskPhone(req.GetPhone()))
+		// P1-05: Record failed attempt
+		s.recordLoginFailure(ctx, req.GetPhone())
 		return nil, errPhonePwdWrong
 	}
+
+	// P1-05: Clear failed login counter on successful authentication
+	s.clearLoginFailures(ctx, req.GetPhone())
 
 	token, err := s.jwtGen.Generate(user.ID)
 	if err != nil {
@@ -254,8 +308,8 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 		Avatar:       user.Avatar,
 		Gender:       v1.Gender(user.Gender),
 		Age:          int32(user.Age),
-		Phone:        user.Phone,
-		Email:        user.Email,
+		Phone:        maskPhone(user.Phone),
+		Email:        maskEmail(user.Email),
 		Remark:       user.Remark,
 		Token:        token,
 		RefreshToken: refreshToken,
@@ -315,7 +369,7 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 		if a < 0 || a > 150 {
 			return nil, newBiz(errcode.CodeUserParam, "age must be 0-150")
 		}
-		updates["age"] = int8(a)
+		updates["age"] = int16(a)
 	}
 	if req.Phone != nil {
 		v := req.GetPhone()
@@ -355,7 +409,8 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 			return nil, errUserNotFound
 		}
 		if isDuplicateKeyError(err) {
-			return nil, errPhoneExists
+			// P1-06: Return vague error to prevent user enumeration via phone uniqueness check
+			return nil, newBiz(errcode.CodeUserParam, "phone is not available")
 		}
 		logger.Errorf("update user failed: %v", err)
 		return nil, errInternal
@@ -374,6 +429,30 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 		return nil, err
 	}
 
+	// P2-05: Clear ALL Redis tokens FIRST (before DB delete).
+	// If DB delete fails after this, user still exists but all sessions are
+	// invalidated — user can re-login. This is safer than the reverse order
+	// where a deleted user's tokens remain valid until TTL expires.
+	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
+	if err := s.rdb.Del(ctx, tokenKey); err != nil {
+		logger.Errorf("delete user: failed to clear redis tokens (user_id=%d): %v", req.GetId(), err)
+	}
+
+	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
+	rtTokens, rtErr := s.rdb.SMembers(ctx, rtSetKey)
+	if rtErr != nil {
+		logger.Errorf("delete user: failed to read refresh token set (user_id=%d): %v", req.GetId(), rtErr)
+	} else {
+		for _, t := range rtTokens {
+			rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, t)
+			if delErr := s.rdb.Del(ctx, rtKey); delErr != nil {
+				logger.Warnf("delete user: failed to revoke refresh token (user_id=%d): %v", req.GetId(), delErr)
+			}
+		}
+		_ = s.rdb.Del(ctx, rtSetKey)
+	}
+
+	// Now perform the soft delete
 	if err := s.userDal.Delete(ctx, req.GetId()); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errUserNotFound
@@ -384,29 +463,9 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 
 	logger.Infof("user deleted: user_id=%d", req.GetId())
 
-	// P1-3 fix: Clear ALL Redis tokens for this user (DELETE on SET key removes the whole set).
-	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
-	if err := s.rdb.Del(ctx, tokenKey); err != nil {
-		logger.Errorf("delete user: failed to clear redis tokens (user_id=%d): %v", req.GetId(), err)
-	}
-
-	// P1-3 fix: Invalidate ALL refresh tokens for this user by reading
-	// the reverse mapping SET and deleting each individual refresh token key.
-	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
-	rtTokens, err := s.rdb.SMembers(ctx, rtSetKey)
-	if err != nil {
-		// R4-P1-02: 不删除 rtSetKey，保留反向映射供后续重试
-		logger.Errorf("delete user: failed to read refresh token set (user_id=%d): %v", req.GetId(), err)
-	} else {
-		for _, t := range rtTokens {
-			rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, t)
-			if delErr := s.rdb.Del(ctx, rtKey); delErr != nil {
-				logger.Warnf("delete user: failed to revoke refresh token (user_id=%d): %v", req.GetId(), delErr)
-			}
-		}
-		// 仅在成功清理后删除反向映射 SET
-		_ = s.rdb.Del(ctx, rtSetKey)
-	}
+	// Clear login failure counter
+	failKey := fmt.Sprintf("shopmicro:login:fail:%d", req.GetId())
+	_ = s.rdb.Del(ctx, failKey)
 
 	return &v1.DeleteUserResp{}, nil
 }

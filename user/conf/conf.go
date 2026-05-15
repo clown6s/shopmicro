@@ -11,9 +11,10 @@ import (
 )
 
 type JWT struct {
-	Secret     string `yaml:"secret"`
-	Expiration int    `yaml:"expiration"`
-	Issuer     string `yaml:"issuer"`
+	Secret        string `yaml:"secret"`
+	RefreshSecret string `yaml:"refreshSecret"` // Optional: separate secret for refresh tokens (falls back to Secret)
+	Expiration    int    `yaml:"expiration"`
+	Issuer        string `yaml:"issuer"`
 }
 
 type Config struct {
@@ -57,6 +58,9 @@ func (c *Config) ApplyEnv() {
 	if v := conf.Env("JWT_SECRET", ""); v != "" {
 		c.JWT.Secret = v
 	}
+	if v := conf.Env("JWT_REFRESH_SECRET", ""); v != "" {
+		c.JWT.RefreshSecret = v
+	}
 	if v := conf.Env("SERVER_ADDR", ""); v != "" {
 		c.Server.Addr = v
 	}
@@ -77,6 +81,10 @@ func (c *Config) Validate() error {
 	mode := strings.ToLower(c.Mode)
 	if mode != "dev" && mode != "prod" && mode != "staging" {
 		return fmt.Errorf("invalid mode %q, expected dev/prod/staging", c.Mode)
+	}
+	// P2-08: Production requires Redis password
+	if mode == "prod" && c.Redis.Password == "" {
+		return fmt.Errorf("redis password is required in production mode, set REDIS_PASSWORD env")
 	}
 	return nil
 }

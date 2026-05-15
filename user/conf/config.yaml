@@ -12,6 +12,7 @@ redis:
 
 jwt:
   secret: ""  # 通过 JWT_SECRET 环境变量或 .env 设置
+  refreshSecret: ""  # 可选: refresh token 独立密钥（不设置则使用 secret）
   expiration: 24
   issuer: "shopmicro"
 

@@ -24,6 +24,8 @@ const (
 	CodeUserForbidden     uint32 = 10015
 	CodeUserEmailFormat   uint32 = 10016
 	CodeUserParam         uint32 = 10017 // 参数校验失败（字段超长、格式错误等）
+	CodeUserPwdTooLong    uint32 = 10018 // 密码超过最大长度
+	CodeUserAccountLocked uint32 = 10019 // 账号被临时锁定（登录失败次数过多）
 )
 
 // Product 服务: 20000 - 29999 (预留)

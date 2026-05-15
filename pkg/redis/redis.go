@@ -140,6 +140,11 @@ func (c *Client) SMembers(ctx context.Context, key string) ([]string, error) {
 	return c.rdb.SMembers(ctx, key).Result()
 }
 
+// Incr increments the integer value of a key by 1.
+func (c *Client) Incr(ctx context.Context, key string) (int64, error) {
+	return c.rdb.Incr(ctx, key).Result()
+}
+
 // GetDel atomically gets the value of a key and deletes it.
 // Requires Redis 6.2+.
 func (c *Client) GetDel(ctx context.Context, key string) (string, error) {

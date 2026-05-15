@@ -69,7 +69,17 @@ func (d *UserDal) Update(ctx context.Context, id int64, updates map[string]inter
 		"email":     "email",
 		"remark":    "remark",
 	}
+	// P2-02: Explicit blocklist — these columns can NEVER be updated via this method
+	blockedCols := map[string]bool{
+		"id":         true,
+		"password":   true,
+		"deleted_at": true,
+	}
 	for k, v := range updates {
+		if blockedCols[k] {
+			logger.Warnf("update: blocked column %s ignored (user_id in request)", k)
+			continue
+		}
 		col, ok := colMap[k]
 		if !ok {
 			continue

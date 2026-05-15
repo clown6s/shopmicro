@@ -142,14 +142,8 @@ func (rl *RedisRateLimiter) allowWithConfig(ctx context.Context, key string, now
 	return result == 1
 }
 
-// getTrustedIP returns the client IP from the X-Real-IP header set by a
-// trusted reverse proxy (e.g. nginx). Falls back to c.ClientIP() when
-// the header is absent (direct client connection).
-// This prevents rate-limit bypass by spoofing X-Forwarded-For.
-func getTrustedIP(c *app.RequestContext) string {
-	if realIP := string(c.GetHeader("X-Real-IP")); realIP != "" {
-		return realIP
-	}
+// getClientIP returns the real client IP from the TCP connection.
+func getClientIP(c *app.RequestContext) string {
 	return c.ClientIP()
 }
 
@@ -159,7 +153,7 @@ func getTrustedIP(c *app.RequestContext) string {
 // per-user rate limit check is applied using the user_id from the token.
 func RateLimitMiddleware(rl *RedisRateLimiter) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		ip := getTrustedIP(c)
+		ip := getClientIP(c)
 		ipKey := fmt.Sprintf("shopmicro:ratelimit:ip:%s", ip)
 
 		if !rl.Allow(ctx, ipKey) {
@@ -249,7 +243,7 @@ func EndpointRateLimitMiddleware(rl *RedisRateLimiter, endpointKey string) app.H
 		window: el.window,
 	}
 	return func(ctx context.Context, c *app.RequestContext) {
-		ip := getTrustedIP(c)
+		ip := getClientIP(c)
 		key := fmt.Sprintf("shopmicro:ratelimit:ep:%s:ip:%s", endpointKey, ip)
 
 		if !dedicated.Allow(ctx, key) {

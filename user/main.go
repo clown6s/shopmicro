@@ -134,6 +134,7 @@ func Run(configPath string) error {
 			cfg.JWT.Secret,
 			cfg.JWT.Expiration,
 			cfg.JWT.Issuer,
+			cfg.JWT.RefreshSecret,
 		),
 
 		server.WithServerBasicInfo(
