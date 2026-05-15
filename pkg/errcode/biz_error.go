@@ -26,17 +26,18 @@ func (e *BizError) Error() string {
 }
 
 // ParseBizError 从 gRPC 错误消息中解析 BizError
-// 直接在错误消息中查找 BIZ/ 标记，不依赖 Kitex 包装格式
+// R4-P1-02: 使用 HasPrefix 而非 Index，防止子串伪造
 func ParseBizError(err error) (*BizError, bool) {
 	if err == nil {
 		return nil, false
 	}
 	msg := err.Error()
-	idx := strings.Index(msg, bizPrefix)
-	if idx == -1 {
+	// R4-P1-02: 只匹配消息起始位置的 BIZ/ 前缀，防止中间层错误消息包含
+	// "BIZ/xxx: ..." 子串时被误解析为 BizError
+	if !strings.HasPrefix(msg, bizPrefix) {
 		return nil, false
 	}
-	content := msg[idx+len(bizPrefix):] // "10006: phone or password incorrect"
+	content := msg[len(bizPrefix):] // "10006: phone or password incorrect"
 	colon := strings.Index(content, ":")
 	if colon == -1 {
 		return nil, false

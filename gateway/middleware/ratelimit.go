@@ -2,9 +2,8 @@ package middleware
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -54,6 +53,7 @@ return 1
 
 // RedisRateLimiter implements distributed sliding window rate limiting via Redis.
 type RedisRateLimiter struct {
+	mu                sync.RWMutex // R4-P1-01: protects endpointOverrides
 	rdb               *redis.Client
 	limit             int           // max requests per window (default)
 	window            time.Duration // sliding window duration (default)
@@ -83,12 +83,16 @@ func (rl *RedisRateLimiter) SetEndpointLimit(endpointKey string, limit int, wind
 	if windowS > 0 {
 		w = time.Duration(windowS) * time.Second
 	}
+	rl.mu.Lock()
 	rl.endpointOverrides[endpointKey] = &endpointLimit{limit: limit, window: w}
+	rl.mu.Unlock()
 }
 
 // GetEndpointLimit returns the per-endpoint limit if one is configured.
 func (rl *RedisRateLimiter) GetEndpointLimit(endpointKey string) *endpointLimit {
+	rl.mu.RLock()
 	el, ok := rl.endpointOverrides[endpointKey]
+	rl.mu.RUnlock()
 	if !ok {
 		return nil
 	}
@@ -149,8 +153,9 @@ func getClientIP(c *app.RequestContext) string {
 
 // RateLimitMiddleware returns a Hertz middleware that performs distributed
 // per-IP sliding window rate limiting via Redis.
-// If a JWT Bearer token is present in the Authorization header, an additional
-// per-user rate limit check is applied using the user_id from the token.
+// R2-P2-01: Removed per-user rate limiting from middleware (was based on unverified
+// JWT payload, allowing bypass). Per-endpoint rate limiting in the proxy handler
+// provides stricter, method-independent protection for sensitive operations.
 func RateLimitMiddleware(rl *RedisRateLimiter) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		ip := getClientIP(c)
@@ -162,67 +167,8 @@ func RateLimitMiddleware(rl *RedisRateLimiter) app.HandlerFunc {
 			return
 		}
 
-		// Per-user rate limiting: extract user_id from Bearer token for
-		// authenticated requests. Only the user_id sub-field is read (no
-		// full JWT verification — that is done later by the proxy handler).
-		// This prevents token replay but mainly throttles authenticated users.
-		if userID := extractUserIDFromToken(c); userID != "" {
-			userKey := fmt.Sprintf("shopmicro:ratelimit:user:%s", userID)
-			if !rl.Allow(ctx, userKey) {
-				response.TooManyRequests(c)
-				c.Abort()
-				return
-			}
-		}
-
 		c.Next(ctx)
 	}
-}
-
-// extractUserIDFromToken extracts the user_id claim from a JWT Bearer token
-// without full verification (the proxy handler handles verification).
-// Returns empty string if no token or parse fails.
-func extractUserIDFromToken(c *app.RequestContext) string {
-	authHeader := strings.TrimSpace(string(c.GetHeader("Authorization")))
-	if authHeader == "" {
-		return ""
-	}
-	parts := strings.Fields(authHeader)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
-		return ""
-	}
-	// JWT is base64url-encoded payload between two dots
-	// Format: header.payload.signature
-	token := parts[1]
-	dot1 := strings.IndexByte(token, '.')
-	dot2 := strings.LastIndexByte(token, '.')
-	if dot1 < 0 || dot2 <= dot1+1 {
-		return ""
-	}
-	payload := token[dot1+1 : dot2]
-	// Decode base64url (no padding) using standard library
-	decoded, err := base64.RawURLEncoding.DecodeString(payload)
-	if err != nil {
-		return ""
-	}
-	// Extract user_id from JSON (simple extraction, no full JSON parse overhead)
-	needle := `"user_id":`
-	idx := strings.Index(string(decoded), needle)
-	if idx < 0 {
-		return ""
-	}
-	rest := string(decoded)[idx+len(needle):]
-	// Skip whitespace
-	rest = strings.TrimLeft(rest, " ")
-	if len(rest) == 0 || rest[0] < '0' || rest[0] > '9' {
-		return ""
-	}
-	// Read digits
-	end := 0
-	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
-		end++
-	}
-	return rest[:end]
 }
 
 // P1-15: EndpointRateLimitMiddleware creates a middleware that applies

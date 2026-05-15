@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -31,6 +32,11 @@ func InitTracer(serviceName, mode string) func(context.Context) error {
 	if ep := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); ep != "" {
 		endpoint = ep
 	}
+	// R2-P3-03 revert: otlptracegrpc.WithEndpoint expects bare host:port,
+	// NOT a URL. Adding "http://" breaks gRPC address resolution.
+	// Strip scheme prefix if env var contains one (e.g. "http://10.211.55.5:4317").
+	endpoint = strings.TrimPrefix(endpoint, "https://")
+	endpoint = strings.TrimPrefix(endpoint, "http://")
 
 	// P0-02: Use a bounded context so the exporter never blocks forever
 	initCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

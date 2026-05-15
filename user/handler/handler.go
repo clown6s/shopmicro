@@ -115,6 +115,19 @@ const tokenPrefix = "shopmicro:user:token:"
 const refreshTokenPrefix = "shopmicro:user:refresh:"
 
 // P1-05: Account-level brute force protection constants
+// R4-P1-03: Atomic INCR + conditional EXPIRE Lua script.
+// Prevents the race where INCR succeeds but EXPIRE is never executed
+// (e.g. process crash), leaving the key without TTL → permanent lockout.
+// KEYS[1] = rate limit key
+// ARGV[1] = TTL in seconds
+var loginFailIncrLua = redis.NewScript(`
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+`)
+
 const (
 	loginMaxFailures = 10               // max failed attempts before lockout
 	loginLockoutTTL  = 15 * time.Minute // lockout duration
@@ -135,13 +148,13 @@ func (s *UserServiceImpl) checkLoginAttempts(ctx context.Context, phone string) 
 }
 
 // recordLoginFailure increments the failed login counter for a phone number.
+// R4-P1-03: Uses atomic Lua script (INCR + conditional EXPIRE) to prevent
+// the race where INCR succeeds but EXPIRE is lost on crash, causing permanent lockout.
 func (s *UserServiceImpl) recordLoginFailure(ctx context.Context, phone string) {
 	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
-	if _, err := s.rdb.Incr(ctx, key); err != nil {
+	if _, err := loginFailIncrLua.Run(ctx, s.rdb, []string{key}, int(loginLockoutTTL.Seconds())); err != nil {
 		logger.Warnf("login: failed to record login failure for phone %s: %v", maskPhone(phone), err)
-		return
 	}
-	_ = s.rdb.Expire(ctx, key, loginLockoutTTL)
 }
 
 // clearLoginFailures removes the failed login counter on successful login.
@@ -216,6 +229,10 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 		return nil, errInternal
 	}
 
+	// R2-P2-02: Clear login failure counter for this phone on successful registration.
+	// Prevents immediate lockout if the phone was previously brute-forced before registration.
+	s.clearLoginFailures(ctx, req.GetPhone())
+
 	return &v1.RegisterUserResp{}, nil
 }
 
@@ -228,7 +245,9 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 	}
 	// R4-P3-08: 校验手机号格式，无效格式不查DB，返回统一错误信息
 	if !phoneRegex.MatchString(req.GetPhone()) {
-		_ = bcrypt.CompareHashAndPassword([]byte("$2a$12$dummyhashthatwontwork00000000000000000000000000000"), []byte(req.GetPassword()))
+		// R4-P1-04: 使用正确60字符的 dummy bcrypt hash 执行完整比较，
+		// 防止短 hash 跳过比较导致时序侧信道泄露用户是否存在
+		_ = bcrypt.CompareHashAndPassword([]byte("$2a$12$000000000000000000000000000000000000000000000000000000"), []byte(req.GetPassword()))
 		return nil, errPhonePwdWrong
 	}
 
@@ -242,7 +261,8 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 		if errors.Is(err, sql.ErrNoRows) {
 			// R4-P1-01: 防止时序侧信道 — 即使用户不存在也执行 dummy bcrypt，
 			// 使响应时间与"用户存在但密码错误"一致，防止通过计时攻击枚举手机号。
-			_ = bcrypt.CompareHashAndPassword([]byte("$2a$12$dummyhashthatwontwork00000000000000000000000000000"), []byte(req.GetPassword()))
+			// R4-P1-04: 使用正确60字符 dummy hash，确保 bcrypt 执行完整比较
+			_ = bcrypt.CompareHashAndPassword([]byte("$2a$12$000000000000000000000000000000000000000000000000000000"), []byte(req.GetPassword()))
 			logger.Warnf("login failed: phone not found (%s)", maskPhone(req.GetPhone()))
 			// P1-05: Record failed attempt
 			s.recordLoginFailure(ctx, req.GetPhone())
@@ -429,6 +449,16 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 		return nil, err
 	}
 
+	// R2-P1-03: Fetch user record to get phone for fail counter cleanup
+	user, err := s.userDal.GetByID(ctx, req.GetId())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errUserNotFound
+		}
+		logger.Errorf("delete user: failed to get user (user_id=%d): %v", req.GetId(), err)
+		return nil, errInternal
+	}
+
 	// P2-05: Clear ALL Redis tokens FIRST (before DB delete).
 	// If DB delete fails after this, user still exists but all sessions are
 	// invalidated — user can re-login. This is safer than the reverse order
@@ -463,8 +493,8 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 
 	logger.Infof("user deleted: user_id=%d", req.GetId())
 
-	// Clear login failure counter
-	failKey := fmt.Sprintf("shopmicro:login:fail:%d", req.GetId())
+	// R2-P1-03: Clear login failure counter by phone (not user ID)
+	failKey := fmt.Sprintf("shopmicro:login:fail:%s", user.Phone)
 	_ = s.rdb.Del(ctx, failKey)
 
 	return &v1.DeleteUserResp{}, nil

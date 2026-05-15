@@ -433,8 +433,10 @@ func (p *Proxy) watchOnce(
 				continue
 			}
 
-			if err := p.registerService(svcName, protoPath, resolver); err != nil {
-				logger.Warnf("WatchServices: failed to register %s: %v", svcName, err)
+			// R2-P2-04: Retry registerService up to 3 times for transient errors
+			regErr := p.retryRegister(svcName, protoPath, resolver, 3)
+			if regErr != nil {
+				logger.Warnf("WatchServices: failed to register %s after retries: %v", svcName, regErr)
 			}
 		}
 	}
@@ -452,6 +454,19 @@ func (p *Proxy) Handler() app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		service := c.Param("service")
 		method := toMethodName(c.Param("method"))
+
+		// R2-P1-02: Reject invalid method names (e.g. path traversal, special chars)
+		if method == "" {
+			response.Fail(c, http.StatusBadRequest, int(errcode.CodeGwParam), "invalid method name")
+			c.Abort()
+			return
+		}
+		// R2-P1-02: Reject empty or suspicious service names
+		if service == "" || strings.ContainsAny(service, "./\\") {
+			response.Fail(c, http.StatusBadRequest, int(errcode.CodeGwParam), "invalid service name")
+			c.Abort()
+			return
+		}
 
 		// P1-12: Service/method whitelist enforcement
 		// If allowedMethods is non-empty, ANY service not explicitly registered is denied.
@@ -641,10 +656,10 @@ func (p *Proxy) Handler() app.HandlerFunc {
 var methodNameRegex = regexp.MustCompile(`^[A-Za-z][a-zA-Z0-9]*$`)
 
 // toMethodName ensures the first letter of a method name is upper-case.
-// Returns the method unchanged if it fails format validation.
+// Returns empty string if the method fails format validation.
 func toMethodName(method string) string {
 	if method == "" || !methodNameRegex.MatchString(method) {
-		return method
+		return ""
 	}
 	return strings.ToUpper(method[:1]) + method[1:]
 }
@@ -675,6 +690,23 @@ func extractServiceName(key, prefix string) string {
 		return ""
 	}
 	return parts[0]
+}
+
+// retryRegister attempts to register a service up to maxRetries times with backoff.
+// Returns the last error if all attempts fail.
+func (p *Proxy) retryRegister(serviceName, protoPath string, resolver discovery.Resolver, maxRetries int) error {
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		if err := p.registerService(serviceName, protoPath, resolver); err != nil {
+			lastErr = err
+			if i < maxRetries-1 {
+				time.Sleep(time.Duration(i+1) * time.Second)
+			}
+			continue
+		}
+		return nil
+	}
+	return lastErr
 }
 
 // newEtcdClient creates a minimal etcd v3 client.
