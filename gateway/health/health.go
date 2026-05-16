@@ -22,20 +22,21 @@ func Handler() app.HandlerFunc {
 
 // ReadyHandler returns a readiness probe that checks dependency health.
 // K8s readinessProbe should use this endpoint.
+// P2-05 fix: 不返回具体依赖名称，防止架构信息泄露
 // P2-08: Checks both Redis and Etcd connectivity.
 func ReadyHandler(rdb *redis.Client, etcdClient *clientv3.Client) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		failed := make([]string, 0)
+		failed := false
 
 		// Check Redis — with independent timeout to avoid blocking on dead connections
 		if rdb != nil {
 			pingCtx, pingCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			if !rdb.Ping(pingCtx) {
-				failed = append(failed, "redis")
+				failed = true
 			}
 			pingCancel() // P2-08 fix: cancel immediately after use — not deferred
 		} else {
-			failed = append(failed, "redis (nil)")
+			failed = true
 		}
 
 		// Check Etcd — lightweight Get with short timeout
@@ -43,15 +44,14 @@ func ReadyHandler(rdb *redis.Client, etcdClient *clientv3.Client) app.HandlerFun
 			etcdCtx, etcdCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			_, err := etcdClient.Get(etcdCtx, "health-check-key", clientv3.WithCountOnly())
 			if err != nil {
-				failed = append(failed, "etcd")
+				failed = true
 			}
 			etcdCancel() // P2-08 fix: cancel immediately after use — not deferred
 		}
 
-		if len(failed) > 0 {
+		if failed {
 			c.JSON(503, map[string]interface{}{
 				"status": "not_ready",
-				"failed": failed,
 			})
 			return
 		}

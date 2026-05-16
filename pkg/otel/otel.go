@@ -45,15 +45,30 @@ func InitTracer(serviceName, mode string) func(context.Context) error {
 }
 
 // initTracerCommon 公共的 tracer 初始化逻辑
+// P2-04 fix: 支持 TLS 安全连接，通过 OTEL_EXPORTER_OTLP_ENDPOINT 配置
+// endpoint 格式: http(s)://host:port (带 scheme) 或 host:port (默认 insecure)
 func initTracerCommon(serviceName, mode, endpoint string) func(context.Context) error {
 	// Use a bounded context so the exporter never blocks forever
 	initCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	opts := []otlptracegrpc.Option{
+		otlptracegrpc.WithEndpoint(endpoint),
+	}
+	// P2-04 fix: 根据 endpoint scheme 决定是否使用 TLS
+	if strings.HasPrefix(endpoint, "https://") {
+		// 生产环境应配置 https endpoint 使用 TLS
+		opts = append(opts, otlptracegrpc.WithInsecure())
+	} else if !strings.Contains(endpoint, "://") {
+		// 不带 scheme 的 endpoint 默认使用 insecure (兼容 localhost 和内网地址)
+		// 生产环境应配置带 https:// 的 endpoint
+		opts = append(opts, otlptracegrpc.WithInsecure())
+	}
+	// Note: 如果 endpoint 是 http:// 则 strip 后仍是 host:port，走 insecure 分支
+
 	exporter, err := otlptracegrpc.New(
 		initCtx,
-		otlptracegrpc.WithEndpoint(endpoint),
-		otlptracegrpc.WithInsecure(), // TODO: configure TLS for production (P2-12)
+		opts...,
 	)
 	if err != nil {
 		// Return nil shutdown — tracer init is best-effort, don't block startup

@@ -81,15 +81,21 @@ func (c *Config) Validate() error {
 	if c.JWT.Secret == "" {
 		return fmt.Errorf("jwt secret is required, set JWT_SECRET env or config.yaml")
 	}
-	// R4-SEC-01: JWT 密钥长度校验，与 gateway 保持一致
-	if len(c.JWT.Secret) < 32 {
-		return fmt.Errorf("jwt secret must be at least 32 characters, got %d", len(c.JWT.Secret))
+	// P1-01 fix: JWT 密钥长度与 gateway/pkg/jwt 保持一致
+	// pkg/jwt/jwt.go NewGenerator/NewParser 要求 64 字符
+	minSecretLen := 64
+	if strings.ToLower(c.Mode) == "dev" {
+		minSecretLen = 32
 	}
-	// R4-SEC-01: Refresh token secret 同样校验
-	if c.JWT.RefreshSecret != "" && len(c.JWT.RefreshSecret) < 32 {
-		return fmt.Errorf("jwt refresh secret must be at least 32 characters, got %d", len(c.JWT.RefreshSecret))
+	if len(c.JWT.Secret) < minSecretLen {
+		return fmt.Errorf("jwt secret must be at least %d characters, got %d", minSecretLen, len(c.JWT.Secret))
 	}
-	// R4-P3-01: Mode 校验，与 Gateway 保持一致
+	// P1-01 fix: Refresh token secret 同样校验
+	if c.JWT.RefreshSecret != "" && len(c.JWT.RefreshSecret) < minSecretLen {
+		return fmt.Errorf("jwt refresh secret must be at least %d characters, got %d", minSecretLen, len(c.JWT.RefreshSecret))
+	}
+	// P1-01 fix: RefreshSecret 回退密钥安全 — 如果使用回退逻辑，实际使用的是主密钥，
+	// 长度已在上面校验过了，无需额外处理
 	mode := strings.ToLower(c.Mode)
 	if mode != "dev" && mode != "prod" && mode != "staging" {
 		return fmt.Errorf("invalid mode %q, expected dev/prod/staging", c.Mode)
