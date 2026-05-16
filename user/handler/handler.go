@@ -228,7 +228,8 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 	limited, err := registerRateLimitLua.Run(ctx, s.rdb, []string{rateKey}, registerRateLimitMax, registerRateLimitWindowSec)
 	if err != nil {
 		logger.Warnf("register: rate limit check failed (phone=%s): %v", maskPhone(req.GetPhone()), err)
-		// fail-closed: if Redis is down, allow registration but log the error
+		// fail-closed: if Redis is down, reject registration (consistent with login brute-force protection)
+		return nil, errRegisterTooMany
 	} else if limited != nil {
 		if result, ok := limited.(int64); ok && result == 1 {
 			return nil, errRegisterTooMany

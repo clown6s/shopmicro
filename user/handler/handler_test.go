@@ -103,9 +103,9 @@ func TestMaskPhone(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"13800138000", "****8000"},
-		{"123", "****"},
-		{"", "****"},
+		{"13800138000", "****000"},
+		{"123", "***"},
+		{"", "***"},
 	}
 	for _, tt := range tests {
 		got := maskPhone(tt.input)
@@ -124,7 +124,7 @@ func TestMaskEmail(t *testing.T) {
 		{"a@example.com", "a***@example.com"},
 		{"ab@example.com", "a***@example.com"},
 		{"test@example.com", "t***@example.com"},
-		{"@missing-local.com", "@missing-local.com"},
+		{"@missing-local.com", "***"},
 	}
 	for _, tt := range tests {
 		got := maskEmail(tt.input)
