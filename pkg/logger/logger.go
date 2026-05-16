@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"strings"
 	"sync"
 
 	"go.uber.org/zap"
@@ -11,6 +12,34 @@ var (
 	L    *zap.SugaredLogger
 	once sync.Once
 )
+
+// P3-11: Sensitive key patterns to detect in logged data.
+// Used by Safe() to redact values that look like credentials.
+var sensitivePatterns = []string{
+	"password", "passwd", "pwd",
+	"secret", "token", "authorization",
+	"cookie", "session",
+	"credit_card", "cvv", "ssn",
+}
+
+// Safe returns a redacted version of the input string if its key (fieldName)
+// matches a known sensitive pattern. Use when logging configuration values.
+//
+//	logger.Infof("config: %s=%s", "jwt_secret", logger.Safe("jwt_secret", secretValue))
+//
+// If fieldName is empty, returns val unchanged (no redaction).
+func Safe(fieldName, val string) string {
+	if fieldName == "" || val == "" {
+		return val
+	}
+	lower := strings.ToLower(fieldName)
+	for _, p := range sensitivePatterns {
+		if strings.Contains(lower, p) {
+			return "***"
+		}
+	}
+	return val
+}
 
 func Init(mode string) error {
 	var initErr error

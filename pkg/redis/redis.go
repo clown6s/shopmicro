@@ -152,6 +152,8 @@ func (c *Client) GetDel(ctx context.Context, key string) (string, error) {
 }
 
 // NewScript creates a Redis Lua script that can be executed atomically.
+// P3-08: SECURITY — Only use hardcoded script strings, never user input.
+// Lua scripts have full Redis access; validate source if from external config.
 func NewScript(src string) *Script {
 	return &Script{s: redis.NewScript(src)}
 }

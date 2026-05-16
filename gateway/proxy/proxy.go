@@ -236,6 +236,14 @@ func (p *Proxy) getBreaker(service string) *gobreaker.CircuitBreaker {
 	if p.cbSettings == nil {
 		return nil
 	}
+	// P2-03: Only create breaker for registered services to prevent unbounded memory growth
+	// from arbitrary service name requests (each would create a permanent CircuitBreaker)
+	p.mu.RLock()
+	_, exists := p.clients[service]
+	p.mu.RUnlock()
+	if !exists {
+		return nil
+	}
 	cbI, _ := p.perServiceCB.LoadOrStore(service, gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:        "gateway:" + service,
 		MaxRequests: p.cbSettings.maxRequests,
@@ -468,8 +476,8 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			c.Abort()
 			return
 		}
-		// R2-P1-02: Reject empty or suspicious service names
-		if service == "" || strings.ContainsAny(service, "./\\") {
+		// P2-01: Reject empty or suspicious service names
+		if service == "" || strings.ContainsAny(service, "./\\") || !serviceRegex.MatchString(service) {
 			response.Fail(c, http.StatusBadRequest, int(errcode.CodeGwParam), "invalid service name")
 			c.Abort()
 			return
@@ -480,15 +488,16 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		if len(p.allowedMethods) > 0 {
 			allowed, ok := p.allowedMethods[service]
 			if !ok {
-				// Service not in whitelist → reject
-				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwParam),
-					fmt.Sprintf("service %s not allowed", service))
+				// P2-02: Return generic error to prevent service/method enumeration
+				logger.Warnf("rejected request: service not in whitelist (service=%s)", service)
+				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwParam), "access denied")
 				c.Abort()
 				return
 			}
 			if !allowed[method] {
-				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwParam),
-					fmt.Sprintf("method %s not allowed for service %s", method, service))
+				// P2-02: Return generic error to prevent method enumeration
+				logger.Warnf("rejected request: method not allowed (service=%s, method=%s)", service, method)
+				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwParam), "access denied")
 				c.Abort()
 				return
 			}
@@ -641,6 +650,10 @@ func (p *Proxy) Handler() app.HandlerFunc {
 // methodNameRegex validates that a method name contains only alphanumeric characters
 // and starts with a letter. Prevents path traversal or injection via URL params.
 var methodNameRegex = regexp.MustCompile(`^[A-Za-z][a-zA-Z0-9]*$`)
+
+// P2-01: serviceRegex validates that a service name contains only lowercase alphanumeric
+// characters. Prevents path injection when building proto file paths.
+var serviceRegex = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
 
 // toMethodName ensures the first letter of a method name is upper-case.
 // Returns empty string if the method fails format validation.

@@ -43,6 +43,8 @@ var (
 	errForbidden        = newBiz(errcode.CodeUserForbidden, "forbidden: cannot operate other user's data")
 	errEmailFormat      = newBiz(errcode.CodeUserEmailFormat, "invalid email format")
 	errAccountLocked    = newBiz(errcode.CodeUserAccountLocked, "account temporarily locked due to too many failed login attempts")
+	errRegisterTooMany  = newBiz(errcode.CodeUserInternal, "too many registration attempts, please try again later")
+	errRefreshTooMany   = newBiz(errcode.CodeUserInternal, "too many refresh attempts, please try again later")
 )
 
 // P1-21: phone number regex — Chinese mobile format
@@ -119,6 +121,44 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer s
 const tokenPrefix = "shopmicro:user:token:"
 const refreshTokenPrefix = "shopmicro:user:refresh:"
 
+// P2-06: Registration rate limit — per-phone, max 5 attempts per hour
+const registerRateLimitKey = "shopmicro:register:rate:"
+const registerRateLimitMax = 5
+const registerRateLimitWindowSec = 3600 // 1 hour
+
+// P2-06: Lua script for atomic rate limit check-and-increment
+// Returns 0 if allowed (under limit), 1 if rate limited
+// KEYS[1] = rate limit key (registerRateLimitKey + phone)
+// ARGV[1] = max attempts
+// ARGV[2] = TTL in seconds
+var registerRateLimitLua = redis.NewScript(`
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+if tonumber(count) > tonumber(ARGV[1]) then
+    return 1
+end
+return 0
+`)
+
+// P2-07: RefreshToken rate limit — per-userID, max 10 per minute
+const refreshRateLimitKey = "shopmicro:refresh:rate:"
+const refreshRateLimitMax = 10
+const refreshRateLimitWindowSec = 60
+
+// P2-07: Lua script for refresh token rate limiting
+var refreshRateLimitLua = redis.NewScript(`
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+if tonumber(count) > tonumber(ARGV[1]) then
+    return 1
+end
+return 0
+`)
+
 // P1-05: Account-level brute force protection constants
 // R4-P1-03: Atomic INCR + conditional EXPIRE Lua script.
 // Prevents the race where INCR succeeds but EXPIRE is never executed
@@ -182,6 +222,19 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 	if req.GetPassword() == "" {
 		return nil, errPasswordRequired
 	}
+
+	// P2-06: Rate limit registration attempts per phone number
+	rateKey := registerRateLimitKey + req.GetPhone()
+	limited, err := registerRateLimitLua.Run(ctx, s.rdb, []string{rateKey}, registerRateLimitMax, registerRateLimitWindowSec)
+	if err != nil {
+		logger.Warnf("register: rate limit check failed (phone=%s): %v", maskPhone(req.GetPhone()), err)
+		// fail-closed: if Redis is down, allow registration but log the error
+	} else if limited != nil {
+		if result, ok := limited.(int64); ok && result == 1 {
+			return nil, errRegisterTooMany
+		}
+	}
+
 	// P1-21: Strict phone format validation
 	if !phoneRegex.MatchString(req.GetPhone()) {
 		return nil, errPhoneFormat
@@ -335,7 +388,9 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 	}
 
 	return &v1.LoginResp{
-		Id:           user.ID,
+		// P2-05: 不返回自增 userId，防止信息泄露（可推测用户量和注册顺序）
+		// proto 字段保留兼容性，返回默认值 0
+		Id:           0,
 		RealName:     user.RealName,
 		Avatar:       user.Avatar,
 		Gender:       v1.Gender(user.Gender),
@@ -441,8 +496,8 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 			return nil, errUserNotFound
 		}
 		if isDuplicateKeyError(err) {
-			// P1-06: Return vague error to prevent user enumeration via phone uniqueness check
-			return nil, newBiz(errcode.CodeUserParam, "phone is not available")
+			// P3-07: Return vague error to prevent phone enumeration via uniqueness check
+			return nil, errNothingUpdate
 		}
 		logger.Errorf("update user failed: %v", err)
 		return nil, errInternal
@@ -569,13 +624,14 @@ func toUserInfoMasked(u *model.User) *v1.UserInfo {
 
 // maskEmail masks email: a***@example.com
 // For any local part, shows first char + "***" + domain.
+// P3-06: Abnormal format returns "***" instead of original value
 func maskEmail(email string) string {
 	if email == "" {
 		return ""
 	}
 	at := strings.Index(email, "@")
 	if at < 1 {
-		return email // no local part before "@"
+		return "***" // no local part before "@" — return masked instead of original
 	}
 	return email[:1] + "***" + email[at:]
 }
@@ -602,12 +658,13 @@ func parseInt64(s string) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
 }
 
-// maskPhone 脱敏手机号：保留后4位，其余用 * 代替
+// maskPhone 脱敏手机号：保留后3位，其余用 * 代替
+// P3-05: 对于非标准长度手机号，仅保留后3位降低信息熵
 func maskPhone(phone string) string {
-	if len(phone) <= 4 {
-		return "****"
+	if len(phone) <= 3 {
+		return "***"
 	}
-	return "****" + phone[len(phone)-4:]
+	return "****" + phone[len(phone)-3:]
 }
 
 // Logout removes the caller's specific token from Redis.
@@ -688,6 +745,17 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 	userID, err := parseInt64(userIDStr)
 	if err != nil || userID <= 0 {
 		return nil, errRefreshTokenInvalid
+	}
+
+	// P2-07: Rate limit refresh token requests per user ID (10/min)
+	refreshRateKey := refreshRateLimitKey + userIDStr
+	limited, rlErr := refreshRateLimitLua.Run(ctx, s.rdb, []string{refreshRateKey}, refreshRateLimitMax, refreshRateLimitWindowSec)
+	if rlErr != nil {
+		logger.Warnf("refresh token: rate limit check failed (user_id=%d): %v", userID, rlErr)
+	} else if limited != nil {
+		if result, ok := limited.(int64); ok && result == 1 {
+			return nil, errRefreshTooMany
+		}
 	}
 
 	// R4-P1-03: 验证用户仍存在且未被删除
