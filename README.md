@@ -205,11 +205,12 @@ Authorization: Bearer {token}
 
 ### 2.2 认证机制
 
-- **JWT Access Token**：HS256 签名，默认 24 小时过期，支持多设备登录
-- **Refresh Token**：默认 7 天过期，一次性使用（轮换机制，防重放攻击）
+- **JWT Access Token**：HS256 签名，prod 密钥≥64字符，默认 24 小时过期，支持多设备登录，支持 audience 校验
+- **Refresh Token**：独立 secret（可配置），默认 7 天过期，一次性使用（GETDEL 原子防重放 + Lua 脚本原子轮换）
 - **Token 校验**：gateway 通过 Redis SET（SISMEMBER）校验 token 是否有效
 - **身份传递**：gateway 通过 Kitex metainfo 传递 `user_id` 和 `token` 给下游服务
 - **所有权校验**：UpdateUser/DeleteUser 通过 `checkOwnership()` 校验调用者身份
+- **会话吊销**：手机号变更时原子吊销所有 access token + refresh token，账户删除同理
 
 ### 2.3 请求/响应示例
 
@@ -416,7 +417,7 @@ kitex -module shopmicro/user -service user -type protobuf api/user.proto
 | 网关端口 | `gateway/conf/config.yaml` → `server.addr` | `SERVER_ADDR` |
 | 网关 protoBase | `gateway/conf/config.yaml` → `protoBase` | `PROTO_BASE` |
 | 网关 Etcd 地址 | `gateway/conf/config.yaml` → `etcd.addrs` | `ETCD_ADDRS` |
-| 网关 JWT Secret | `gateway/conf/config.yaml` → `jwt.secret` | `JWT_SECRET` |
+| 网关 JWT Secret | `gateway/conf/config.yaml` → `jwt.secret` | `JWT_SECRET`（prod≥64字符） |
 | user 服务端口 | `user/conf/config.yaml` → `server.addr` | `SERVER_ADDR` |
 | user 健康检查端口 | `user/conf/config.yaml` → `healthAddr` | `HEALTH_ADDR` |
 | user MySQL 连接 | `user/conf/config.yaml` → `mysql.dsn` | `MYSQL_DSN` |
@@ -460,8 +461,8 @@ MYSQL_DSN=root:your_password@tcp(10.211.55.5:3306)/shop_micro?charset=utf8mb4&pa
 REDIS_ADDR=10.211.55.5:6379
 REDIS_PASSWORD=your_redis_password
 
-# JWT (至少32字符)
-JWT_SECRET=your-jwt-secret-key-at-least-32-chars
+# JWT (prod 至少64字符, dev 至少32字符)
+JWT_SECRET=your-jwt-secret-key-at-least-64-chars-for-production
 
 # Etcd
 ETCD_ADDRS=10.211.55.5:2379
@@ -508,39 +509,51 @@ span.SetAttributes(attribute.Int64("user.query.page", int64(req.Page)))
 
 | 环境变量 | 说明 | 推荐值 |
 |---------|------|--------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector 地址 | `localhost:4317` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector 地址（`https://` 自动启用 TLS） | `localhost:4317` |
 | `OTEL_TRACE_SAMPLE_RATE` | 采样率 0.0–1.0 | dev: `1.0`，prod: `0.1` |
-| `OTEL_EXPORTER_OTLP_INSECURE` | 跳过 TLS 验证 | dev: `true`，prod: `false` |
 
 ---
 
 ## 九、安全架构
+
+> 经过 7 轮安全审计 + 修复，代码层面已达到生产级别。覆盖 OWASP API 安全 Top 10 全部相关条目。
 
 ### 9.1 已实施的安全措施
 
 | 安全特性 | 实现位置 | 说明 |
 |---------|-----------|------|
 | **密码哈希** | `user/handler/handler.go` | bcrypt，cost=12 |
-| **JWT 安全** | `pkg/jwt/jwt.go` | HS256 签名，算法白名单防混淆，密钥长度验证（≥32字符） |
-| **参数化查询** | `user/data/user.go` | 所有 SQL 使用 `?` 占位符 |
-| **输入验证** | `user/handler/handler.go` | 手机号（中国格式）、邮箱、密码强度（8-128字符，含字母+数字）、字段长度限制 |
-| **时序攻击防护** | `user/handler/handler.go` | Login 对不存在的用户执行 dummy bcrypt，防止计时攻击枚举手机号 |
-| **PII 脱敏** | `user/handler/handler.go` | ListUser 返回脱敏手机号（\*\*\*\*1234）和邮箱（a\*\*\*@example.com） |
-| **Token 多设备** | `user/handler/handler.go` | Redis SET 存储，支持多设备登录，Logout 只注销当前设备 |
-| **Refresh Token** | `user/handler/handler.go` | 7 天有效期，一次性轮换（GETDEL 防重放），Lua 脚本原子更新反向映射 |
-| **所有权校验** | `user/handler/handler.go` | UpdateUser/DeleteUser 校验 metainfo user_id，禁止越权操作 |
-| **分布式限流** | `gateway/middleware/ratelimit.go` | Redis 滑动窗口（Lua 原子脚本），per-IP + per-User，端点级可配 |
-| **熔断器** | `gateway/proxy/proxy.go` | gobreaker per-service 熔断，可配连续失败次数/超时/半开探测 |
-| **安全响应头** | `gateway/middleware/security.go` | CSP、X-Frame-Options、X-Content-Type-Options、HSTS（仅 prod）、Referrer-Policy |
-| **CORS** | `gateway/middleware/cors.go` | 支持凭据时禁止通配符 Origin |
-| **Panic 恢复** | `gateway` + `user` | 自定义 recovery 中间件，记录堆栈 |
-| **日志注入防护** | `gateway/middleware/accesslog.go` | zap 结构化字段，防 `\n`/`\r` 注入 |
+| **JWT 安全** | `pkg/jwt/jwt.go` | HS256 签名，算法白名单防混淆，密钥 prod≥64字符 / dev≥32字符，支持 audience/issuer 校验 |
+| **双令牌认证** | `user/handler/handler.go` | Access Token（默认24h）+ Refresh Token（7d），独立 secret，一次性轮换（GETDEL 防重放） |
+| **参数化查询** | `user/data/user.go` | 所有 SQL 使用 `?` 占位符；Update 使用白名单 `colMap` + `blockedCols` 双重防护 |
+| **输入验证** | `user/handler/handler.go` | 手机号（`^1[3-9]\d{9}$`）、邮箱、密码强度（8-128字符，含字母+数字）、各字段长度限制、性别/年龄范围校验 |
+| **时序攻击防护** | `user/handler/handler.go` | Login 对不存在的用户执行 dummy bcrypt（60字符正确格式 hash），防止计时攻击枚举手机号 |
+| **暴力破解防护** | `user/handler/handler.go` | 登录失败计数 + Redis Lua 原子锁定（15分钟），注册限流（每手机号5次/小时），RefreshToken 限流（每用户10次/分钟） |
+| **Fail-Closed 策略** | gateway + user | Redis 宕机时所有限流拒绝请求（登录/注册/刷新/全局），不降级放行 |
+| **PII 脱敏** | `user/handler/handler.go` | 手机号保留后3位（`****123`）、邮箱脱敏（`a***@example.com`）、Login 不返回自增 userId |
+| **日志脱敏** | `pkg/logger/logger.go` | `Safe()` 函数自动遮蔽 password/secret/token/api_key/access_key/private_key 等 19 种敏感字段 |
+| **错误信息脱敏** | `gateway/proxy/proxy.go` + `pkg/response/response.go` | 内部错误统一返回 `"internal server error"`，BizErr 消息超128字符截断，手机冲突返回模糊错误 |
+| **Token 多设备** | `user/handler/handler.go` | Redis SET 存储（TxPipeline 原子 SAdd+Expire），支持多设备登录，Logout 只注销当前设备 |
+| **原子 Token 轮换** | `user/handler/handler.go` | RefreshToken 使用 Lua 脚本原子更新（SREM旧RT + SADD新RT + SET映射 + EXPIRE），防崩溃导致 token 丢失或重放 |
+| **原子 Token 吊销** | `user/handler/handler.go` | DeleteUser + UpdateUser(手机变更) 使用同一 Lua 脚本原子吊销所有 access token + refresh token |
+| **所有权校验** | `user/handler/handler.go` | UpdateUser/DeleteUser 通过 metainfo user_id 校验，禁止越权操作 |
+| **分布式限流** | `gateway/middleware/ratelimit.go` | Redis 滑动窗口（Lua 原子脚本），per-IP + 端点级可配 |
+| **熔断器** | `gateway/proxy/proxy.go` | gobreaker per-service 熔断，仅对已注册服务创建（防 OOM），可配连续失败次数/超时/半开探测 |
+| **服务名注入防护** | `gateway/proxy/proxy.go` | service 名称正则 `^[a-z][a-z0-9]*$`，method 名称正则 `^[A-Za-z][a-zA-Z0-9]*$` |
+| **安全响应头** | `gateway/middleware/security.go` | CSP（`default-src 'self'; frame-ancestors 'none'`）、X-Frame-Options: DENY、X-Content-Type-Options: nosniff、HSTS（仅 prod）、Referrer-Policy |
+| **CORS** | `gateway/middleware/cors.go` | 精确匹配 Origin（无通配符子域名），credentials + wildcard 由浏览器规范拒绝（fail-closed） |
+| **IP 伪造防护** | `gateway/middleware/accesslog.go` | `safeClientIP()` 验证 X-Forwarded-For 中的 IP 格式，伪造 IP 不参与限流；限流使用 TCP 层 `ClientIP()` |
+| **Panic 恢复** | `gateway` + `user` | 自定义 recovery 中间件，abort-first 策略，记录堆栈 |
+| **日志注入防护** | `gateway/middleware/accesslog.go` | zap 结构化字段，防 `\n`/`\r` 注入，IP 地址脱敏 |
 | **SQL 脱敏** | `pkg/mysql/mysql.go` | 禁用所有 OTEL SQL span，防止语句泄露到追踪系统 |
-| **List 不查密码** | `user/data/user.go` | ListUser 查询不 SELECT password 列 |
+| **OTEL TLS** | `pkg/otel/otel.go` | endpoint `https://` 前缀自动启用 TLS，`http://` 或无 scheme 使用 insecure |
+| **请求追踪** | `gateway/middleware/trace.go` | 自动生成 X-Request-Id（crypto/rand hex16），支持上游传入 |
+| **健康检查脱敏** | `gateway/health` + `user/main.go` | /health 仅返回 `{"status":"ok"}`，/ready 仅返回 ready/not_ready，/healthz 不暴露依赖名称 |
+| **List 不查密码** | `user/data/user.go` | ListUser 查询不 SELECT password 列，password 字段 `json:"-"` |
 | **软删除** | `user/data/user.go` | DeleteUser 使用 `deleted_at` 字段，所有查询排除已删除记录 |
-| **密钥管理** | `pkg/secrets/` | 支持 Vault 集成 + 环境变量回退，.env 已 gitignore |
+| **密钥管理** | `pkg/secrets/` | 支持 Vault 集成（atomic.Value 线程安全切换）+ 环境变量回退，.env 已 gitignore |
 | **Docker 安全** | Dockerfile | 非 root 用户运行，多阶段构建 |
-| **Graceful Shutdown** | `gateway/main.go` + `user/main.go` | WaitGroup + 超时控制，K8s 健康探针联动 |
+| **Graceful Shutdown** | `gateway/main.go` + `user/main.go` | WaitGroup + 超时控制，shutdown 前标记 unhealthy 通知 K8s |
 
 ### 9.2 限流配置
 
@@ -557,11 +570,13 @@ rateLimit:
 
 | 限流维度 | 默认规则 | 说明 |
 |---------|---------|------|
-| 全局 per-IP | 100次/分钟 | Redis ZSET 滑动窗口 |
-| per-User | 同全局 | 从 JWT 提取 user_id（不验证签名） |
+| 全局 per-IP | 100次/分钟 | Redis ZSET 滑动窗口（Lua 原子） |
 | 端点级 | 可配 | 在 `endpoints:` 下添加，如 `user/Login: 5/分` |
+| 注册 per-Phone | 5次/小时 | user 服务侧 Redis Lua 原子计数 |
+| 登录失败锁定 | 10次/15分钟 | per-Phone，Redis Lua 原子 INCR+EXPIRE |
+| RefreshToken | 10次/分钟 | per-UserID，user 服务侧 Redis Lua |
 
-**Redis 宕机策略**：fail-closed（拒绝请求），防止限流失效。
+**Redis 宕机策略**：全链路 fail-closed（拒绝请求），防止限流失效被暴力破解。
 
 ### 9.3 熔断器配置
 
@@ -591,11 +606,32 @@ circuitBreaker:
 
 ### 🟡 推荐完成
 
+- [ ] **基础设施 TLS**
+      Etcd/Redis/MySQL 连接均未启用 TLS，内网部署可接受，跨网络建议开启
+
 - [ ] **gRPC 层限流**
       当前限流仅在 gateway（HTTP 层），建议 user 服务也实施限流防止绕过 gateway 的直接访问
 
-- [ ] **输入验证增强**
-      当前主要验证 phone/password/email，建议对所有字段实施严格验证
+- [ ] **HSTS Preload**
+      当前 HSTS 仅 prod 模式启用，建议添加 `preload` 子指令并提交 [hstspreload.org](https://hstspreload.org)
+
+### ✅ 已完成
+
+- [x] 密码安全：bcrypt cost=12，强密码策略
+- [x] JWT 安全：算法混淆防护、密钥强度验证（prod≥64字符）、audience/issuer 支持
+- [x] 双令牌机制：Access + Refresh 独立 secret，一次性轮换防重放
+- [x] 时序攻击防护：dummy bcrypt 防止用户枚举
+- [x] Fail-Closed 策略：全链路 Redis 故障时拒绝请求
+- [x] 原子 Redis 操作：Lua 脚本保证限流/锁定/Token 轮换/吊销的原子性
+- [x] PII 脱敏：手机号/邮箱/日志/错误信息全面脱敏
+- [x] SQL 注入防护：参数化查询 + Update 白名单
+- [x] 安全响应头：CSP/HSTS/X-Frame-Options/nosniff
+- [x] 服务发现安全：service/method 名称正则白名单
+- [x] CORS 精确匹配：禁止通配符子域名
+- [x] IP 伪造防护：X-Forwarded-For 格式校验
+- [x] OTEL TLS：endpoint scheme 自动判断是否启用 TLS
+- [x] 健康检查脱敏：不暴露依赖名称和拓扑信息
+- [x] 7 轮安全审计收敛，gateway/user/pkg 全部零新问题
 
 ---
 
