@@ -20,6 +20,9 @@ var sensitivePatterns = []string{
 	"secret", "token", "authorization",
 	"cookie", "session",
 	"credit_card", "cvv", "ssn",
+	// R5-P3-01: 常见密钥字段关键词补充
+	"api_key", "apikey", "access_key", "accesskey",
+	"private_key", "privatekey", "signing_key",
 }
 
 // Safe returns a redacted version of the input string if its key (fieldName)

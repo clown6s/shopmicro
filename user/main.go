@@ -194,20 +194,23 @@ func Run(configPath string) error {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ok"}`)
 	})
-	// P2-SEC-06 fix: 添加 /healthz 端点用于 K8s readiness probe（内部使用）
+	// P3-R5-03: /healthz 端点用于 K8s readiness probe（内部使用）
+	// 不暴露具体依赖名称，仅返回 healthy/unhealthy 状态
 	healthMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		// Check MySQL connectivity
+		unhealthy := false
 		if err := dataProvider.DB.PingContext(ctx); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, `{"status":"unhealthy","failed":["mysql"]}`)
-			return
+			logger.Warnf("healthz: dependency check failed: %v", err)
+			unhealthy = true
 		}
-		// Check Redis connectivity
 		if !dataProvider.Rdb.Ping(ctx) {
+			logger.Warn("healthz: dependency check failed: redis")
+			unhealthy = true
+		}
+		if unhealthy {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, `{"status":"unhealthy","failed":["redis"]}`)
+			fmt.Fprintf(w, `{"status":"unhealthy"}`)
 			return
 		}
 		w.WriteHeader(http.StatusOK)

@@ -752,7 +752,9 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 	refreshRateKey := refreshRateLimitKey + userIDStr
 	limited, rlErr := refreshRateLimitLua.Run(ctx, s.rdb, []string{refreshRateKey}, refreshRateLimitMax, refreshRateLimitWindowSec)
 	if rlErr != nil {
+		// P3-R5-02: fail-closed — Redis down → reject refresh, consistent with login brute-force protection
 		logger.Warnf("refresh token: rate limit check failed (user_id=%d): %v", userID, rlErr)
+		return nil, errRefreshTooMany
 	} else if limited != nil {
 		if result, ok := limited.(int64); ok && result == 1 {
 			return nil, errRefreshTooMany
