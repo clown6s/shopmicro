@@ -2,8 +2,9 @@ package middleware
 
 import (
 	"context"
-	"math/rand"
-	"sync"
+	"crypto/rand"
+	"encoding/binary"
+	"sync/atomic"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -15,10 +16,7 @@ import (
 const requestIDHeader = "X-Request-Id"
 
 // TraceIDMiddleware sets the X-Trace-Id response header so callers can
-// correlate responses with distributed traces. It does NOT create its own
-// span — hertztracing.ServerMiddleware handles that.
-// P3-04 fix: If no otel span is available, generates an independent request ID
-// using cryptographically insecure random (sufficient for correlation purposes).
+// using crypto/rand for cryptographic quality.
 func TraceIDMiddleware() app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		c.Next(ctx)
@@ -29,7 +27,6 @@ func TraceIDMiddleware() app.HandlerFunc {
 			c.Response.Header.Set("X-Trace-Id", span.SpanContext().TraceID().String())
 		}
 
-		// P3-04 fix: Always set X-Request-Id header for request correlation
 		// Even if otel tracing is disabled, we still provide a correlation ID.
 		existingReqID := c.Request.Header.Get(requestIDHeader)
 		if existingReqID != "" {
@@ -40,33 +37,24 @@ func TraceIDMiddleware() app.HandlerFunc {
 	}
 }
 
-// requestIDGen contains shared state for request ID generation.
-var requestIDGen struct {
-	sync.Mutex
-	rng     *rand.Rand
-	counter uint64
-}
-
-func init() {
-	// Seed with time + random for better distribution
-	src := rand.NewSource(time.Now().UnixNano())
-	requestIDGen.rng = rand.New(src)
-}
+// requestIDCounter is an atomic counter used to reduce collision probability.
+var requestIDCounter atomic.Uint64
 
 // generateRequestID creates a pseudo-random request ID.
 // Format: timestamp(10 hex) + random(14 hex) = 24 char string.
-// Uses atomic counter to reduce collision probability.
-// For production, consider using UUID v7 or a distributed ID generator.
 func generateRequestID() string {
 	const hexChars = "0123456789abcdef"
 
 	now := time.Now().Unix()
-	r1 := requestIDGen.rng.Int63()
-	requestIDGen.Lock()
-	r2 := requestIDGen.counter
-	requestIDGen.counter++
-	requestIDGen.Unlock()
-	combined := uint64(now)<<32 | uint64(r1&0xffffffff) ^ (r2 << 48)
+
+	// H1: Read 8 bytes from crypto/rand (64 bits of cryptographic entropy)
+	var rngBytes [8]byte
+	_, _ = rand.Read(rngBytes[:])
+	r1 := binary.BigEndian.Uint64(rngBytes[:])
+
+	// H2: Lock-free atomic counter
+	r2 := requestIDCounter.Add(1)
+	combined := uint64(now)<<32 | (r1 & 0xffffffff) ^ (r2 << 48)
 
 	buf := make([]byte, 24)
 	for i := 23; i >= 0; i-- {

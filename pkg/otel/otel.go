@@ -66,8 +66,13 @@ func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(cont
 		opts...,
 	)
 	if err != nil {
-		// Return nil shutdown — tracer init is best-effort, don't block startup
-		logger.Warnf("otel: failed to create exporter (endpoint=%s, tracing disabled): %v", endpoint, err)
+		// genuine misconfiguration. Log at appropriate level with guidance.
+		if mode == "dev" {
+			logger.Infof("otel: exporter unavailable in dev mode (endpoint=%s), tracing disabled: %v", endpoint, err)
+		} else {
+			logger.Warnf("otel: failed to create exporter (endpoint=%s, tracing disabled). "+
+				"Verify OTEL_EXPORTER_OTLP_ENDPOINT is reachable: %v", endpoint, err)
+		}
 		return func(ctx context.Context) error { return nil }
 	}
 

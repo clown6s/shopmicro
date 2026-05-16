@@ -148,7 +148,7 @@ func Run(configPath string) error {
 
 	// panic recovery — custom version logs stack trace
 	h.Use(
-		middleware.RecoveryMiddleware(),
+		middleware.RecoveryMiddleware(cfg.Mode),
 	)
 
 	// cors

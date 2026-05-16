@@ -135,7 +135,8 @@ func (v *VaultProvider) Get(key string) (string, bool) {
 // Name returns the provider identifier.
 func (v *VaultProvider) Name() string { return "vault" }
 
-// Close cleans up Vault client resources (currently a no-op but reserved for future use).
+// Close cleans up Vault client resources.
 func (v *VaultProvider) Close() {
+	v.client.SetToken("")
 	logger.Info("secrets: vault provider closed")
 }

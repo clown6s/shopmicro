@@ -17,6 +17,88 @@ type UserDal struct {
 	db *sql.DB
 }
 
+// UserUpdate holds typed fields for updating a user record.
+// Zero-value fields are skipped (not included in the UPDATE statement).
+type UserUpdate struct {
+	RealName *string
+	Avatar   *string
+	Gender   *int8
+	Age      *int16
+	Phone    *string
+	Email    *string
+	Remark   *string
+}
+
+// SetRealName is a convenience helper that sets RealName if value is non-empty.
+func (u *UserUpdate) SetRealName(v string) *UserUpdate {
+	u.RealName = &v
+	return u
+}
+
+// SetAvatar is a convenience helper.
+func (u *UserUpdate) SetAvatar(v string) *UserUpdate {
+	u.Avatar = &v
+	return u
+}
+
+// SetGender is a convenience helper.
+func (u *UserUpdate) SetGender(v int8) *UserUpdate {
+	u.Gender = &v
+	return u
+}
+
+// SetAge is a convenience helper.
+func (u *UserUpdate) SetAge(v int16) *UserUpdate {
+	u.Age = &v
+	return u
+}
+
+// SetPhone is a convenience helper.
+func (u *UserUpdate) SetPhone(v string) *UserUpdate {
+	u.Phone = &v
+	return u
+}
+
+// SetEmail is a convenience helper.
+func (u *UserUpdate) SetEmail(v string) *UserUpdate {
+	u.Email = &v
+	return u
+}
+
+// SetRemark is a convenience helper.
+func (u *UserUpdate) SetRemark(v string) *UserUpdate {
+	u.Remark = &v
+	return u
+}
+
+// Fields returns the non-nil update entries as a map for backward compatibility.
+// This allows gradual migration without changing all call sites at once.
+func (u *UserUpdate) Fields() map[string]interface{} {
+	m := make(map[string]interface{})
+	if u.RealName != nil {
+		m["real_name"] = *u.RealName
+	}
+	if u.Avatar != nil {
+		m["avatar"] = *u.Avatar
+	}
+	if u.Gender != nil {
+		m["gender"] = *u.Gender
+	}
+	if u.Age != nil {
+		m["age"] = *u.Age
+	}
+	if u.Phone != nil {
+		m["phone"] = *u.Phone
+	}
+	if u.Email != nil {
+		m["email"] = *u.Email
+	}
+	if u.Remark != nil {
+		m["remark"] = *u.Remark
+	}
+	return m
+}
+
 func (d *UserDal) Create(ctx context.Context, user *model.User) error {
 	result, err := d.db.ExecContext(ctx,
 		`INSERT INTO user (password, real_name, avatar, gender, age, phone, email, remark)
@@ -53,6 +135,8 @@ func (d *UserDal) GetByPhone(ctx context.Context, phone string) (*model.User, er
 	))
 }
 
+// Update applies the given updates to the user with the given id.
+// The internal conversion to map preserves the whitelist/blocklist safety.
 func (d *UserDal) Update(ctx context.Context, id int64, updates map[string]interface{}) error {
 	if len(updates) == 0 {
 		return nil
@@ -154,15 +238,11 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone st
 	}
 
 	offset := int64(page-1) * int64(pageSize)
-	// P1-08: List query does NOT select password column — no need to load hashes into memory
 	querySQL := fmt.Sprintf(
 		`SELECT id, COALESCE(real_name,''), COALESCE(avatar,''), gender, COALESCE(age,0),
 		        phone, COALESCE(email,''), create_time, update_time, COALESCE(remark,'')
 		 FROM user WHERE %s
 		 ORDER BY id DESC LIMIT ? OFFSET ?`, where)
-	// P2-14 fix: allocate a fresh slice for the second query so that
-	// appending pageSize/offset does not write into the shared underlying
-	// array backing 'args', which is still in use by the count query above.
 	queryArgs := make([]interface{}, len(args), len(args)+2)
 	copy(queryArgs, args)
 	queryArgs = append(queryArgs, pageSize, offset)

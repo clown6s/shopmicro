@@ -7,6 +7,7 @@ import (
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 
+	"shopmicro/pkg/logger"
 	"shopmicro/pkg/secrets"
 )
 
@@ -35,9 +36,18 @@ func Load(path string, cfg interface{}) error {
 		return err
 	}
 
-	// 尝试加载 .env（工作目录 > config.yaml 同目录，文件不存在时不报错）
-	godotenv.Load()                                          // ./  .env (working directory)
-	godotenv.Load(filepath.Join(filepath.Dir(path), ".env")) // config dir .env
+	// M1 fix: Log errors from .env loading instead of silently ignoring them.
+	// File-not-found is expected (no .env is fine), but parse errors matter.
+	if err := godotenv.Load(); err != nil {
+		if !os.IsNotExist(err) {
+			logger.Warnf("conf: failed to load .env from working directory: %v", err)
+		}
+	}
+	if err := godotenv.Load(filepath.Join(filepath.Dir(path), ".env")); err != nil {
+		if !os.IsNotExist(err) {
+			logger.Warnf("conf: failed to load .env from config dir: %v", err)
+		}
+	}
 	return nil
 }
 

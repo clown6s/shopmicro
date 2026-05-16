@@ -375,15 +375,14 @@ func (p *Proxy) WatchServices(
 			}
 
 			err := p.watchOnce(ctx, resolver, etcdAddrs, protoBase)
-			// P2-15 fix: reset backoff after watchOnce returns, regardless of error.
-			// If watchOnce returned nil (e.g. context cancelled mid-reconnect),
-			// we exit above. If it returned a "channel closed" error, we backoff
-			// but then immediately reset to 1s so compounding delays do not
-			// accumulate across multiple transient failures.
-			backoff = time.Second
 
 			if ctx.Err() != nil {
 				return
+			}
+
+			// backoff: 1s -> 2s -> 4s -> ... -> 30s cap.
+			if err == nil {
+				backoff = time.Second
 			}
 
 			// Watch channel closed (etcd connection lost or other error)
@@ -393,9 +392,11 @@ func (p *Proxy) WatchServices(
 				return
 			case <-time.After(backoff):
 			}
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
+			if err != nil {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
 			}
 		}
 	}()
@@ -435,9 +436,6 @@ func (p *Proxy) watchOnce(
 			}
 			protoPath := buildProtoPath(protoBase, svcName)
 
-			// P2-06: warn but do not block — a newly-deployed service may
-			// momentarily appear in etcd before its proto file is copied over
-			// (e.g. rolling update race).  If it persists, the next startup
 			// DiscoverAndRegister will catch the missing file and fail.
 			if _, err := os.Stat(protoPath); err != nil {
 				if os.IsNotExist(err) {

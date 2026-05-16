@@ -1,4 +1,4 @@
-.PHONY: gen user gateway tidy clean setup
+.PHONY: gen user gateway gateway-prod tidy clean setup
 
 gen:
 	cd user && kitex -module shopmicro/user -service user -type protobuf api/user.proto
@@ -8,6 +8,9 @@ user:
 
 gateway:
 	cd gateway && go run main.go
+
+gateway-prod:
+	cd gateway && go build -tags prod -o gateway-prod .
 
 tidy:
 	cd pkg && go mod tidy
