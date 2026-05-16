@@ -6,7 +6,7 @@ mysql:
 
 # 业务缓存 Redis（开发阶段与网关共用，生产环境隔离）
 redis:
-  addr: "10.211.55.5:6379"
+  addr: "127.0.0.1:6379"
   password: ""  # 通过 REDIS_PASSWORD 环境变量或 .env 设置
   db: 0
 
@@ -18,7 +18,7 @@ jwt:
 
 etcd:
   addrs:
-    - "10.211.55.5:2379"
+    - "127.0.0.1:2379"
 
 mode: "dev"
 

@@ -2,14 +2,14 @@ server:
   addr: ":8080"
 
 # 限流专用 Redis（开发阶段与业务共用，生产环境隔离）
-# 通过 REDIS_ADDR 环境变量覆盖，或直接修改此处
+# 通过环境变量 REDIS_ADDR 设置，如未设置则使用默认值
 redis:
-  addr: "${REDIS_ADDR:-localhost:6379}"
+  addr: "localhost:6379"
   password: ""  # 通过 REDIS_PASSWORD 环境变量设置
   db: 0
 
 jwt:
-  secret: ""  # 通过 JWT_SECRET 环境变量或 .env 设置
+  secret: ""  # 通过 JWT_SECRET 环境变量设置（生产环境必须设置，至少64字符）
   issuer: "shopmicro"
 
 cors:
@@ -19,27 +19,30 @@ cors:
   allowCredentials: true
 
 # proto 文件基础路径（相对于网关工作目录），默认 "../"
-# proto 约定路径: {protoBase}{serviceName}/api/{serviceName}.proto
 protoBase: "../"
 
 etcd:
   addrs:
-    # 通过 ETCD_ADDRS 环境变量覆盖，逗号分隔多个地址
-    - "${ETCD_ADDRS:-localhost:2379}"
+    # 通过环境变量 ETCD_ADDRS 设置（逗号分隔多个地址）
+    - "localhost:2379"
 
 mode: "dev"
 
-# HashiCorp Vault（留空则使用环境变量 .env）
+# HashiCorp Vault（留空则使用环境变量）
 vault:
-  address: ""       # 通过 VAULT_ADDRESS 环境变量设置，如 "http://vault.example.com:8200"
+  address: ""       # 通过 VAULT_ADDRESS 环境变量设置
   token: ""         # 通过 VAULT_TOKEN 环境变量设置（禁止硬编码）
   mountPath: "secret"
+
+# OpenTelemetry 配置
+otel:
+  endpoint: "localhost:4317"  # 通过 OTEL_EXPORTER_OTLP_ENDPOINT 环境变量覆盖
+  sampleRate: 0.1             # 1.0=全采样，0.1=10%采样，dev模式默认1.0
 
 # 分布式限流配置 (Redis 滑动窗口)
 rateLimit:
   limit: 100          # 窗口内最大请求数
   windowSec: 60       # 滑动窗口时长（秒）
-  # P1-15: 端点级限流 — Login 端点更严格
   endpoints:
     user/Login:
       limit: 5            # 每分钟每IP最多5次登录尝试

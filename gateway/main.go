@@ -63,10 +63,11 @@ func Run(configPath string) error {
 	// =========================
 	// otel tracer
 	// =========================
-
-	shutdownTracer := otel.InitTracer(
+	// P0-01 fix: 使用配置文件中的 OTEL endpoint
+	shutdownTracer := otel.InitTracerWithEndpoint(
 		"shopmicro-gateway",
 		cfg.Mode,
+		cfg.OTEL.Endpoint,
 	)
 
 	defer shutdownTracer(

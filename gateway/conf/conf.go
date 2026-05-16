@@ -22,6 +22,12 @@ type Config struct {
 	RateLimit      RateLimit           `yaml:"rateLimit"`
 	CircuitBreaker CircuitBreakerCfg   `yaml:"circuitBreaker"`
 	Vault          secrets.VaultConfig `yaml:"vault"`
+	OTEL           OTEL                `yaml:"otel"`
+}
+
+type OTEL struct {
+	Endpoint   string  `yaml:"endpoint"`   // OTLP collector 地址
+	SampleRate float64 `yaml:"sampleRate"` // 采样率 0.0-1.0
 }
 
 type CORS struct {
@@ -80,6 +86,14 @@ func (c *Config) SetDefaults() {
 	if cb.ConsecutiveFailures <= 0 {
 		cb.ConsecutiveFailures = 5
 	}
+
+	// OTEL defaults
+	if c.OTEL.Endpoint == "" {
+		c.OTEL.Endpoint = "localhost:4317"
+	}
+	if c.OTEL.SampleRate <= 0 {
+		c.OTEL.SampleRate = 0.1
+	}
 }
 
 func (c *Config) ApplyEnv() {
@@ -116,12 +130,25 @@ func (c *Config) ApplyEnv() {
 	if v := conf.Env("SERVER_ADDR", ""); v != "" {
 		c.Server.Addr = v
 	}
+	// OTEL 配置覆盖
+	if v := conf.Env("OTEL_EXPORTER_OTLP_ENDPOINT", ""); v != "" {
+		c.OTEL.Endpoint = v
+	}
+	if v := conf.Env("OTEL_TRACE_SAMPLE_RATE", ""); v != "" {
+		// 采样率通过 otel.InitTracer 内部处理
+	}
 }
 
 func (c *Config) Validate() error {
-	// P1-SEC-01 fix: JWT 密钥最小长度从 32 提高到 64 字符
-	if len(c.JWT.Secret) < 64 {
-		return fmt.Errorf("jwt secret must be at least 64 characters, got %d", len(c.JWT.Secret))
+	mode := strings.ToLower(c.Mode)
+
+	// JWT 密钥验证：生产环境要求 64 字符，开发环境放宽到 32 字符
+	minSecretLen := 64
+	if mode == "dev" {
+		minSecretLen = 32
+	}
+	if len(c.JWT.Secret) < minSecretLen {
+		return fmt.Errorf("jwt secret must be at least %d characters, got %d", minSecretLen, len(c.JWT.Secret))
 	}
 	if c.Redis.Addr == "" {
 		return fmt.Errorf("redis addr is required, set REDIS_ADDR env or config.yaml")
@@ -129,7 +156,6 @@ func (c *Config) Validate() error {
 	if len(c.Etcd.Addrs) == 0 {
 		return fmt.Errorf("etcd addresses are required, set ETCD_ADDRS env or config.yaml")
 	}
-	mode := strings.ToLower(c.Mode)
 	if mode != "dev" && mode != "prod" && mode != "staging" {
 		return fmt.Errorf("invalid mode %q, expected dev/prod/staging", c.Mode)
 	}
