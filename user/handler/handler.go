@@ -178,6 +178,21 @@ const (
 	loginLockoutTTL  = 15 * time.Minute // lockout duration
 )
 
+// R2-P2-04: Atomic Lua script to revoke all user tokens (access + refresh).
+// Shared by DeleteUser and UpdateUser(phone change) to prevent partial revocation on crash.
+var revokeTokensLua = redis.NewScript(`
+local tokenKey = KEYS[1]
+local rtSetKey = KEYS[2]
+local rtTokens = redis.call('SMEMBERS', rtSetKey)
+for _, rt in ipairs(rtTokens) do
+    local rtKey = 'shopmicro:user:refresh:' .. rt
+    redis.call('DEL', rtKey)
+end
+redis.call('DEL', rtSetKey)
+redis.call('DEL', tokenKey)
+return 1
+`)
+
 // checkLoginAttempts checks if the phone number has too many recent failed login attempts.
 func (s *UserServiceImpl) checkLoginAttempts(ctx context.Context, phone string) error {
 	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
@@ -507,21 +522,12 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 	// P2-12 fix: When phone is changed, revoke all existing sessions so the old
 	// phone number cannot be used to receive an SMS with a 2FA code for the account.
 	// The user must re-login with the new phone to get fresh tokens.
+	// R6-P3-01: Use atomic Lua script (same as DeleteUser) to prevent partial revocation on crash.
 	if _, changed := updates["phone"]; changed {
 		tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
-		if err := s.rdb.Del(ctx, tokenKey); err != nil {
-			logger.Warnf("update user: failed to revoke tokens on phone change (user_id=%d): %v", req.GetId(), err)
-		}
 		rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
-		rtTokens, rtErr := s.rdb.SMembers(ctx, rtSetKey)
-		if rtErr != nil {
-			logger.Warnf("update user: failed to read refresh token set (user_id=%d): %v", req.GetId(), rtErr)
-		} else {
-			for _, t := range rtTokens {
-				rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, t)
-				_ = s.rdb.Del(ctx, rtKey)
-			}
-			_ = s.rdb.Del(ctx, rtSetKey)
+		if _, err := revokeTokensLua.Run(ctx, s.rdb, []string{tokenKey, rtSetKey}); err != nil {
+			logger.Warnf("update user: failed to revoke tokens atomically (user_id=%d): %v", req.GetId(), err)
 		}
 	}
 
@@ -549,20 +555,6 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 	}
 
 	// R2-P2-04 fix: Atomically revoke all user tokens in one Lua script.
-	// This prevents the race where some RT keys are deleted but others remain
-	// (e.g. process crash mid-loop), leaving the user logged in with old sessions.
-	revokeTokensLua := redis.NewScript(`
-local tokenKey = KEYS[1]
-local rtSetKey = KEYS[2]
-local rtTokens = redis.call('SMEMBERS', rtSetKey)
-for _, rt in ipairs(rtTokens) do
-    local rtKey = 'shopmicro:user:refresh:' .. rt
-    redis.call('DEL', rtKey)
-end
-redis.call('DEL', rtSetKey)
-redis.call('DEL', tokenKey)
-return 1
-`)
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
 	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
 	if _, err := revokeTokensLua.Run(ctx, s.rdb, []string{tokenKey, rtSetKey}); err != nil {

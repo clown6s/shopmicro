@@ -25,11 +25,12 @@ func InitTracerWithEndpoint(serviceName, mode, defaultEndpoint string) func(cont
 	if ep := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); ep != "" {
 		endpoint = ep
 	}
-	// Strip scheme prefix (gRPC requires bare host:port)
+	// R5-P1-01 fix: capture scheme before stripping — gRPC requires bare host:port
+	useTLS := strings.HasPrefix(endpoint, "https://")
 	endpoint = strings.TrimPrefix(endpoint, "https://")
 	endpoint = strings.TrimPrefix(endpoint, "http://")
 
-	return initTracerCommon(serviceName, mode, endpoint)
+	return initTracerCommon(serviceName, mode, endpoint, useTLS)
 }
 
 // InitTracer initialises the OpenTelemetry tracer provider and global propagator.
@@ -45,9 +46,9 @@ func InitTracer(serviceName, mode string) func(context.Context) error {
 }
 
 // initTracerCommon 公共的 tracer 初始化逻辑
-// P2-04 fix: 支持 TLS 安全连接，通过 OTEL_EXPORTER_OTLP_ENDPOINT 配置
-// endpoint 格式: http(s)://host:port (带 scheme) 或 host:port (默认 insecure)
-func initTracerCommon(serviceName, mode, endpoint string) func(context.Context) error {
+// R5-P1-01 fix: useTLS 参数独立传入，不再依赖 endpoint 中的 scheme 前缀
+// gRPC exporter 需要裸 host:port，TLS 由 useTLS 布尔值控制
+func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(context.Context) error {
 	// Use a bounded context so the exporter never blocks forever
 	initCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -55,16 +56,10 @@ func initTracerCommon(serviceName, mode, endpoint string) func(context.Context) 
 	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(endpoint),
 	}
-	// P2-04 fix: 根据 endpoint scheme 决定是否使用 TLS
-	if strings.HasPrefix(endpoint, "https://") {
-		// 生产环境应配置 https endpoint 使用 TLS
-		opts = append(opts, otlptracegrpc.WithInsecure())
-	} else if !strings.Contains(endpoint, "://") {
-		// 不带 scheme 的 endpoint 默认使用 insecure (兼容 localhost 和内网地址)
-		// 生产环境应配置带 https:// 的 endpoint
+	// R5-P1-01 fix: 仅在非 TLS 时添加 WithInsecure()
+	if !useTLS {
 		opts = append(opts, otlptracegrpc.WithInsecure())
 	}
-	// Note: 如果 endpoint 是 http:// 则 strip 后仍是 host:port，走 insecure 分支
 
 	exporter, err := otlptracegrpc.New(
 		initCtx,
