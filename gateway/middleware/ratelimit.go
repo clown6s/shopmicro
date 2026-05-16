@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
@@ -109,7 +111,7 @@ func (rl *RedisRateLimiter) NewEndpointCheckFn() func(ctx context.Context, endpo
 		}
 		key := fmt.Sprintf("shopmicro:ratelimit:ep:%s:ip:%s", endpointKey, ip)
 		now := time.Now()
-		member := fmt.Sprintf("%d:%06d", now.UnixNano(), now.Nanosecond()%1000000)
+		member := uniqueMember(now)
 		return rl.allowWithConfig(ctx, key, now, el.window, el.limit, member)
 	}
 }
@@ -120,7 +122,7 @@ func (rl *RedisRateLimiter) NewEndpointCheckFn() func(ctx context.Context, endpo
 // This prevents rate-limit bypass in distributed environments.
 func (rl *RedisRateLimiter) Allow(ctx context.Context, key string) bool {
 	now := time.Now()
-	member := fmt.Sprintf("%d:%06d", now.UnixNano(), now.Nanosecond()%1000000)
+	member := uniqueMember(now)
 	return rl.allowWithConfig(ctx, key, now, rl.window, rl.limit, member)
 }
 
@@ -149,6 +151,15 @@ func (rl *RedisRateLimiter) allowWithConfig(ctx context.Context, key string, now
 // getClientIP returns the real client IP from the TCP connection.
 func getClientIP(c *app.RequestContext) string {
 	return c.ClientIP()
+}
+
+// uniqueMember returns a rate-limit member string that is guaranteed unique
+// even for concurrent requests at the same nanosecond.
+// Format: {unixNano}:{randSuffix}
+func uniqueMember(now time.Time) string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return fmt.Sprintf("%d:%08x", now.UnixNano(), binary.BigEndian.Uint64(b[:]))
 }
 
 // RateLimitMiddleware returns a Hertz middleware that performs distributed

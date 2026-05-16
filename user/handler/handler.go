@@ -12,6 +12,7 @@ import (
 
 	"github.com/bytedance/gopkg/cloud/metainfo"
 	"github.com/go-sql-driver/mysql"
+	goredis "github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 
 	"shopmicro/user/data"
@@ -83,6 +84,10 @@ type UserServiceImpl struct {
 }
 
 func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer string, jwtRefreshSecret string) *UserServiceImpl {
+	// P2-16 fix: guard against zero jwtExpHours to prevent degenerate rtExpHrs
+	if jwtExpHours <= 0 {
+		jwtExpHours = 24
+	}
 	gen, err := jwt.NewGenerator(jwtSecret, time.Duration(jwtExpHours)*time.Hour, jwtIssuer)
 	if err != nil {
 		logger.Fatalf("init jwt generator failed: %v", err)
@@ -138,8 +143,15 @@ func (s *UserServiceImpl) checkLoginAttempts(ctx context.Context, phone string) 
 	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
 	count, err := s.rdb.Get(ctx, key)
 	if err != nil {
-		// Redis error — allow login but log (fail-open for this check, not for token validation)
-		return nil
+		// redis.Nil means the key does not exist → no failed attempts → allow.
+		// Only treat non-Nil errors (network, timeout) as Redis failures.
+		if errors.Is(err, goredis.Nil) {
+			return nil
+		}
+		// P2-13 fix: Redis down → fail closed (reject login).
+		// Allowing login when Redis is unreachable enables brute-force bypass.
+		logger.Warnf("login: redis unavailable for rate check, failing closed (phone=%s): %v", maskPhone(phone), err)
+		return errAccountLocked
 	}
 	if n, _ := strconv.Atoi(count); n >= loginMaxFailures {
 		return errAccountLocked
@@ -436,6 +448,27 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 		return nil, errInternal
 	}
 
+	// P2-12 fix: When phone is changed, revoke all existing sessions so the old
+	// phone number cannot be used to receive an SMS with a 2FA code for the account.
+	// The user must re-login with the new phone to get fresh tokens.
+	if _, changed := updates["phone"]; changed {
+		tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
+		if err := s.rdb.Del(ctx, tokenKey); err != nil {
+			logger.Warnf("update user: failed to revoke tokens on phone change (user_id=%d): %v", req.GetId(), err)
+		}
+		rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
+		rtTokens, rtErr := s.rdb.SMembers(ctx, rtSetKey)
+		if rtErr != nil {
+			logger.Warnf("update user: failed to read refresh token set (user_id=%d): %v", req.GetId(), rtErr)
+		} else {
+			for _, t := range rtTokens {
+				rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, t)
+				_ = s.rdb.Del(ctx, rtKey)
+			}
+			_ = s.rdb.Del(ctx, rtSetKey)
+		}
+	}
+
 	return &v1.UpdateUserResp{}, nil
 }
 
@@ -459,27 +492,25 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 		return nil, errInternal
 	}
 
-	// P2-05: Clear ALL Redis tokens FIRST (before DB delete).
-	// If DB delete fails after this, user still exists but all sessions are
-	// invalidated — user can re-login. This is safer than the reverse order
-	// where a deleted user's tokens remain valid until TTL expires.
+	// R2-P2-04 fix: Atomically revoke all user tokens in one Lua script.
+	// This prevents the race where some RT keys are deleted but others remain
+	// (e.g. process crash mid-loop), leaving the user logged in with old sessions.
+	revokeTokensLua := redis.NewScript(`
+local tokenKey = KEYS[1]
+local rtSetKey = KEYS[2]
+local rtTokens = redis.call('SMEMBERS', rtSetKey)
+for _, rt in ipairs(rtTokens) do
+    local rtKey = 'shopmicro:user:refresh:' .. rt
+    redis.call('DEL', rtKey)
+end
+redis.call('DEL', rtSetKey)
+redis.call('DEL', tokenKey)
+return 1
+`)
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
-	if err := s.rdb.Del(ctx, tokenKey); err != nil {
-		logger.Errorf("delete user: failed to clear redis tokens (user_id=%d): %v", req.GetId(), err)
-	}
-
 	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
-	rtTokens, rtErr := s.rdb.SMembers(ctx, rtSetKey)
-	if rtErr != nil {
-		logger.Errorf("delete user: failed to read refresh token set (user_id=%d): %v", req.GetId(), rtErr)
-	} else {
-		for _, t := range rtTokens {
-			rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, t)
-			if delErr := s.rdb.Del(ctx, rtKey); delErr != nil {
-				logger.Warnf("delete user: failed to revoke refresh token (user_id=%d): %v", req.GetId(), delErr)
-			}
-		}
-		_ = s.rdb.Del(ctx, rtSetKey)
+	if _, err := revokeTokensLua.Run(ctx, s.rdb, []string{tokenKey, rtSetKey}); err != nil {
+		logger.Errorf("delete user: failed to revoke tokens atomically (user_id=%d): %v", req.GetId(), err)
 	}
 
 	// Now perform the soft delete
@@ -615,6 +646,27 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 var errRefreshTokenRequired = newBiz(errcode.CodeUserTokenRequired, "refresh token is required")
 var errRefreshTokenInvalid = newBiz(errcode.CodeUserTokenInvalid, "invalid or expired refresh token")
 
+// refreshTokensLua atomically:
+//  1. Removes old RT from reverse set
+//  2. Adds new RT to reverse set
+//  3. Stores new RT → userID mapping in Redis
+//  4. Resets TTL on the reverse set
+//
+// KEYS[1] = rtSetKey  (shopmicro:user:rtset:{userID})
+// KEYS[2] = rtKey     (shopmicro:user:refresh:{newRT})
+// ARGV[1] = old RT to remove from set
+// ARGV[2] = new RT to add to set and store
+// ARGV[3] = userID (string) to store alongside new RT
+// ARGV[4] = TTL in seconds for rtSet
+// ARGV[5] = TTL in seconds for new RT key
+var refreshTokensLua = redis.NewScript(`
+redis.call('SREM', KEYS[1], ARGV[1])
+redis.call('SADD', KEYS[1], ARGV[2])
+redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[5])
+redis.call('EXPIRE', KEYS[1], ARGV[4])
+return 1
+`)
+
 // RefreshToken issues a new access token + refresh token pair.
 // The old refresh token is rotated (deleted from Redis) to prevent replay.
 func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshTokenReq) (resp *v1.RefreshTokenResp, err error) {
@@ -669,25 +721,18 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 		return nil, errInternal
 	}
 
-	// Store new refresh token
+	// R4-P2-03 fix: Atomically update refresh token state using Lua script.
+	// This prevents the race where old RT is removed but new RT is not stored
+	// (causing token loss) or new RT is stored but old RT is not removed (replay).
+	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", userID)
 	newRTKey := fmt.Sprintf("%s%s", refreshTokenPrefix, newRT)
 	rtTTL := time.Duration(s.rtExpHrs) * time.Hour
-	if err := s.rdb.Set(ctx, newRTKey, userID, rtTTL); err != nil {
-		logger.Errorf("refresh token: store new refresh token failed: %v", err)
+	if _, err := refreshTokensLua.Run(ctx, s.rdb,
+		[]string{rtSetKey, newRTKey},
+		rt, newRT, userIDStr, int(rtTTL.Seconds()), int(rtTTL.Seconds()),
+	); err != nil {
+		logger.Errorf("refresh token: atomic RT rotation failed (user_id=%d): %v", userID, err)
 		return nil, errInternal
-	}
-
-	// R4-P2-03: Atomically update reverse mapping SET (remove old, add new, reset TTL)
-	// using Lua script to prevent data loss if SRem succeeds but SAdd fails.
-	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", userID)
-	refreshRtSetLua := redis.NewScript(`
-redis.call('SREM', KEYS[1], ARGV[1])
-redis.call('SADD', KEYS[1], ARGV[2])
-redis.call('EXPIRE', KEYS[1], ARGV[3])
-return 1
-`)
-	if _, err := refreshRtSetLua.Run(ctx, s.rdb, []string{rtSetKey}, rt, newRT, int(rtTTL.Seconds())); err != nil {
-		logger.Warnf("refresh token: update reverse set failed (user_id=%d): %v", userID, err)
 	}
 
 	return &v1.RefreshTokenResp{

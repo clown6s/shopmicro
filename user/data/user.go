@@ -158,7 +158,12 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone st
 		        phone, COALESCE(email,''), create_time, update_time, COALESCE(remark,'')
 		 FROM user WHERE %s
 		 ORDER BY id DESC LIMIT ? OFFSET ?`, where)
-	queryArgs := append(args, pageSize, offset)
+	// P2-14 fix: allocate a fresh slice for the second query so that
+	// appending pageSize/offset does not write into the shared underlying
+	// array backing 'args', which is still in use by the count query above.
+	queryArgs := make([]interface{}, len(args), len(args)+2)
+	copy(queryArgs, args)
+	queryArgs = append(queryArgs, pageSize, offset)
 	rows, err := d.db.QueryContext(ctx, querySQL, queryArgs...)
 	if err != nil {
 		return nil, 0, err

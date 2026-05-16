@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/vault/api"
@@ -105,9 +106,14 @@ func (v *VaultProvider) Get(key string) (string, bool) {
 		return "", false
 	}
 
-	// If key contains a dot (e.g. "mysql/dsn"), the last segment is the field name.
-	// Otherwise, the caller expects a value under key "value" or uses key as field.
-	val, ok := data[key]
+	// Extract field name from key: "mysql/dsn" → "dsn", "db/password" → "password".
+	// The full path is used for the Vault API call; only the last segment
+	// is used to look up the value inside the data map (KV v2 nests secrets
+	// under secret.Data["data"]["fieldName"]).
+	parts := strings.Split(key, "/")
+	fieldName := parts[len(parts)-1]
+
+	val, ok := data[fieldName]
 	if ok {
 		if s, ok := val.(string); ok {
 			return s, true
@@ -115,7 +121,7 @@ func (v *VaultProvider) Get(key string) (string, bool) {
 		return fmt.Sprintf("%v", val), true
 	}
 
-	// Fallback: try "value" as a default field name
+	// Fallback: try "value" as a default field name (handles flat secret paths)
 	if val, ok := data["value"]; ok {
 		if s, ok := val.(string); ok {
 			return s, true

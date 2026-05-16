@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"shopmicro/pkg/conf"
+	"shopmicro/pkg/logger"
 	"shopmicro/pkg/mysql"
 	"shopmicro/pkg/redis"
 	"shopmicro/pkg/secrets"
@@ -38,10 +39,13 @@ func (c *Config) GetHealthAddr() string {
 
 // ApplyEnv 从环境变量覆盖敏感配置
 func (c *Config) ApplyEnv() {
-	// Initialise secrets provider (Vault if configured, fallback to env)
+	// P2-11 fix: Never use Vault.Token from config.yaml as a default.
 	if c.Vault.Address != "" {
-		if token := conf.Env("VAULT_TOKEN", c.Vault.Token); token != "" {
+		if token := conf.Env("VAULT_TOKEN", ""); token != "" {
 			c.Vault.Token = token
+		}
+		if c.Vault.Token == "" {
+			logger.Warnf("vault address is set but VAULT_TOKEN env var is missing — vault init will fail")
 		}
 		secrets.InitProvider(c.Vault)
 	}

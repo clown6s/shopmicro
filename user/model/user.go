@@ -16,7 +16,3 @@ type User struct {
 	Remark     string    `json:"remark"`
 	DeletedAt  string    `json:"-"`
 }
-
-func (User) TableName() string {
-	return "user"
-}

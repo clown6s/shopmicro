@@ -29,23 +29,23 @@ func ReadyHandler(rdb *redis.Client, etcdClient *clientv3.Client) app.HandlerFun
 
 		// Check Redis — with independent timeout to avoid blocking on dead connections
 		if rdb != nil {
-			pingCtx, pingCancel := context.WithTimeout(ctx, 2*time.Second)
-			defer pingCancel()
+			pingCtx, pingCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			if !rdb.Ping(pingCtx) {
 				failed = append(failed, "redis")
 			}
+			pingCancel() // P2-08 fix: cancel immediately after use — not deferred
 		} else {
 			failed = append(failed, "redis (nil)")
 		}
 
 		// Check Etcd — lightweight Get with short timeout
 		if etcdClient != nil {
-			etcdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			defer cancel()
+			etcdCtx, etcdCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			_, err := etcdClient.Get(etcdCtx, "health-check-key", clientv3.WithCountOnly())
 			if err != nil {
 				failed = append(failed, "etcd")
 			}
+			etcdCancel() // P2-08 fix: cancel immediately after use — not deferred
 		}
 
 		if len(failed) > 0 {

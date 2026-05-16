@@ -367,6 +367,13 @@ func (p *Proxy) WatchServices(
 			}
 
 			err := p.watchOnce(ctx, resolver, etcdAddrs, protoBase)
+			// P2-15 fix: reset backoff after watchOnce returns, regardless of error.
+			// If watchOnce returned nil (e.g. context cancelled mid-reconnect),
+			// we exit above. If it returned a "channel closed" error, we backoff
+			// but then immediately reset to 1s so compounding delays do not
+			// accumulate across multiple transient failures.
+			backoff = time.Second
+
 			if ctx.Err() != nil {
 				return
 			}
@@ -574,72 +581,51 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			return
 		}
 
-		// P0 fix: correctly handle both wrapped and raw protobuf responses.
-		// Wrapped response:  {"code":0,"message":"","data":{...}}  (has "code" field)
-		// Raw protobuf response: {"id":1,"token":"..."}                 (no "code" field)
+		// P0 fix (revised P2-06): Single unmarshal to map, then branch on "code" field.
+		// This avoids unmarshaling the same JSON twice for wrapped responses.
 		if s, ok := resp.(string); ok && s != "" {
-			// R4-P3-06: Single-pass detection — use json.RawMessage to check for "code"
-			// field without a full second unmarshal.
-			var raw struct {
-				Code    json.RawMessage `json:"code"`
-				Message json.RawMessage `json:"message"`
-				Data    json.RawMessage `json:"data"`
-			}
-			if err := json.Unmarshal([]byte(s), &raw); err != nil {
+			var m map[string]interface{}
+			if err := json.Unmarshal([]byte(s), &m); err != nil {
 				// Unmarshal failed — return raw string as data
 				response.OK(c, s)
 				return
 			}
 
-			if raw.Code != nil {
-				// Wrapped response: parse code/message/data
-				var downstream struct {
-					Code    int         `json:"code"`
-					Message string      `json:"message"`
-					Data    interface{} `json:"data"`
-				}
-				if err := json.Unmarshal([]byte(s), &downstream); err != nil {
-					logger.Warnf("proxy: failed to unmarshal wrapped response: %v", err)
-					var data interface{}
-					json.Unmarshal([]byte(s), &data)
-					response.OK(c, data)
-					return
-				}
+			// Detect wrapped response by presence of "code" field
+			if codeRaw, hasCode := m["code"]; hasCode {
+				code, _ := codeRaw.(float64) // JSON numbers are float64
 
-				if downstream.Code != 0 {
+				if int(code) != 0 {
 					// Error response — pass through with correct HTTP status
 					statusCode := http.StatusOK
-					switch downstream.Code {
+					switch int(code) {
 					case int(errcode.CodeUserUnauthorized):
 						statusCode = http.StatusUnauthorized
 					case int(errcode.CodeUserForbidden):
 						statusCode = http.StatusForbidden
 					default:
-						if downstream.Code < 50000 {
+						if int(code) < 50000 {
 							statusCode = http.StatusBadRequest
 						} else {
 							statusCode = http.StatusInternalServerError
 						}
 					}
+					msg, _ := m["message"].(string)
 					c.JSON(statusCode, response.R{
-						Code:    downstream.Code,
-						Message: downstream.Message,
-						Data:    downstream.Data,
+						Code:    int(code),
+						Message: msg,
+						Data:    m["data"],
 					})
 					return
 				}
+
 				// Code == 0 (success wrapper): extract data field
-				response.OK(c, downstream.Data)
+				response.OK(c, m["data"])
 				return
 			}
 
-			// Raw protobuf response (LoginResp, RegisterUserResp, etc.)
-			// Wrap the entire response body as "data"
-			var data interface{}
-			if err := json.Unmarshal([]byte(s), &data); err != nil {
-				data = s
-			}
-			response.OK(c, data)
+			// Raw protobuf response — wrap the whole body as "data"
+			response.OK(c, m)
 			return
 		}
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"shopmicro/pkg/conf"
+	"shopmicro/pkg/logger"
 	"shopmicro/pkg/redis"
 	"shopmicro/pkg/secrets"
 )
@@ -83,9 +84,14 @@ func (c *Config) SetDefaults() {
 
 func (c *Config) ApplyEnv() {
 	// Initialise secrets provider (Vault if configured, fallback to env)
+	// P2-11 fix: Never use Vault.Token from config.yaml as a default — that would
+	// allow the token to be committed to source control. Only the env var can set it.
 	if c.Vault.Address != "" {
-		if token := conf.Env("VAULT_TOKEN", c.Vault.Token); token != "" {
+		if token := conf.Env("VAULT_TOKEN", ""); token != "" {
 			c.Vault.Token = token
+		}
+		if c.Vault.Token == "" {
+			logger.Warnf("vault address is set but VAULT_TOKEN env var is missing — vault init will fail")
 		}
 		secrets.InitProvider(c.Vault)
 	}
@@ -106,11 +112,15 @@ func (c *Config) ApplyEnv() {
 	if v := conf.Env("ETCD_ADDRS", ""); v != "" {
 		c.Etcd.Addrs = strings.Split(v, ",")
 	}
+	// P2-10: Support SERVER_ADDR override for container deployments (port binding)
+	if v := conf.Env("SERVER_ADDR", ""); v != "" {
+		c.Server.Addr = v
+	}
 }
 
 func (c *Config) Validate() error {
-	if c.JWT.Secret == "" {
-		return fmt.Errorf("jwt secret is required, set JWT_SECRET env or config.yaml")
+	if len(c.JWT.Secret) < 32 {
+		return fmt.Errorf("jwt secret must be at least 32 characters, got %d", len(c.JWT.Secret))
 	}
 	if c.Redis.Addr == "" {
 		return fmt.Errorf("redis addr is required, set REDIS_ADDR env or config.yaml")
