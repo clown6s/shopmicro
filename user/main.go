@@ -179,20 +179,26 @@ func Run(configPath string) error {
 	// =========================
 	// P0-07: HTTP health check server (for K8s probes)
 	// =========================
-
+	// P2-SEC-06 fix: 健康检查返回最小信息，不泄露内部依赖细节
 	healthy := &atomic.Bool{}
 	healthy.Store(true)
 	healthMux := http.NewServeMux()
-	// R4-P1-05: Health check now verifies MySQL + Redis connectivity
 	healthMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if !healthy.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, `{"status":"shutting_down"}`)
+			fmt.Fprintf(w, `{"status":"degraded"}`)
 			return
 		}
-		// Check MySQL connectivity (2s timeout)
+		// P2-SEC-06 fix: /health 端点不再检查 MySQL/Redis，仅做基础存活检查
+		// 详细的依赖健康检查由 K8s 的 liveness/readiness probes 通过 /healthz 端点完成
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"status":"ok"}`)
+	})
+	// P2-SEC-06 fix: 添加 /healthz 端点用于 K8s readiness probe（内部使用）
+	healthMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
+		// Check MySQL connectivity
 		if err := dataProvider.DB.PingContext(ctx); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprintf(w, `{"status":"unhealthy","failed":["mysql"]}`)

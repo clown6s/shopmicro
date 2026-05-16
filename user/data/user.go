@@ -130,7 +130,8 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone st
 	if page <= 0 {
 		page = 1
 	}
-	if pageSize <= 0 || pageSize > 100 {
+	// P2-SEC-05 fix: 降低 pageSize 上限到 20，防止数据遍历攻击
+	if pageSize <= 0 || pageSize > 20 {
 		pageSize = 20
 	}
 

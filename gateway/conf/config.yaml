@@ -2,9 +2,10 @@ server:
   addr: ":8080"
 
 # 限流专用 Redis（开发阶段与业务共用，生产环境隔离）
+# 通过 REDIS_ADDR 环境变量覆盖，或直接修改此处
 redis:
-  addr: "10.211.55.5:6379"
-  password: ""  # 通过 REDIS_PASSWORD 环境变量或 .env 设置
+  addr: "${REDIS_ADDR:-localhost:6379}"
+  password: ""  # 通过 REDIS_PASSWORD 环境变量设置
   db: 0
 
 jwt:
@@ -23,14 +24,15 @@ protoBase: "../"
 
 etcd:
   addrs:
-    - "10.211.55.5:2379"
+    # 通过 ETCD_ADDRS 环境变量覆盖，逗号分隔多个地址
+    - "${ETCD_ADDRS:-localhost:2379}"
 
 mode: "dev"
 
 # HashiCorp Vault（留空则使用环境变量 .env）
 vault:
-  address: ""       # 通过 VAULT_ADDRESS 环境变量设置，如 "http://10.211.55.5:8200"
-  token: ""         # 通过 VAULT_TOKEN 环境变量设置
+  address: ""       # 通过 VAULT_ADDRESS 环境变量设置，如 "http://vault.example.com:8200"
+  token: ""         # 通过 VAULT_TOKEN 环境变量设置（禁止硬编码）
   mountPath: "secret"
 
 # 分布式限流配置 (Redis 滑动窗口)

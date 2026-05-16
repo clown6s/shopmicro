@@ -11,8 +11,9 @@ import (
 var (
 	ErrTokenInvalid = errors.New("token is invalid")
 	ErrTokenExpired = errors.New("token is expired")
-	ErrSecretWeak   = errors.New("jwt secret must be at least 32 characters")
-	ErrTokenIssuer  = errors.New("token issuer mismatch")
+	// P1-SEC-01 fix: JWT 密钥最小长度从 32 提高到 64 字符以增强安全性
+	ErrSecretWeak  = errors.New("jwt secret must be at least 64 characters")
+	ErrTokenIssuer = errors.New("token issuer mismatch")
 )
 
 // Claims 自定义 JWT 载荷
@@ -31,7 +32,8 @@ type Generator struct {
 // NewGenerator creates a JWT generator with the given HMAC secret and expiration.
 // issuer is optional — if empty, the "iss" claim is omitted.
 func NewGenerator(secret string, expiration time.Duration, issuer string) (*Generator, error) {
-	if len(secret) < 32 {
+	// P1-SEC-01 fix: 提高密钥最小长度要求到 64 字符
+	if len(secret) < 64 {
 		return nil, ErrSecretWeak
 	}
 	return &Generator{secret: []byte(secret), expiration: expiration, issuer: issuer}, nil
@@ -39,11 +41,13 @@ func NewGenerator(secret string, expiration time.Duration, issuer string) (*Gene
 
 func (g *Generator) Generate(userID int64) (string, error) {
 	now := time.Now()
+	// P2-SEC-02 fix: 添加 NotBefore 字段防止"未来时间戳"攻击
 	claims := Claims{
 		UserID: userID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(now.Add(g.expiration)),
 			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
 			Issuer:    g.issuer,
 		},
 	}
@@ -58,10 +62,11 @@ type Parser struct {
 }
 
 // NewParser creates a JWT parser with the given HMAC secret.
-// Returns an error if the secret is shorter than 32 characters.
+// Returns an error if the secret is shorter than 64 characters.
 // If issuer is non-empty, tokens with a different "iss" claim are rejected.
 func NewParser(secret string, issuer string) (*Parser, error) {
-	if len(secret) < 32 {
+	// P1-SEC-01 fix: 保持与 Generator 一致的密钥长度要求
+	if len(secret) < 64 {
 		return nil, ErrSecretWeak
 	}
 	return &Parser{secret: []byte(secret), issuer: issuer}, nil

@@ -117,6 +117,11 @@ func Run(configPath string) error {
 		server.WithMaxRequestBodySize(
 			1<<20, // 1MB
 		),
+
+		// P2-SEC-03 fix: 添加服务器超时配置防止慢客户端攻击
+		server.WithReadTimeout(10*time.Second),
+		server.WithWriteTimeout(30*time.Second),
+		server.WithIdleTimeout(60*time.Second),
 	)
 
 	// =========================
@@ -256,12 +261,15 @@ func Run(configPath string) error {
 	// health check
 	// =========================
 
+	// P2-SEC-06 fix: 健康检查端点返回最小信息，不泄露内部拓扑
+	// 仅返回 {"status":"ok"} 或 {"status":"degraded"}，不暴露具体依赖状态
 	h.GET(
 		"/health",
 		health.Handler(),
 	)
 
 	// P0-07: Readiness probe for K8s — checks Redis + Etcd connectivity
+	// 注意：/ready 端点仍然检查依赖，但在生产环境应通过 K8s 网络策略限制访问
 	h.GET(
 		"/ready",
 		health.ReadyHandler(rdb, etcdClient),

@@ -119,8 +119,9 @@ func (c *Config) ApplyEnv() {
 }
 
 func (c *Config) Validate() error {
-	if len(c.JWT.Secret) < 32 {
-		return fmt.Errorf("jwt secret must be at least 32 characters, got %d", len(c.JWT.Secret))
+	// P1-SEC-01 fix: JWT 密钥最小长度从 32 提高到 64 字符
+	if len(c.JWT.Secret) < 64 {
+		return fmt.Errorf("jwt secret must be at least 64 characters, got %d", len(c.JWT.Secret))
 	}
 	if c.Redis.Addr == "" {
 		return fmt.Errorf("redis addr is required, set REDIS_ADDR env or config.yaml")
