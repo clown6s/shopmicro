@@ -560,6 +560,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			// Circuit breaker is open — fast reject with 503.
 			if errors.Is(err, gobreaker.ErrOpenState) {
 				response.ServiceUnavailable(c)
+				c.Abort()
 				return
 			}
 			// gobreaker wraps the inner error — unwrap before checking.

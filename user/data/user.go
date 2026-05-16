@@ -108,7 +108,8 @@ func (d *UserDal) Update(ctx context.Context, id int64, updates map[string]inter
 }
 
 func (d *UserDal) Delete(ctx context.Context, id int64) error {
-	now := time.Now().Format("2006-01-02 15:04:05")
+	// R4-SEC-05: 使用 UTC 时间避免时区问题，确保数据库与服务器时区一致
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	result, err := d.db.ExecContext(ctx,
 		`UPDATE user SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`, now, id,
 	)

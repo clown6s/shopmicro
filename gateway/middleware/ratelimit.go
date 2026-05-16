@@ -158,7 +158,10 @@ func getClientIP(c *app.RequestContext) string {
 // Format: {unixNano}:{randSuffix}
 func uniqueMember(now time.Time) string {
 	var b [8]byte
-	_, _ = rand.Read(b[:])
+	// R4-SEC-04: crypto/rand 失败时记录警告（理论概率极低）
+	if _, err := rand.Read(b[:]); err != nil {
+		logger.Warnf("ratelimit: crypto/rand read failed: %v — member may collide", err)
+	}
 	return fmt.Sprintf("%d:%08x", now.UnixNano(), binary.BigEndian.Uint64(b[:]))
 }
 

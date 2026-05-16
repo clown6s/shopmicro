@@ -81,6 +81,14 @@ func (c *Config) Validate() error {
 	if c.JWT.Secret == "" {
 		return fmt.Errorf("jwt secret is required, set JWT_SECRET env or config.yaml")
 	}
+	// R4-SEC-01: JWT 密钥长度校验，与 gateway 保持一致
+	if len(c.JWT.Secret) < 32 {
+		return fmt.Errorf("jwt secret must be at least 32 characters, got %d", len(c.JWT.Secret))
+	}
+	// R4-SEC-01: Refresh token secret 同样校验
+	if c.JWT.RefreshSecret != "" && len(c.JWT.RefreshSecret) < 32 {
+		return fmt.Errorf("jwt refresh secret must be at least 32 characters, got %d", len(c.JWT.RefreshSecret))
+	}
 	// R4-P3-01: Mode 校验，与 Gateway 保持一致
 	mode := strings.ToLower(c.Mode)
 	if mode != "dev" && mode != "prod" && mode != "staging" {

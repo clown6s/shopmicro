@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -62,6 +63,27 @@ func isAllowedOrigin(origin string, allowed []string) bool {
 	for _, a := range allowed {
 		if a == origin {
 			return true
+		}
+	}
+	// R4-SEC-02: 支持通配符子域名匹配 (e.g. "*.example.com" matches "app.example.com")
+	for _, a := range allowed {
+		if strings.HasPrefix(a, "https://") {
+			domain := strings.TrimPrefix(a, "https://")
+			if strings.HasPrefix(domain, "*.") {
+				baseDomain := domain[2:] // "*.example.com" → "example.com"
+				if strings.HasSuffix(origin, baseDomain) && origin != baseDomain {
+					return true
+				}
+			}
+		}
+		if strings.HasPrefix(a, "http://") {
+			domain := strings.TrimPrefix(a, "http://")
+			if strings.HasPrefix(domain, "*.") {
+				baseDomain := domain[2:]
+				if strings.HasSuffix(origin, baseDomain) && origin != baseDomain {
+					return true
+				}
+			}
 		}
 	}
 	return false
