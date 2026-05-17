@@ -157,10 +157,8 @@ func Run(configPath string) error {
 			"RegisterUser",
 			"Login",
 			"RefreshToken",
-			"GetProvinceTree",
 		),
 
-		// P1-12: Explicit method whitelist for user service
 		proxy.WithAllowedMethods("user",
 			"RegisterUser",
 			"Login",

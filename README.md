@@ -317,74 +317,665 @@ curl -X POST http://localhost:8080/api/v1/user/SearchUser \
 
 ## 四、添加新服务（完整流程）
 
-以添加 `product` 服务为例。
+> **以 `district`（行政区）服务为例，从零开始逐步演示。** 每一步都有对应的命令和代码。
 
-### 4.1 创建服务目录
+---
+
+### 4.1 创建服务目录结构
+
+```bash
+cd shopmicro
+mkdir -p district/api district/handle district/data district/module district/conf
+```
+
+创建后的目录结构：
 
 ```
-product/
-├── api/
-│   └── product.proto        # Protobuf IDL
-├── handler/
-│   └── handler.go           # RPC 业务逻辑实现
-├── main.go                  # Kitex 服务入口
-├── data/
-│   ├── data.go              # 数据访问层初始化
-│   └── product.go           # CRUD 操作
-├── model/
-│   └── product.go           # 数据模型
+district/
+├── api/                    # Protobuf IDL 定义
+│   └── district.proto      # ★ 第 4.2 步编写
+├── handle/                 # RPC 业务逻辑实现
+│   └── handler.go          # ★ 第 4.6 步编写
+├── data/                   # 数据访问层
+│   ├── data.go             # MySQL + Redis 初始化（★ 第 4.5 步）
+│   └── district.go         # CRUD 操作（★ 第 4.5 步）
+├── module/                 # 领域模型（可选，纯数据结构）
+│   └── district.go         # 领域模型定义
 ├── conf/
-│   ├── conf.go              # 配置结构体
-│   └── config.yaml          # 配置文件
-├── Dockerfile
-├── .env.example
-└── .env
+│   ├── conf.go             # 配置结构体 + 校验（★ 第 4.4 步）
+│   └── config.yaml         # 配置文件（★ 第 4.3 步）
+├── main.go                 # 服务入口（★ 第 4.7 步）
+├── go.mod                  # Go 模块文件
+├── kitex_gen/              # Kitex 自动生成（勿手动修改）
+└── kitex_info.yaml         # Kitex 项目信息
 ```
 
-### 4.2 创建/更新 go.work
+---
+
+### 4.2 编写 proto 文件
+
+创建 `district/api/district.proto`：
+
+```protobuf
+syntax = "proto3";
+
+package api.district.v1;
+
+// ★ go_package 必须与最终 go.mod 的 module 路径一致
+option go_package = "shopmicro/district/kitex_gen/api/district/v1";
+
+service DistrictService {
+    // 每个 rpc 方法对应一个接口，按需添加
+    rpc GetProvinceTree (GetProvinceTreeReq) returns (GetProvinceTreeResp);
+}
+
+message GetProvinceTreeReq {
+  string adCode = 1;
+}
+
+message GetProvinceTreeResp {
+  uint32 code = 1;
+  string message = 2;
+  repeated DistrictTree data = 3;
+}
+
+message DistrictTree {
+  int64 id = 1;
+  string parentAdCode = 2;
+  string adCode = 3;
+  string name = 4;
+  string level = 5;
+  string center = 6;
+  repeated DistrictTree children = 7;
+}
+```
+
+> ⚠️ **注意**：
+> - `go_package` 格式：`shopmicro/{服务名}/kitex_gen/api/{服务名}/v1`，必须与第 4.3 步的 `go.mod` module 名匹配
+> - service 名使用 PascalCase（如 `DistrictService`），rpc 方法名也用 PascalCase（如 `GetProvinceTree`），Kitex 会自动转换
+> - message 字段编号建议预留空间（`reserved 2 to 99`），方便后续扩展
+
+---
+
+### 4.3 初始化 Go 模块 + 生成 Kitex 代码
+
+#### ① 初始化 go.mod
 
 ```bash
-# 已有 go.work，加新服务
-go work use ./shopmicro/product
+cd district
+go mod init shopmicro/district
 ```
 
-> 注意：`go.work` 第一行的 go 版本号必须与本机 `go version` 一致。
+生成的 `go.mod` 内容：
 
-### 4.3 编写 proto 文件 + 生成代码
+```
+module shopmicro/district
+
+go 1.26.1
+```
+
+> ⚠️ **注意**：Go 版本号须与本机 `go version` 一致，且与 `go.work` 第一行一致。
+
+#### ② 注册到 workspace
 
 ```bash
-cd product
-kitex -module shopmicro/product -service product -type protobuf api/product.proto
+# 回到项目根目录
+cd ..
+go work use ./district
 ```
 
-### 4.4 编写业务代码
-
-- `handler/handler.go`：实现各个 RPC 方法
-- `main.go`：初始化 data 层、注册到 etcd、启动 Kitex server（参考 `user/main.go`）
-
-### 4.5 在 gateway 中注册新服务
-
-编辑 `gateway/main.go`，在 `WithAllowedMethods` 中添加新服务的白名单：
+确认 `go.work` 已包含新模块：
 
 ```go
-proxy.WithAllowedMethods("product",
-    "CreateProduct",
-    "GetProduct",
-    "UpdateProduct",
-    "DeleteProduct",
-    "ListProduct",
+use (
+	./gateway
+	./pkg
+	./user
+	./district        ← 新增这一行
+)
+```
+
+#### ③ 执行 Kitex 代码生成
+
+```bash
+cd district
+kitex -module shopmicro/district -service district -type protobuf api/district.proto
+```
+
+执行后会自动生成以下内容：
+
+```
+district/
+├── kitex_gen/                    # 自动生成（勿手动修改）
+│   └── api/district/v1/
+│       ├── district.pb.go        # Protobuf 序列化代码
+│       ├── district_grpc.pb.go   # gRPC stub
+│       └── districtservice/      # Kitex server/client 骨架
+│           ├── server.go         # NewServer() / RegisterService()
+│           ├── client.go         # 客户端工厂方法
+│           └── districtservice.go# 服务接口定义
+├── handler.go                    # ⚠️ 自动生成，会被覆盖！参考下面的处理方式
+└── main.go                       # ⚠️ 自动生成，会被覆盖！参考下面的处理方式
+```
+
+> ⚠️ **重要注意事项**：
+>
+> **`kitex` 命令会覆盖已有的 `handler.go` 和 `main.go`！**
+>
+> 处理策略有两种，任选一种：
+>
+> | 策略 | 适用场景 | 操作 |
+> |------|---------|------|
+> | **A. 子包隔离**（推荐）| 业务逻辑较多 | 把手写代码放在 `handle/` 子包里，`handler.go` 只做转发。Kitex 每次覆盖的是空壳 `handler.go`，不影响 `handle/` 目录 |
+> | B. 先生成再写 | 业务简单 | 第一次执行 kitex 后，在生成的骨架上写业务代码；后续改 proto 时先备份 `handler.go` 和 `main.go`，生成后再合并 |
+>
+> 本示例采用策略 A（子包隔离），这也是 `district` 和 `user` 服务实际使用的方式。
+
+---
+
+### 4.4 编写配置层
+
+#### ① 创建 `conf/conf.go`
+
+```go
+package conf
+
+import (
+	"fmt"
+	"strings"
+
+	"shopmicro/pkg/conf"
+	"shopmicro/pkg/logger"
+	"shopmicro/pkg/mysql"
+	"shopmicro/pkg/redis"
+	"shopmicro/pkg/secrets"
+)
+
+type Config struct {
+	Server     conf.Server         `yaml:"server"`
+	HealthAddr string              `yaml:"healthAddr"`
+	Etcd       conf.Etcd           `yaml:"etcd"`
+	MySQL      mysql.Config        `yaml:"mysql"`
+	Redis      redis.Config        `yaml:"redis"`
+	Mode       string              `yaml:"mode"`
+	Vault      secrets.VaultConfig `yaml:"vault"`
+}
+
+// GetHealthAddr 返回健康检查端口，默认 :8899
+func (c *Config) GetHealthAddr() string {
+	if c.HealthAddr == "" {
+		return ":8899"
+	}
+	return c.HealthAddr
+}
+
+// ApplyEnv 从环境变量覆盖敏感配置
+func (c *Config) ApplyEnv() {
+	// Vault 支持
+	if c.Vault.Address != "" {
+		if token := conf.Env("VAULT_TOKEN", ""); token != "" {
+			c.Vault.Token = token
+		}
+		secrets.InitProvider(c.Vault)
+	}
+	// 环境变量覆盖
+	if v := conf.Env("MYSQL_DSN", ""); v != "" { c.MySQL.DSN = v }
+	if v := conf.Env("REDIS_ADDR", ""); v != "" { c.Redis.Addr = v }
+	if v := conf.Env("REDIS_PASSWORD", ""); v != "" { c.Redis.Password = v }
+	if v := conf.Env("SERVER_ADDR", ""); v != "" { c.Server.Addr = v }
+	if v := conf.Env("ETCD_ADDRS", ""); v != "" { c.Etcd.Addrs = strings.Split(v, ",") }
+}
+
+// Validate 校验必填配置
+func (c *Config) Validate() error {
+	if err := c.MySQL.Validate(); err != nil { return err }
+
+	mode := strings.ToLower(c.Mode)
+	if mode != "dev" && mode != "prod" && mode != "staging" {
+		return fmt.Errorf("invalid mode %q, expected dev/prod/staging", c.Mode)
+	}
+	if mode == "prod" && c.Redis.Password == "" {
+		return fmt.Errorf("redis password required in production")
+	}
+	return nil
+}
+```
+
+> ⚠️ **注意**：
+> - `Server`、`Etcd` 类型来自 `pkg/conf`，是所有服务共享的基础配置结构
+> - `MySQL.Config`、`Redis.Config`、`secrets.VaultConfig` 同理，直接复用 pkg
+> - `Validate()` 中必须校验 `mode` 和生产环境密码要求
+
+#### ② 创建 `conf/config.yaml`
+
+```yaml
+server:
+  addr: ":6000"            # ★ 每个服务端口不同！user=8888, gateway=8080, district=6000
+
+mysql:
+  dsn: ""
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 1                     # ★ 不同服务可用不同 Redis db 隔离
+
+etcd:
+  addrs:
+    - "127.0.0.1:2379"
+
+mode: "dev"
+
+vault:
+  address: ""
+  token: ""
+  mountPath: "secret"
+
+healthAddr: ":8898"         # ★ 健康检查端口也要不同！user=8899, district=8898
+```
+
+> ⚠️ **注意**：
+> - **端口不能冲突**：每个服务的 `server.addr` 和 `healthAddr` 都要唯一
+> - 建议约定：主端口从 6000 起（district=6000, user=8888），健康检查端口从 8898 起
+> - Redis `db` 在开发阶段可复用，生产环境建议各服务独立 db
+
+---
+
+### 4.5 编写数据访问层
+
+#### ① 创建 `data/data.go`
+
+```go
+package data
+
+import (
+	"shopmicro/pkg/mysql"
+	"shopmicro/pkg/redis"
+)
+
+type Data struct {
+	DB  *sql.DB
+	Rdb *redis.Client
+}
+
+func New(cfg mysql.Config, redisCfg redis.Config, mode string) (*Data, func(), error) {
+	db, dbCleanup, err := mysql.New(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	redisCfg.EnableTracing = true
+	rc, redisCleanup, err := redis.New(redisCfg)
+	if err != nil {
+		dbCleanup()
+		return nil, nil, err
+	}
+
+	cleanup := func() {
+		dbCleanup()
+		redisCleanup()
+	}
+
+	return &Data{DB: db, Rdb: rc}, cleanup, nil
+}
+```
+
+#### ② 创建 `data/district.go`（CRUD 操作）
+
+```go
+package data
+
+// DistrictDal 行政区数据访问对象
+type DistrictDal struct {
+	db *sql.DB
+}
+
+// District 返回 District 实例
+func (d *Data) District() *DistrictDal {
+	return &DistrictDal{db: d.DB}
+}
+
+// ListProvince 示例：查询省份列表
+func (d *DistrictDal) ListProvince(ctx context.Context) ([]*module.District, error) {
+	rows, err := d.db.QueryContext(ctx,
+		"SELECT id, parent_ad_code, ad_code, name, level, center FROM district WHERE level = 'province'")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var provinces []*module.District
+	for rows.Next() {
+		var m module.District
+		if err := rows.Scan(&m.ID, &m.ParentAdCode, &m.AdCode, &m.Name, &m.Level, &m.Center); err != nil {
+			return nil, err
+		}
+		provinces = append(provinces, &m)
+	}
+	return provinces, nil
+}
+```
+
+> ⚠️ **注意**：
+> - 所有 SQL 必须用参数化查询（`?` 占位符）或白名单字段映射，禁止字符串拼接防 SQL 注入
+> - `data.New()` 返回 `(data, cleanup, error)`，cleanup 函数在 `main.go` 中 defer 调用
+> - `mysql.New()` 和 `redis.New()` 已内置 OTEL 追踪，无需手动埋点
+
+---
+
+### 4.6 编写 RPC Handler（业务逻辑）
+
+创建 `handle/handler.go`：
+
+```go
+package handle
+
+import (
+	"context"
+	"shopmicro/district/data"
+	v1 "shopmicro/district/kitex_gen/api/district/v1"
+	"shopmicro/pkg/logger"
+)
+
+// DistrictServiceImpl 实现 IDL 定义的 DistrictService 接口
+type DistrictServiceImpl struct {
+	districtDal *data.DistrictDal
+	rdb         *redis.Client
+}
+
+// NewDistrictHandler 创建 handler 实例（由 main.go 调用）
+func NewDistrictHandler(d *data.Data) *DistrictServiceImpl {
+	return &DistrictServiceImpl{
+		rdb:         d.Rdb,
+		districtDal: d.District(),
+	}
+}
+
+// GetProvinceTree 获取省市区树形数据
+func (s *DistrictServiceImpl) GetProvinceTree(ctx context.Context, req *v1.GetProvinceTreeReq) (resp *v1.GetProvinceTreeResp, err error) {
+	// ★ 从 req 读参数，不要从 ctx.Value 读！（ctx.Value 取不到会 panic）
+	logger.Info("GetProvinceTree called", logger.String("adCode", req.AdCode))
+
+	resp = &v1.GetProvinceTreeResp{
+		Code:    0,
+		Message: "ok",
+		Data:    []*v1.DistrictTree{},
+	}
+	// TODO: 实现具体的树形查询逻辑
+	return
+}
+```
+
+> ⚠️ **注意（踩坑记录）**：
+>
+> | 问题 | 错误写法 | 正确写法 |
+> |------|---------|---------|
+> | 读参数 | `ctx.Value("adCode").(string)` → **panic: nil** | `req.AdCode` |
+> | 日志字段类型 | `zap.String("key", value.(string))` | `zap.String("key", req.Field)` |
+>
+> Kitex 生成的 `req` 对象已经包含 proto 定义的所有字段，**永远从 `req` 读取请求参数**。`ctx` 仅用于传递 metainfo（如 `user_id`、`token`），不用于传递业务参数。
+>
+> 如果需要读取 gateway 通过 metainfo 传来的用户信息：
+> ```go
+> userID := metautil.GetMetaData(ctx, "user_id")
+> ```
+
+---
+
+### 4.7 编写 main.go（服务入口）
+
+完整的 `main.go` 结构（对齐 user 服务模式）：
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	server "github.com/cloudwego/kitex/server"
+	"github.com/cloudwego/kitex/pkg/rpcinfo"
+	"github.com/cloudwego/kitex/pkg/transmeta"
+	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
+	"github.com/kitex-contrib/registry-etcd"
+
+	v1 "shopmicro/district/kitex_gen/api/district/v1/districtservice"
+
+	pkgconf "shopmicro/pkg/conf"
+	"shopmicro/pkg/logger"
+	"shopmicro/pkg/otel"
+
+	"shopmicro/district/conf"
+	"shopmicro/district/data"
+	"shopmicro/district/handle"
+)
+
+func Run(configPath string) error {
+	// ① 加载配置
+	var cfg conf.Config
+	if err := pkgconf.Load(configPath, &cfg); err != nil { return err }
+	cfg.ApplyEnv()
+	if err := cfg.Validate(); err != nil { return err }
+
+	// ② 初始化 logger
+	logger.Init(cfg.Mode)
+	defer logger.L.Sync()
+
+	// ③ 初始化 otel tracer
+	shutdownTracer := otel.InitTracer("district-service", cfg.Mode)
+	defer shutdownTracer(context.Background())
+
+	// ④ 初始化 data 层（MySQL + Redis）
+	dataProvider, cleanup, err := data.New(cfg.MySQL, cfg.Redis, cfg.Mode)
+	if err != nil { return err }
+	defer cleanup()
+
+	// ⑤ etcd 注册中心
+	r, err := etcd.NewEtcdRegistry(cfg.Etcd.Addrs, etcd.WithDialTimeoutOpt(5*time.Second))
+	if err != nil { return err }
+
+	// ⑥ 解析监听地址
+	addr, _ := net.ResolveTCPAddr("tcp", cfg.Server.Addr)
+
+	// ⑦ 创建 Kitex Server
+	svr := v1.NewServer(
+		handle.NewDistrictHandler(dataProvider),
+		server.WithServerBasicInfo(&rpcinfo.EndpointBasicInfo{ServiceName: "district"}),
+		server.WithRegistry(r),
+		server.WithServiceAddr(addr),
+		server.WithMetaHandler(transmeta.MetainfoServerHandler),
+		server.WithSuite(kotelkitex.NewServerSuite(kotelkitex.WithEnableGRPCMetadata())),
+	)
+
+	// ⑧ HTTP 健康检查服务器（K8s 探针用）
+	// buildHealthMux 封装了 /health + /healthz 路由
+	healthSrv := &http.Server{Addr: cfg.GetHealthAddr(), Handler: buildHealthMux(dataProvider), ...}
+	go healthSrv.ListenAndServe()
+
+	// ⑨ 优雅关闭（signal + WaitGroup + 超时）
+	// ...（完整代码见 district/main.go）
+
+	// ⑩ 启动
+	logger.Infof("district service started on %s", cfg.Server.Addr)
+	return svr.Run()
+}
+
+func main() {
+	configPath := flag.String("c", "conf/config.yaml", "config file path")
+	flag.Parse()
+	if err := Run(*configPath); err != nil {
+		log.Fatalf("run district service failed: %v", err)
+	}
+}
+```
+
+**main.go 关键点清单**：
+
+| # | 组件 | 必须？ | 说明 |
+|---|------|--------|------|
+| ① | `pkgconf.Load` + `cfg.ApplyEnv` | ✅ | 加载 YAML + 环境变量覆盖 |
+| ② | `logger.Init` | ✅ | zap 日志初始化 |
+| ③ | `otel.InitTracer` | ✅ | 链路追踪，参数为 `{service名}-{service}` |
+| ④ | `data.New` | ✅ | 数据层初始化，返回 cleanup 函数 |
+| ⑤ | `etcd.NewEtcdRegistry` | ✅ | 注册到 etcd，gateway 才能发现 |
+| ⑥ | `net.ResolveTCPAddr` | ✅ | 解析地址 |
+| ⑦ | `v1.NewServer` | ✅ | Kitex 服务端，需注入 handler + registry + tracing |
+| ⑧ | HTTP 健康检查 | ✅ | K8s 存活/就绪探针必需 |
+| ⑨ | 优雅关闭 | ✅ | WaitGroup + signal.Notify + 超时控制 |
+| ⑩ | Panic Recovery middleware | 推荐 | 防止 handler panic 导致进程崩溃 |
+
+---
+
+### 4.8 在网关注册新服务
+
+编辑 `gateway/main.go`，找到 proxy 初始化位置，添加两处配置：
+
+#### ① 方法白名单（必须有，否则返回 403）
+
+```go
+p := proxy.New(
+    // ... 其他选项 ...
+
+    // ★ district 服务方法白名单
+    proxy.WithAllowedMethods("district",
+        "GetProvinceTree",
+        // 后续新增方法在这里追加
+    ),
+)
+```
+
+> ⚠️ **关键规则**：
+> - `WithAllowedMethods` 一旦被调用过一次（哪怕只有一个服务），**所有未注册的服务都会返回 403**
+> - 每新增一个 RPC 方法，都必须在此处追加，否则该方法返回 `"access denied"` 403
+
+#### ② 公开接口白名单（不需要登录的方法）
+
+如果某个方法允许未登录用户访问，加到 `WithPublicMethods` 中：
+
+```go
+proxy.WithPublicMethods(
+    "RegisterUser",
+    "Login",
+    "RefreshToken",
+    "GetProvinceTree",     // ★ 新增：district 不需要登录
 ),
 ```
 
-如果某个方法不需要登录认证，加到 `WithPublicMethods` 中。
+> ⚠️ **注意**：`WithPublicMethods` 是全局的（跨服务），只需写方法名，不带服务名前缀。
 
-### 4.6 Docker 部署
+#### ③ Gateway Dockerfile 拷贝 proto 文件
 
-在 `gateway/Dockerfile` 中添加 proto 文件拷贝：
+如果是 Docker 部署，还需在 `gateway/Dockerfile` 中添加：
 
 ```dockerfile
-COPY --from=builder /build/product/api /app/service-protos/product/api
+# 拷贝 district 服务的 proto 文件到容器内
+COPY --from=builder /build/district/api /app/service-protos/district/api
 ```
+
+gateway 启动时会根据 `protoBase` 路径读取 proto 文件来创建 generic client，**proto 文件不存在会导致启动失败**（fail-fast）。
+
+---
+
+### 4.9 Makefile 更新（可选）
+
+在项目根目录 `Makefile` 中添加新服务的构建/运行命令：
+
+```makefile
+# 新增 district 相关命令
+district:
+	cd district && go run main.go
+
+gen-district:
+	cd district && kitex -module shopmicro/district -service district -type protobuf api/district.proto
+```
+
+---
+
+### 4.10 验证全流程
+
+#### ① 启动依赖服务
+
+```bash
+# 确保 etcd、MySQL、Redis 正常运行
+etcd --listen-client-urls http://127.0.0.1:2379 &
+```
+
+#### ② 启动 district 服务
+
+```bash
+cd district && go run main.go
+# 输出：district service started on :6000 (health: :8898)
+```
+
+验证健康检查：
+
+```bash
+curl http://localhost:8898/health
+# → {"status":"ok"}
+```
+
+#### ③ 重启 gateway
+
+```bash
+# Ctrl+C 停掉旧 gateway，重新运行
+cd gateway && go run main.go
+# 输出中应看到：service registered: district (proto: ../district/api/district.proto)
+```
+
+#### ④ 发送测试请求
+
+```bash
+# 公开接口，无需 token
+curl http://localhost:8080/api/v1/district/getProvinceTree \
+  -H "Content-Type: application/json" \
+  -d '{"adCode":""}'
+# → {"code":0,"message":"ok","data":[]}
+```
+
+#### ⑤ 检查日志
+
+- Gateway access log 应显示 `status: 200`（不再是 403/401/500）
+- District 服务日志应输出 `GetProvinceTree called`
+- Jaeger 中应能看到完整链路：HTTP(gateway) → gRPC(district)
+
+---
+
+### 4.11 常见错误速查表
+
+| 错误现象 | 原因 | 解决方法 |
+|----------|------|---------|
+| **403 Forbidden** | 未在 `WithAllowedMethods` 注册该服务 | 在 `gateway/main.go` 添加 `proxy.WithAllowedMethods("district", ...)` |
+| **401 Unauthorized** | 方法不在 `WithPublicMethods` 中，走了 JWT 校验 | 在 `WithPublicMethods` 中添加方法名 |
+| **500 / interface conversion panic** | `ctx.Value("xxx").(type)` 取到 nil 直接断言炸了 | 改为从 `req` 对象读参数 |
+| **Gateway 启动报 `proto file not found`** | proto 文件路径与 `protoBase` 不匹配 | 检查 `config.yaml` 中 `protoBase` 是否指向正确根目录 |
+| **`go work use` 后编译报找不到 pkg`** | `go.work` 文件路径用了相对路径但实际不正确 | 确认 `go.work` 中路径格式（Windows 用 `./district` 或绝对路径） |
+| **服务注册到 etcd 但 gateway 发现不到** | ServiceName 不匹配 | Kitex `server.WithServerBasicInfo.ServiceName` 必须与 URL 中的 `:service` 一致（小写） |
+| **`kitex` 生成后编译报错** | `handler.go` 或 `main.go` 被覆盖 | 采用子包隔离策略（`handle/` 包），或先生成再备份 |
+| **Docker 中 gateway 报 proto not found** | Dockerfile 缺少 COPY proto | 参考 4.8 ③ 添加 COPY 指令 |
+
+---
+
+### 4.12 后续新增 RPC 方法的步骤总结
+
+当已有服务（如 district）需要新增接口时，流程简化为：
+
+1. **修改 proto 文件** — 在 `district.api.district.v1.DistrictService` 下添加新的 `rpc`
+2. **执行 `kitex` 重新生成代码**（备份 `handler.go`/`main.go` 再恢复）
+3. **实现 handler 方法** — 在 `handle/handler.go` 中填充新方法体
+4. **更新 `gateway/main.go`** — 在 `WithAllowedMethods` 中追加新方法名；如果是公开接口还要加 `WithPublicMethods`
+5. **重启两个服务并测试**
+
+> ⚠️ **最容易忘的就是第 4 步** —— 不加 `WithAllowedMethods` 就是 403，不加 `WithPublicMethods` 就是 401。
 
 ---
 
