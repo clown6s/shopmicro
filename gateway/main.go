@@ -57,31 +57,25 @@ func Run(configPath string) error {
 	// =========================
 
 	logger.Init(cfg.Mode)
-
 	defer logger.L.Sync()
 
 	// =========================
 	// otel tracer
 	// =========================
+
 	// P0-01 fix: 使用配置文件中的 OTEL endpoint
 	shutdownTracer := otel.InitTracerWithEndpoint(
 		"shopmicro-gateway",
 		cfg.Mode,
 		cfg.OTEL.Endpoint,
 	)
-
-	defer shutdownTracer(
-		context.Background(),
-	)
+	defer shutdownTracer(context.Background())
 
 	// =========================
 	// etcd resolver
 	// =========================
 
-	r, err := etcd.NewEtcdResolver(
-		cfg.Etcd.Addrs,
-	)
-
+	r, err := etcd.NewEtcdResolver(cfg.Etcd.Addrs)
 	if err != nil {
 		return err
 	}
@@ -101,9 +95,7 @@ func Run(configPath string) error {
 	// hertz
 	// =========================
 
-	hlog.SetLevel(
-		hlog.LevelWarn,
-	)
+	hlog.SetLevel(hlog.LevelWarn)
 
 	// hertz otel tracing
 	tracer, traceCfg := hertztracing.NewServerTracer()
@@ -111,13 +103,9 @@ func Run(configPath string) error {
 	h := server.New(
 		tracer,
 
-		server.WithHostPorts(
-			cfg.Server.Addr,
-		),
+		server.WithHostPorts(cfg.Server.Addr),
 
-		server.WithMaxRequestBodySize(
-			1<<20, // 1MB
-		),
+		server.WithMaxRequestBodySize(1<<20), // 1MB
 
 		// P2-SEC-03 fix: 添加服务器超时配置防止慢客户端攻击
 		server.WithReadTimeout(10*time.Second),
@@ -139,56 +127,19 @@ func Run(configPath string) error {
 	// middleware
 	// =========================
 
-	// otel middleware (creates root span + injects trace context)
-	h.Use(
-		hertztracing.ServerMiddleware(
-			traceCfg,
-		),
-	)
-
-	// panic recovery — custom version logs stack trace
-	h.Use(
-		middleware.RecoveryMiddleware(cfg.Mode),
-	)
-
-	// cors
-	h.Use(
-		middleware.CORS(
-			&middleware.CORSConfig{
-				AllowOrigins:     cfg.CORS.AllowOrigins,
-				AllowCredentials: cfg.CORS.AllowCredentials,
-			},
-			cfg.Mode,
-		),
-	)
-
-	// security headers (HSTS, CSP, X-Frame-Options, etc.)
-	h.Use(
-		middleware.SecurityHeadersMiddleware(cfg.Mode),
-	)
-
-	// access log
-	h.Use(
-		middleware.AccessLogMiddleware(),
-	)
-
-	// trace-id header (reads from hertztracing span, no duplicate span)
-	h.Use(
-		middleware.TraceIDMiddleware(),
-	)
+	h.Use(hertztracing.ServerMiddleware(traceCfg)) // otel root span + trace context
+	h.Use(middleware.RecoveryMiddleware(cfg.Mode)) // panic recovery
+	h.Use(middleware.CORS(&middleware.CORSConfig{  // cors
+		AllowOrigins:     cfg.CORS.AllowOrigins,
+		AllowCredentials: cfg.CORS.AllowCredentials,
+	}, cfg.Mode))
+	h.Use(middleware.SecurityHeadersMiddleware(cfg.Mode)) // HSTS, CSP, X-Frame-Options…
+	h.Use(middleware.AccessLogMiddleware())               // access log
+	h.Use(middleware.TraceIDMiddleware())                 // trace-id response header
 
 	// distributed rate limit (Redis sliding window, per-IP)
-	rlWindow := time.Duration(cfg.RateLimit.WindowS) * time.Second
-	rl := middleware.NewRedisRateLimiter(rdb, cfg.RateLimit.Limit, rlWindow)
-
-	// P1-15: Configure per-endpoint rate limits for sensitive operations
-	for epKey, epCfg := range cfg.RateLimit.Endpoints {
-		rl.SetEndpointLimit(epKey, epCfg.Limit, epCfg.WindowS)
-	}
-
-	h.Use(
-		middleware.RateLimitMiddleware(rl),
-	)
+	rl := setupRateLimiter(rdb, cfg)
+	h.Use(middleware.RateLimitMiddleware(rl))
 
 	// =========================
 	// proxy
@@ -198,10 +149,7 @@ func Run(configPath string) error {
 
 	p := proxy.New(
 
-		proxy.WithJWT(
-			cfg.JWT.Secret,
-			cfg.JWT.Issuer,
-		),
+		proxy.WithJWT(cfg.JWT.Secret, cfg.JWT.Issuer),
 
 		proxy.WithRedis(rdb),
 
@@ -209,6 +157,7 @@ func Run(configPath string) error {
 			"RegisterUser",
 			"Login",
 			"RefreshToken",
+			"GetProvinceTree",
 		),
 
 		// P1-12: Explicit method whitelist for user service
@@ -220,6 +169,11 @@ func Run(configPath string) error {
 			"UpdateUser",
 			"DeleteUser",
 			"ListUser",
+		),
+
+		// district service method whitelist
+		proxy.WithAllowedMethods("district",
+			"GetProvinceTree",
 		),
 
 		// Circuit breaker wraps RPC calls inside proxy.Call(),
@@ -237,12 +191,7 @@ func Run(configPath string) error {
 	)
 
 	// discover services
-	if err := p.DiscoverAndRegister(
-		r,
-		cfg.Etcd.Addrs,
-		cfg.ProtoBase,
-	); err != nil {
-
+	if err := p.DiscoverAndRegister(r, cfg.Etcd.Addrs, cfg.ProtoBase); err != nil {
 		return err
 	}
 
@@ -250,60 +199,13 @@ func Run(configPath string) error {
 	// shutdown signal so the watch goroutine exits during graceful shutdown,
 	// not sometime after Run() returns.
 	watchCtx, watchCancel := context.WithCancel(context.Background())
-
-	p.WatchServices(
-		watchCtx,
-		r,
-		cfg.Etcd.Addrs,
-		cfg.ProtoBase,
-	)
+	p.WatchServices(watchCtx, r, cfg.Etcd.Addrs, cfg.ProtoBase)
 
 	// =========================
-	// health check
+	// routes
 	// =========================
 
-	// P2-SEC-06 fix: 健康检查端点返回最小信息，不泄露内部拓扑
-	// 仅返回 {"status":"ok"} 或 {"status":"degraded"}，不暴露具体依赖状态
-	h.GET(
-		"/health",
-		health.Handler(),
-	)
-
-	// P0-07: Readiness probe for K8s — checks Redis + Etcd connectivity
-	// 注意：/ready 端点仍然检查依赖，但在生产环境应通过 K8s 网络策略限制访问
-	h.GET(
-		"/ready",
-		health.ReadyHandler(rdb, etcdClient),
-	)
-
-	// =========================
-	// api routes
-	// =========================
-
-	api := h.Group("/api/v1")
-
-	// P1-15: Login endpoint — per-endpoint rate limit is enforced in
-	// proxy.Handler() via WithEndpointRateLimit, so no additional middleware
-	// is needed here. The generic routes below handle all methods uniformly.
-	api.POST(
-		"/:service/:method",
-		p.Handler(),
-	)
-
-	api.GET(
-		"/:service/:method",
-		p.Handler(),
-	)
-
-	api.PUT(
-		"/:service/:method",
-		p.Handler(),
-	)
-
-	api.DELETE(
-		"/:service/:method",
-		p.Handler(),
-	)
+	registerRoutes(h, p, rdb, etcdClient)
 
 	// =========================
 	// graceful shutdown
@@ -316,95 +218,85 @@ func Run(configPath string) error {
 	go func() {
 		defer wg.Done()
 
-		quit := make(
-			chan os.Signal,
-			1,
-		)
-
-		signal.Notify(
-			quit,
-			syscall.SIGINT,
-			syscall.SIGTERM,
-		)
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 		sig := <-quit
-
-		logger.Infof(
-			"shutdown signal received: %v",
-			sig,
-		)
+		logger.Infof("shutdown signal received: %v", sig)
 
 		// P2-05: cancel watchCtx so WatchServices goroutine exits promptly.
 		watchCancel()
 
-		ctx, cancel := context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
-
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := h.Shutdown(
-			ctx,
-		); err != nil {
-
-			// GoLand stop
-			if strings.Contains(
-				err.Error(),
-				"engine is not running",
-			) {
-
-				logger.Warnf(
-					"hertz already stopped",
-				)
-
+		if err := h.Shutdown(ctx); err != nil {
+			if isHertzStopped(err) {
+				logger.Warnf("hertz already stopped")
 				return
 			}
-
-			logger.Errorf(
-				"hertz shutdown failed: %v",
-				err,
-			)
-
+			logger.Errorf("hertz shutdown failed: %v", err)
 			return
 		}
 
-		logger.Infof(
-			"gateway stopped",
-		)
+		logger.Infof("gateway stopped")
 	}()
 
 	// =========================
 	// start server
 	// =========================
 
-	logger.Infof(
-		"gateway started at %s",
-		cfg.Server.Addr,
-	)
+	logger.Infof("gateway started at %s", cfg.Server.Addr)
 
 	if err := h.Run(); err != nil {
-
-		// graceful shutdown
-		if strings.Contains(
-			err.Error(),
-			"engine is not running",
-		) {
-
-			logger.Warnf(
-				"hertz already stopped",
-			)
-
+		if isHertzStopped(err) {
+			logger.Warnf("hertz already stopped")
 			wg.Wait()
 			return nil
 		}
-
 		wg.Wait()
 		return err
 	}
 
 	wg.Wait()
 	return nil
+}
+
+// setupRateLimiter 根据配置初始化限流器（含 per-endpoint 覆盖）。
+func setupRateLimiter(rdb *redis.Client, cfg conf.Config) *middleware.RedisRateLimiter {
+	rlWindow := time.Duration(cfg.RateLimit.WindowS) * time.Second
+	rl := middleware.NewRedisRateLimiter(rdb, cfg.RateLimit.Limit, rlWindow)
+
+	// P1-15: Configure per-endpoint rate limits for sensitive operations
+	for epKey, epCfg := range cfg.RateLimit.Endpoints {
+		rl.SetEndpointLimit(epKey, epCfg.Limit, epCfg.WindowS)
+	}
+
+	return rl
+}
+
+// registerRoutes 注册健康检查端点和业务 API 路由。
+func registerRoutes(h *server.Hertz, p *proxy.Proxy, rdb *redis.Client, etcdClient *clientv3.Client) {
+	// P2-SEC-06 fix: 健康检查端点返回最小信息，不泄露内部拓扑
+	h.GET("/health", health.Handler())
+
+	// P0-07: Readiness probe for K8s — checks Redis + Etcd connectivity
+	// 注意：/ready 端点在生产环境应通过 K8s 网络策略限制访问
+	h.GET("/ready", health.ReadyHandler(rdb, etcdClient))
+
+	// P1-15: 业务路由 — per-endpoint rate limit 在 proxy.Handler() 内统一执行
+	api := h.Group("/api/v1")
+	handler := p.Handler()
+	api.POST("/:service/:method", handler)
+	api.GET("/:service/:method", handler)
+	api.PUT("/:service/:method", handler)
+	api.DELETE("/:service/:method", handler)
+}
+
+// isHertzStopped 判断 hertz 返回的 err 是否属于"引擎已停止"的情况
+// （常见于 GoLand Stop 按钮触发的正常停止）。
+func isHertzStopped(err error) bool {
+	return strings.Contains(err.Error(), "engine is not running")
 }
 
 func main() {
@@ -417,13 +309,7 @@ func main() {
 
 	flag.Parse()
 
-	if err := Run(
-		*configPath,
-	); err != nil {
-
-		logger.Fatalf(
-			"gateway run failed: %v",
-			err,
-		)
+	if err := Run(*configPath); err != nil {
+		logger.Fatalf("gateway run failed: %v", err)
 	}
 }

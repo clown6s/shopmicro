@@ -1,5 +1,5 @@
 server:
-  addr: ":8888"
+  addr: ":6001"
 
 mysql:
   dsn: ""  # 通过 MYSQL_DSN 环境变量或 .env 设置

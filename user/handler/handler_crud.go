@@ -8,7 +8,7 @@ import (
 
 	"shopmicro/user/data"
 	v1 "shopmicro/user/kitex_gen/api/user/v1"
-	"shopmicro/user/model"
+	"shopmicro/user/module"
 
 	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/logger"
@@ -169,7 +169,7 @@ func (s *UserServiceImpl) ListUser(ctx context.Context, req *v1.ListUserReq) (*v
 }
 
 // toUserInfoMasked returns user info with phone and email masked.
-func toUserInfoMasked(u *model.User) *v1.UserInfo {
+func toUserInfoMasked(u *module.User) *v1.UserInfo {
 	return &v1.UserInfo{
 		Id:       u.ID,
 		RealName: u.RealName,

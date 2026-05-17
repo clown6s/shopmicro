@@ -270,7 +270,7 @@ service UserService {
 
 ```bash
 cd user
-kitex -module shopmicro/user -service user -type protobuf api/user.proto
+kitex -module shopmicro/user -service user -type protobuf api/district.proto
 ```
 
 **注意**：此命令会覆盖 `handler.go` 和 `main.go`，建议执行前备份。
@@ -394,7 +394,7 @@ COPY --from=builder /build/product/api /app/service-protos/product/api
 
 ```bash
 cd user
-kitex -module shopmicro/user -service user -type protobuf api/user.proto
+kitex -module shopmicro/user -service user -type protobuf api/district.proto
 ```
 
 | 参数 | 说明 |

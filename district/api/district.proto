@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package api.district.v1;
+
+option go_package = "shopmicro/district/kitex_gen/api/district/v1";
+
+service DistrictService {
+    rpc GetProvinceTree (GetProvinceTreeReq) returns (GetProvinceTreeResp);
+}
+
+message GetProvinceTreeReq {
+  string adCode = 1;
+  reserved 2 to 99;
+}
+
+message GetProvinceTreeResp {
+  uint32 code = 1;
+  string message = 2;
+  repeated DistrictTree data = 3;
+  reserved 4 to 99;
+}
+
+message DistrictTree {
+  int64 id = 1;
+  string parentAdCode = 2;
+  string adCode = 3;
+  string name = 4;
+  string level = 5;
+  string center = 6;
+  repeated DistrictTree children = 7;
+  reserved 8 to 99;
+}

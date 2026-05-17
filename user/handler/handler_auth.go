@@ -10,7 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	v1 "shopmicro/user/kitex_gen/api/user/v1"
-	"shopmicro/user/model"
+	"shopmicro/user/module"
 
 	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/logger"
@@ -66,7 +66,7 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 		return nil, errInternal
 	}
 
-	user := &model.User{
+	user := &module.User{
 		Password: string(hashed),
 		RealName: req.GetRealName(),
 		Gender:   int8(req.GetGender()),

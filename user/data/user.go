@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"shopmicro/user/model"
+	"shopmicro/user/module"
 
 	"shopmicro/pkg/logger"
 )
@@ -99,7 +99,7 @@ func (u *UserUpdate) Fields() map[string]interface{} {
 	return m
 }
 
-func (d *UserDal) Create(ctx context.Context, user *model.User) error {
+func (d *UserDal) Create(ctx context.Context, user *module.User) error {
 	result, err := d.db.ExecContext(ctx,
 		`INSERT INTO user (password, real_name, avatar, gender, age, phone, email, remark)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -119,7 +119,7 @@ func (d *UserDal) Create(ctx context.Context, user *model.User) error {
 	return nil
 }
 
-func (d *UserDal) GetByID(ctx context.Context, id int64) (*model.User, error) {
+func (d *UserDal) GetByID(ctx context.Context, id int64) (*module.User, error) {
 	return scanUser(d.db.QueryRowContext(ctx,
 		`SELECT id, password, COALESCE(real_name,''), COALESCE(avatar,''), gender, COALESCE(age,0),
 		        phone, COALESCE(email,''), create_time, update_time, COALESCE(remark,''), COALESCE(deleted_at,'')
@@ -127,7 +127,7 @@ func (d *UserDal) GetByID(ctx context.Context, id int64) (*model.User, error) {
 	))
 }
 
-func (d *UserDal) GetByPhone(ctx context.Context, phone string) (*model.User, error) {
+func (d *UserDal) GetByPhone(ctx context.Context, phone string) (*module.User, error) {
 	return scanUser(d.db.QueryRowContext(ctx,
 		`SELECT id, password, COALESCE(real_name,''), COALESCE(avatar,''), gender, COALESCE(age,0),
 		        phone, COALESCE(email,''), create_time, update_time, COALESCE(remark,''), COALESCE(deleted_at,'')
@@ -210,7 +210,7 @@ func (d *UserDal) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone string) ([]*model.User, int64, error) {
+func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone string) ([]*module.User, int64, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -252,9 +252,9 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone st
 	}
 	defer rows.Close()
 
-	users := make([]*model.User, 0)
+	users := make([]*module.User, 0)
 	for rows.Next() {
-		u := &model.User{}
+		u := &module.User{}
 		if err := rows.Scan(&u.ID, &u.RealName, &u.Avatar, &u.Gender, &u.Age,
 			&u.Phone, &u.Email, &u.CreateTime, &u.UpdateTime, &u.Remark); err != nil {
 			return nil, 0, err
@@ -265,8 +265,8 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone st
 }
 
 // scanUser 扫描一行用户记录
-func scanUser(row *sql.Row) (*model.User, error) {
-	u := &model.User{}
+func scanUser(row *sql.Row) (*module.User, error) {
+	u := &module.User{}
 	err := row.Scan(&u.ID, &u.Password, &u.RealName, &u.Avatar, &u.Gender, &u.Age,
 		&u.Phone, &u.Email, &u.CreateTime, &u.UpdateTime, &u.Remark, &u.DeletedAt)
 	if err != nil {
