@@ -42,38 +42,36 @@ func TraceIDMiddleware() app.HandlerFunc {
 // requestIDCounter 是一个原子计数器，用于降低碰撞概率。
 var requestIDCounter atomic.Uint64
 
-// generateRequestID 创建一个伪随机请求 ID。
-// 格式: 时间戳(10 位十六进制) + 随机数(14 位十六进制) = 24 字符字符串。
+// generateRequestID 创建一个密码学质量的唯一请求 ID。
+// 格式: 时间戳(8 位十六进制) + 随机数(8 位十六进制) + 计数器(8 位十六进制) = 24 字符字符串。
 func generateRequestID() string {
 	const hexChars = "0123456789abcdef"
 
 	now := time.Now().Unix()
 
-	// H1: 从 crypto/rand 读取 8 字节（64 位密码学熵）
+	// 从 crypto/rand 读取 8 字节（64 位密码学熵）
 	var rngBytes [8]byte
 	if _, err := rand.Read(rngBytes[:]); err != nil {
 		logger.Warnf("trace: crypto/rand read failed: %v — using zero entropy", err)
 	}
 	r1 := binary.BigEndian.Uint64(rngBytes[:])
 
-	// H2: 无锁原子计数器
+	// 无锁原子计数器，降低碰撞概率
 	r2 := requestIDCounter.Add(1)
-	combined := uint64(now)<<32 | (r1 & 0xffffffff) ^ (r2 << 48)
+
+	// 三个 uint64 分别提供时间戳、随机数、计数器
+	parts := [3]uint64{
+		uint64(now) & 0xffffffff, // 时间戳低 32 位
+		r1,                       // 密码学随机
+		r2,                       // 单调递增计数器
+	}
 
 	buf := make([]byte, 24)
-	for i := 23; i >= 0; i-- {
-		buf[i] = hexChars[combined&0xf]
-		combined >>= 4
+	for i := 2; i >= 0; i-- {
+		for j := 7; j >= 0; j-- {
+			buf[i*8+j] = hexChars[parts[i]&0xf]
+			parts[i] >>= 4
+		}
 	}
 	return string(buf)
-}
-
-// SetRequestID 从上下文中获取或生成请求 ID。
-// 在需要访问请求 ID 的处理器中使用此函数。
-func SetRequestID(ctx context.Context, c *app.RequestContext) string {
-	reqID := c.Request.Header.Get(requestIDHeader)
-	if reqID == "" {
-		reqID = generateRequestID()
-	}
-	return reqID
 }

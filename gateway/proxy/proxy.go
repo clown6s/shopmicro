@@ -171,7 +171,9 @@ func WithAllowedMethods(service string, methods ...string) Option {
 // WithHTTPMethod 限制指定 RPC 方法允许的 HTTP 请求方法。
 // 键格式为 "service/method"，值为允许的 HTTP 方法（GET/POST/PUT/DELETE）。
 // 示例: WithHTTPMethod("user", "Login", http.MethodPost)
-//       WithHTTPMethod("user", "ListUser", http.MethodGet, http.MethodPost)
+//
+//	WithHTTPMethod("user", "ListUser", http.MethodGet, http.MethodPost)
+//
 // 如果某个 RPC 方法未注册，则允许所有 HTTP 方法。
 func WithHTTPMethod(service, method string, httpMethods ...string) Option {
 	return func(p *Proxy) {
@@ -272,14 +274,6 @@ func (p *Proxy) getClient(service string) (*ServiceClient, bool) {
 
 func (p *Proxy) getBreaker(service string) *gobreaker.CircuitBreaker {
 	if p.cbSettings == nil {
-		return nil
-	}
-	// P2-03: 仅对已注册的服务创建熔断器，防止任意服务名请求
-	// 导致无限制的内存增长（每个都会创建一个永久的 CircuitBreaker）
-	p.mu.RLock()
-	_, exists := p.clients[service]
-	p.mu.RUnlock()
-	if !exists {
 		return nil
 	}
 	cbI, _ := p.perServiceCB.LoadOrStore(service, gobreaker.NewCircuitBreaker(gobreaker.Settings{
@@ -421,16 +415,14 @@ func (p *Proxy) WatchServices(
 			// 退避: 1s -> 2s -> 4s -> ... -> 30s 上限。
 			if err == nil {
 				backoff = time.Second
-			}
-
-			// Watch 通道关闭（etcd 连接丢失或其他错误）
-			logger.Warnf("WatchServices: watch channel closed, reconnecting in %v: %v", backoff, err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(backoff):
-			}
-			if err != nil {
+			} else {
+				// Watch 通道关闭（etcd 连接丢失或其他错误）
+				logger.Warnf("WatchServices: watch channel closed, reconnecting in %v: %v", backoff, err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
 				backoff *= 2
 				if backoff > maxBackoff {
 					backoff = maxBackoff
@@ -676,7 +668,8 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "json convert to protobuf failed") ||
 			strings.Contains(errMsg, "marshal message failed") ||
-			strings.Contains(errMsg, "unmarshal") {
+			strings.Contains(errMsg, "failed to unmarshal") ||
+			strings.Contains(errMsg, "cannot parse") {
 			logger.Warnf("request serialization failed: service=%s method=%s err=%v", service, method, err)
 			p.resetBreaker(service)
 			response.Fail(c, http.StatusBadRequest, int(errcode.CodeGwParam), "请求参数类型错误，请检查字段类型")
@@ -856,6 +849,10 @@ func mergeQueryToJSON(body, queryString string) (string, error) {
 		if len(values) == 0 {
 			continue
 		}
+		// body 中已有的字段优先，query param 不覆盖
+		if _, exists := m[key]; exists {
+			continue
+		}
 		// query param 一律保持 string —— HTTP query string 本身就是 string 类型。
 		// 不做 int/bool 自动转换，避免把 adCode="534000" 错转为数字导致 proto string 字段序列化失败。
 		m[key] = values[0]
@@ -913,6 +910,10 @@ func (p *Proxy) mergeQueryToJSONTyped(body, queryString string, svcDesc *dproto.
 		if len(values) == 0 {
 			continue
 		}
+		// body 中已有的字段优先，query param 不覆盖
+		if _, exists := m[key]; exists {
+			continue
+		}
 		val := values[0]
 
 		// 查询 proto 字段类型（优先用 JSON name，再用 proto name）
@@ -931,13 +932,7 @@ func (p *Proxy) mergeQueryToJSONTyped(body, queryString string, svcDesc *dproto.
 		switch {
 		case isProtoIntType(ft):
 			if intVal, err := strconv.ParseInt(val, 10, 64); err == nil {
-				// int32 范围内的值用 float64 兼容 JSON 数字
-				// （Go json.Marshal 将 int32 编码为数字，但 map[string]interface{} 中 int32 会被编码为数字）
-				if intVal >= -2147483648 && intVal <= 2147483647 {
-					m[key] = intVal
-				} else {
-					m[key] = intVal
-				}
+				m[key] = intVal
 			} else {
 				m[key] = val
 			}

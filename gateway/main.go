@@ -75,7 +75,11 @@ func Run(configPath string) error {
 		cfg.Mode,
 		cfg.OTEL.Endpoint,
 	)
-	defer shutdownTracer(context.Background())
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		shutdownTracer(ctx)
+	}()
 
 	// =========================
 	// etcd 服务发现

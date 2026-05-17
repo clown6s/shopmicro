@@ -32,11 +32,11 @@ func ReadyHandler(rdb *redis.Client, etcdClient *clientv3.Client) app.HandlerFun
 		// 检查 Redis —— 使用请求上下文，以便关闭时取消等待中的 ping
 		if rdb != nil {
 			pingCtx, pingCancel := context.WithTimeout(ctx, 2*time.Second)
+			defer pingCancel()
 			if !rdb.Ping(pingCtx) {
 				logger.Warn("readiness: redis ping failed")
 				failed = true
 			}
-			pingCancel()
 		} else {
 			logger.Warn("readiness: redis client is nil")
 			failed = true
@@ -45,12 +45,12 @@ func ReadyHandler(rdb *redis.Client, etcdClient *clientv3.Client) app.HandlerFun
 		// 检查 Etcd —— 带短超时的轻量级 Get 请求
 		if etcdClient != nil {
 			etcdCtx, etcdCancel := context.WithTimeout(ctx, 2*time.Second)
+			defer etcdCancel()
 			_, err := etcdClient.Get(etcdCtx, "health-check-key", clientv3.WithCountOnly())
 			if err != nil {
 				logger.Warnf("readiness: etcd check failed: %v", err)
 				failed = true
 			}
-			etcdCancel()
 		} else {
 			logger.Warn("readiness: etcd client is nil")
 			failed = true

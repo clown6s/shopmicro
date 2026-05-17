@@ -2,11 +2,11 @@ package conf
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"shopmicro/pkg/conf"
-	"shopmicro/pkg/logger"
 	"shopmicro/pkg/redis"
 	"shopmicro/pkg/secrets"
 )
@@ -108,7 +108,7 @@ func (c *Config) ApplyEnv() {
 			c.Vault.Token = token
 		}
 		if c.Vault.Token == "" {
-			logger.Warnf("vault address is set but VAULT_TOKEN env var is missing — vault init will fail")
+			log.Printf("[WARN] vault address is set but VAULT_TOKEN env var is missing — vault init will fail")
 		}
 		secrets.InitProvider(c.Vault)
 	}
