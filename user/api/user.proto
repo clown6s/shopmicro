@@ -41,8 +41,8 @@ message LoginResp {
   int64 id = 1;
   string realName = 2;
   string avatar = 3;
-  Gender gender = 4;
-  int32 age = 5;
+  optional Gender gender = 4;
+  optional int32 age = 5;
   string phone = 6;
   string email = 7;
   string remark = 8;
@@ -101,8 +101,8 @@ message UserInfo {
   int64 id = 1;
   string realName = 2;
   string avatar = 3;
-  Gender gender = 4;
-  int32 age = 5;
+  optional Gender gender = 4;
+  optional int32 age = 5;
   string phone = 6;
   string email = 7;
   string remark = 8;

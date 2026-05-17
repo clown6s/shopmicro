@@ -1,13 +1,13 @@
 package conf
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 
-	"shopmicro/pkg/logger"
 	"shopmicro/pkg/secrets"
 )
 
@@ -36,16 +36,16 @@ func Load(path string, cfg interface{}) error {
 		return err
 	}
 
-	// M1 fix: Log errors from .env loading instead of silently ignoring them.
-	// File-not-found is expected (no .env is fine), but parse errors matter.
+	// M1 修复：记录 .env 加载错误，而不是静默忽略。
+	// 文件不存在是预期行为（没有 .env 也可以），但解析错误需要关注。
 	if err := godotenv.Load(); err != nil {
 		if !os.IsNotExist(err) {
-			logger.Warnf("conf: failed to load .env from working directory: %v", err)
+			log.Printf("[conf] failed to load .env from working directory: %v", err)
 		}
 	}
 	if err := godotenv.Load(filepath.Join(filepath.Dir(path), ".env")); err != nil {
 		if !os.IsNotExist(err) {
-			logger.Warnf("conf: failed to load .env from config dir: %v", err)
+			log.Printf("[conf] failed to load .env from config dir: %v", err)
 		}
 	}
 	return nil
@@ -53,12 +53,12 @@ func Load(path string, cfg interface{}) error {
 
 // Env 读取密钥值，优先从 DefaultProvider（Vault）获取，回退到环境变量
 func Env(key, fallback string) string {
-	// Try the configured provider first (Vault if available)
+	// 先尝试已配置的 provider（如果可用则为 Vault）
 	if v, ok := secrets.Get(key); ok {
 		return v
 	}
-	// Fallback to raw environment variable
-	if v := os.Getenv(key); v != "" {
+	// 回退到原始环境变量
+	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return fallback

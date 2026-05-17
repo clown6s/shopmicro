@@ -10,24 +10,26 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"go.opentelemetry.io/otel/trace"
+
+	"shopmicro/pkg/logger"
 )
 
-// requestIDHeader is the header name for the request ID.
+// requestIDHeader 是请求 ID 的 HTTP 头名称。
 const requestIDHeader = "X-Request-Id"
 
-// TraceIDMiddleware sets the X-Trace-Id response header so callers can
-// using crypto/rand for cryptographic quality.
+// TraceIDMiddleware 设置 X-Trace-Id 响应头，使调用方可以
+// 使用 crypto/rand 生成密码学质量的追踪 ID。
 func TraceIDMiddleware() app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		c.Next(ctx)
 
-		// After hertztracing has created the span, extract trace ID.
+		// 在 hertztracing 创建 span 之后，提取 trace ID。
 		span := trace.SpanFromContext(ctx)
 		if span.SpanContext().IsValid() {
 			c.Response.Header.Set("X-Trace-Id", span.SpanContext().TraceID().String())
 		}
 
-		// Even if otel tracing is disabled, we still provide a correlation ID.
+		// 即使 otel 链路追踪被禁用，我们仍然提供一个关联 ID。
 		existingReqID := c.Request.Header.Get(requestIDHeader)
 		if existingReqID != "" {
 			c.Response.Header.Set(requestIDHeader, existingReqID)
@@ -37,22 +39,24 @@ func TraceIDMiddleware() app.HandlerFunc {
 	}
 }
 
-// requestIDCounter is an atomic counter used to reduce collision probability.
+// requestIDCounter 是一个原子计数器，用于降低碰撞概率。
 var requestIDCounter atomic.Uint64
 
-// generateRequestID creates a pseudo-random request ID.
-// Format: timestamp(10 hex) + random(14 hex) = 24 char string.
+// generateRequestID 创建一个伪随机请求 ID。
+// 格式: 时间戳(10 位十六进制) + 随机数(14 位十六进制) = 24 字符字符串。
 func generateRequestID() string {
 	const hexChars = "0123456789abcdef"
 
 	now := time.Now().Unix()
 
-	// H1: Read 8 bytes from crypto/rand (64 bits of cryptographic entropy)
+	// H1: 从 crypto/rand 读取 8 字节（64 位密码学熵）
 	var rngBytes [8]byte
-	_, _ = rand.Read(rngBytes[:])
+	if _, err := rand.Read(rngBytes[:]); err != nil {
+		logger.Warnf("trace: crypto/rand read failed: %v — using zero entropy", err)
+	}
 	r1 := binary.BigEndian.Uint64(rngBytes[:])
 
-	// H2: Lock-free atomic counter
+	// H2: 无锁原子计数器
 	r2 := requestIDCounter.Add(1)
 	combined := uint64(now)<<32 | (r1 & 0xffffffff) ^ (r2 << 48)
 
@@ -64,8 +68,8 @@ func generateRequestID() string {
 	return string(buf)
 }
 
-// SetRequestID retrieves or generates a request ID from the context.
-// Use this in handlers that need access to the request ID.
+// SetRequestID 从上下文中获取或生成请求 ID。
+// 在需要访问请求 ID 的处理器中使用此函数。
 func SetRequestID(ctx context.Context, c *app.RequestContext) string {
 	reqID := c.Request.Header.Get(requestIDHeader)
 	if reqID == "" {

@@ -21,7 +21,7 @@ type Config struct {
 	Vault      secrets.VaultConfig `yaml:"vault"`
 }
 
-// GetHealthAddr returns the health check listen address, defaulting to :8899.
+// GetHealthAddr 返回健康检查监听地址，默认为 :8899。
 func (c *Config) GetHealthAddr() string {
 	if c.HealthAddr == "" {
 		return ":8899"
@@ -31,7 +31,7 @@ func (c *Config) GetHealthAddr() string {
 
 // ApplyEnv 从环境变量覆盖敏感配置
 func (c *Config) ApplyEnv() {
-	// P2-11 fix: Never use Vault.Token from config.yaml as a default.
+	// P2-11 修复：永远不要使用 config.yaml 中的 Vault.Token 作为默认值。
 	if c.Vault.Address != "" {
 		if token := conf.Env("VAULT_TOKEN", ""); token != "" {
 			c.Vault.Token = token
@@ -69,7 +69,10 @@ func (c *Config) Validate() error {
 	if mode != "dev" && mode != "prod" && mode != "staging" {
 		return fmt.Errorf("invalid mode %q, expected dev/prod/staging", c.Mode)
 	}
-	// P2-08: Production requires Redis password
+	if len(c.Etcd.Addrs) == 0 {
+		return fmt.Errorf("etcd addresses are required, set ETCD_ADDRS env or config.yaml")
+	}
+	// P2-08：生产环境需要 Redis 密码
 	if mode == "prod" && c.Redis.Password == "" {
 		return fmt.Errorf("redis password is required in production mode, set REDIS_PASSWORD env")
 	}

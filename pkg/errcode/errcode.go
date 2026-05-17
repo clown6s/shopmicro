@@ -26,5 +26,8 @@ func (e ErrCode) WithMsg(msg string) ErrCode {
 
 // FromBizError 将下游 BizError 转为网关 ErrCode，保留原始业务 code 和 message
 func FromBizError(biz *BizError) ErrCode {
+	if biz == nil {
+		return Success
+	}
 	return ErrCode{Code: int(biz.Code), Msg: biz.Message}
 }

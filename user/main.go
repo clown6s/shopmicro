@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -56,27 +55,26 @@ func Run(configPath string) error {
 	}
 
 	// =========================
-	// logger
+	// 日志
 	// =========================
 
 	logger.Init(cfg.Mode)
 	defer logger.L.Sync()
 
 	// =========================
-	// otel tracer
+	// otel 链路追踪
 	// =========================
 
 	shutdownTracer := otel.InitTracer("user-service", cfg.Mode)
 	defer shutdownTracer(context.Background())
 
 	// =========================
-	// data
+	// 数据层
 	// =========================
 
 	dataProvider, cleanup, err := data.New(
 		cfg.MySQL,
 		cfg.Redis,
-		cfg.Mode,
 	)
 
 	if err != nil {
@@ -86,7 +84,7 @@ func Run(configPath string) error {
 	defer cleanup()
 
 	// =========================
-	// etcd registry
+	// etcd 注册中心
 	// =========================
 
 	r, err := etcd.NewEtcdRegistry(
@@ -102,7 +100,7 @@ func Run(configPath string) error {
 	}
 
 	// =========================
-	// service addr
+	// 服务地址
 	// =========================
 
 	addr, err := net.ResolveTCPAddr(
@@ -115,7 +113,7 @@ func Run(configPath string) error {
 	}
 
 	// =========================
-	// kitex server
+	// kitex 服务端
 	// =========================
 
 	svr := v1.NewServer(
@@ -142,19 +140,19 @@ func Run(configPath string) error {
 			transmeta.MetainfoServerHandler,
 		),
 
-		// otel tracing
+		// otel 链路追踪
 		server.WithSuite(
 			kotelkitex.NewServerSuite(
 				kotelkitex.WithEnableGRPCMetadata(),
 			),
 		),
 
-		// P1-02: Panic recovery — prevent handler panics from crashing the process
+		// P1-02：Panic 恢复 — 防止 handler panic 导致进程崩溃
 		server.WithMiddleware(panicRecoveryMiddleware),
 	)
 
 	// =========================
-	// P0-07: HTTP health check server (for K8s probes)
+	// P0-07：HTTP 健康检查服务端（用于 K8s 探针）
 	// =========================
 
 	healthy := &atomic.Bool{}
@@ -174,7 +172,7 @@ func Run(configPath string) error {
 	}()
 
 	// =========================
-	// graceful shutdown
+	// 优雅关闭
 	// =========================
 
 	var wg sync.WaitGroup
@@ -195,10 +193,10 @@ func Run(configPath string) error {
 
 		logger.Infof("shutdown signal received: %v", sig)
 
-		// P0-07: Mark as unhealthy for K8s probes
+		// P0-07：标记为不健康，供 K8s 探针使用
 		healthy.Store(false)
 
-		// P1-09: Use goroutine + hard timeout since svr.Stop() ignores context
+		// P1-09：使用 goroutine + 硬超时，因为 svr.Stop() 会忽略 context
 		done := make(chan error, 1)
 		go func() { done <- svr.Stop() }()
 
@@ -219,7 +217,7 @@ func Run(configPath string) error {
 	}()
 
 	// =========================
-	// start server
+	// 启动服务
 	// =========================
 
 	logger.Infof(
@@ -261,7 +259,7 @@ func panicRecoveryMiddleware(next endpoint.Endpoint) endpoint.Endpoint {
 func buildHealthMux(d *data.Data, healthy *atomic.Bool) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	// P2-SEC-06: /health 仅做基础存活检查，不暴露依赖细节
+	// P2-SEC-06：/health 仅做基础存活检查，不暴露依赖细节
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		if !healthy.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -272,19 +270,25 @@ func buildHealthMux(d *data.Data, healthy *atomic.Bool) *http.ServeMux {
 		fmt.Fprintf(w, `{"status":"ok"}`)
 	})
 
-	// P3-R5-03: /healthz 用于 K8s readiness probe（内部使用）
+	// P3-R5-03：/healthz 用于 K8s readiness probe（内部使用）
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
 		unhealthy := false
 
-		if err := d.DB.PingContext(ctx); err != nil {
+		if d.DB == nil {
+			logger.Warn("healthz: db is nil")
+			unhealthy = true
+		} else if err := d.DB.PingContext(ctx); err != nil {
 			logger.Warnf("healthz: dependency check failed: %v", err)
 			unhealthy = true
 		}
 
-		if !d.Rdb.Ping(ctx) {
+		if d.Rdb == nil {
+			logger.Warn("healthz: rdb is nil")
+			unhealthy = true
+		} else if !d.Rdb.Ping(ctx) {
 			logger.Warn("healthz: dependency check failed: redis")
 			unhealthy = true
 		}
@@ -302,9 +306,9 @@ func buildHealthMux(d *data.Data, healthy *atomic.Bool) *http.ServeMux {
 	return mux
 }
 
-// isKitexStopped 判断 kitex 返回的 err 是否属于"已正常停止"的情况。
+// isKitexStopped 检查错误是否表示 Kitex 服务端已停止。
 func isKitexStopped(err error) bool {
-	return strings.Contains(err.Error(), "context deadline exceeded")
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 func main() {
@@ -312,13 +316,13 @@ func main() {
 	configPath := flag.String(
 		"c",
 		"conf/config.yaml",
-		"config file path",
+		"配置文件路径",
 	)
 
 	flag.Parse()
 
 	if err := Run(*configPath); err != nil {
-		// logger may not be initialized yet (e.g. config load/validate failed)
+		// 日志可能尚未初始化（例如配置加载/校验失败）
 		log.Fatalf("run user service failed: %v", err)
 	}
 }

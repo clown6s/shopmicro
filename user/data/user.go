@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"shopmicro/user/module"
 
@@ -17,8 +16,8 @@ type UserDal struct {
 	db *sql.DB
 }
 
-// UserUpdate holds typed fields for updating a user record.
-// Zero-value fields are skipped (not included in the UPDATE statement).
+// UserUpdate 保存用于更新用户记录的类型化字段。
+// 零值字段将被跳过（不包含在 UPDATE 语句中）。
 type UserUpdate struct {
 	RealName *string
 	Avatar   *string
@@ -29,50 +28,50 @@ type UserUpdate struct {
 	Remark   *string
 }
 
-// SetRealName is a convenience helper that sets RealName if value is non-empty.
+// SetRealName 是一个便捷方法，如果值非空则设置 RealName。
 func (u *UserUpdate) SetRealName(v string) *UserUpdate {
 	u.RealName = &v
 	return u
 }
 
-// SetAvatar is a convenience helper.
+// SetAvatar 是一个便捷方法。
 func (u *UserUpdate) SetAvatar(v string) *UserUpdate {
 	u.Avatar = &v
 	return u
 }
 
-// SetGender is a convenience helper.
+// SetGender 是一个便捷方法。
 func (u *UserUpdate) SetGender(v int8) *UserUpdate {
 	u.Gender = &v
 	return u
 }
 
-// SetAge is a convenience helper.
+// SetAge 是一个便捷方法。
 func (u *UserUpdate) SetAge(v int16) *UserUpdate {
 	u.Age = &v
 	return u
 }
 
-// SetPhone is a convenience helper.
+// SetPhone 是一个便捷方法。
 func (u *UserUpdate) SetPhone(v string) *UserUpdate {
 	u.Phone = &v
 	return u
 }
 
-// SetEmail is a convenience helper.
+// SetEmail 是一个便捷方法。
 func (u *UserUpdate) SetEmail(v string) *UserUpdate {
 	u.Email = &v
 	return u
 }
 
-// SetRemark is a convenience helper.
+// SetRemark 是一个便捷方法。
 func (u *UserUpdate) SetRemark(v string) *UserUpdate {
 	u.Remark = &v
 	return u
 }
 
-// Fields returns the non-nil update entries as a map for backward compatibility.
-// This allows gradual migration without changing all call sites at once.
+// Fields 返回非 nil 的更新条目作为 map，用于向后兼容。
+// 这允许渐进式迁移，无需一次性修改所有调用点。
 func (u *UserUpdate) Fields() map[string]interface{} {
 	m := make(map[string]interface{})
 	if u.RealName != nil {
@@ -135,8 +134,8 @@ func (d *UserDal) GetByPhone(ctx context.Context, phone string) (*module.User, e
 	))
 }
 
-// Update applies the given updates to the user with the given id.
-// The internal conversion to map preserves the whitelist/blocklist safety.
+// Update 将给定的更新应用到指定 id 的用户。
+// 内部转换为 map 保留了白名单/黑名单安全性。
 func (d *UserDal) Update(ctx context.Context, id int64, updates map[string]interface{}) error {
 	if len(updates) == 0 {
 		return nil
@@ -144,16 +143,16 @@ func (d *UserDal) Update(ctx context.Context, id int64, updates map[string]inter
 
 	setParts := make([]string, 0, len(updates))
 	args := make([]interface{}, 0, len(updates)+1)
-	colMap := map[string]string{
-		"real_name": "real_name",
-		"avatar":    "avatar",
-		"gender":    "gender",
-		"age":       "age",
-		"phone":     "phone",
-		"email":     "email",
-		"remark":    "remark",
+	allowedCols := map[string]bool{
+		"real_name": true,
+		"avatar":    true,
+		"gender":    true,
+		"age":       true,
+		"phone":     true,
+		"email":     true,
+		"remark":    true,
 	}
-	// P2-02: Explicit blocklist — these columns can NEVER be updated via this method
+	// P2-02：显式黑名单 — 这些列永远不能通过此方法更新
 	blockedCols := map[string]bool{
 		"id":         true,
 		"password":   true,
@@ -164,11 +163,10 @@ func (d *UserDal) Update(ctx context.Context, id int64, updates map[string]inter
 			logger.Warnf("update: blocked column %s ignored (user_id in request)", k)
 			continue
 		}
-		col, ok := colMap[k]
-		if !ok {
+		if !allowedCols[k] {
 			continue
 		}
-		setParts = append(setParts, fmt.Sprintf("`%s` = ?", col))
+		setParts = append(setParts, fmt.Sprintf("`%s` = ?", k))
 		args = append(args, v)
 	}
 	if len(setParts) == 0 {
@@ -192,10 +190,10 @@ func (d *UserDal) Update(ctx context.Context, id int64, updates map[string]inter
 }
 
 func (d *UserDal) Delete(ctx context.Context, id int64) error {
-	// R4-SEC-05: 使用 UTC 时间避免时区问题，确保数据库与服务器时区一致
-	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	// 使用 MySQL 的 UTC_TIMESTAMP() 确保 UTC 时区一致性，不受
+	// 服务器本地时区设置影响。避免 Go 字符串格式化不匹配的问题。
 	result, err := d.db.ExecContext(ctx,
-		`UPDATE user SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`, now, id,
+		`UPDATE user SET deleted_at = UTC_TIMESTAMP() WHERE id = ? AND deleted_at IS NULL`, id,
 	)
 	if err != nil {
 		return err
@@ -210,11 +208,20 @@ func (d *UserDal) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+// escapeLike 转义用户输入中的 LIKE 通配符字符。
+// 如果不转义，用户可以通过注入 % 或 _ 来匹配任意模式。
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
+
 func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone string) ([]*module.User, int64, error) {
 	if page <= 0 {
 		page = 1
 	}
-	// P2-SEC-05 fix: 降低 pageSize 上限到 20，防止数据遍历攻击
+	// P2-SEC-05 修复：将 pageSize 上限降低到 20，防止数据遍历攻击
 	if pageSize <= 0 || pageSize > 20 {
 		pageSize = 20
 	}
@@ -223,11 +230,11 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone st
 	args := make([]interface{}, 0, 2)
 	if name != "" {
 		conditions = append(conditions, "real_name LIKE ?")
-		args = append(args, "%"+name+"%")
+		args = append(args, "%"+escapeLike(name)+"%")
 	}
 	if phone != "" {
 		conditions = append(conditions, "phone LIKE ?")
-		args = append(args, "%"+phone+"%")
+		args = append(args, "%"+escapeLike(phone)+"%")
 	}
 	where := strings.Join(conditions, " AND ")
 

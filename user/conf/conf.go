@@ -13,7 +13,7 @@ import (
 
 type JWT struct {
 	Secret        string `yaml:"secret"`
-	RefreshSecret string `yaml:"refreshSecret"` // Optional: separate secret for refresh tokens (falls back to Secret)
+	RefreshSecret string `yaml:"refreshSecret"` // 可选：刷新令牌的独立密钥（回退使用 Secret）
 	Expiration    int    `yaml:"expiration"`
 	Issuer        string `yaml:"issuer"`
 }
@@ -29,7 +29,7 @@ type Config struct {
 	Vault      secrets.VaultConfig `yaml:"vault"`
 }
 
-// GetHealthAddr returns the health check listen address, defaulting to :8899.
+// GetHealthAddr 返回健康检查监听地址，默认为 :8899。
 func (c *Config) GetHealthAddr() string {
 	if c.HealthAddr == "" {
 		return ":8899"
@@ -39,7 +39,7 @@ func (c *Config) GetHealthAddr() string {
 
 // ApplyEnv 从环境变量覆盖敏感配置
 func (c *Config) ApplyEnv() {
-	// P2-11 fix: Never use Vault.Token from config.yaml as a default.
+	// P2-11 修复：绝不使用 config.yaml 中的 Vault.Token 作为默认值。
 	if c.Vault.Address != "" {
 		if token := conf.Env("VAULT_TOKEN", ""); token != "" {
 			c.Vault.Token = token
@@ -81,7 +81,7 @@ func (c *Config) Validate() error {
 	if c.JWT.Secret == "" {
 		return fmt.Errorf("jwt secret is required, set JWT_SECRET env or config.yaml")
 	}
-	// P1-01 fix: JWT 密钥长度与 gateway/pkg/jwt 保持一致
+	// P1-01 修复：JWT 密钥长度与 gateway/pkg/jwt 保持一致
 	// pkg/jwt/jwt.go NewGenerator/NewParser 要求 64 字符
 	minSecretLen := 64
 	if strings.ToLower(c.Mode) == "dev" {
@@ -90,17 +90,17 @@ func (c *Config) Validate() error {
 	if len(c.JWT.Secret) < minSecretLen {
 		return fmt.Errorf("jwt secret must be at least %d characters, got %d", minSecretLen, len(c.JWT.Secret))
 	}
-	// P1-01 fix: Refresh token secret 同样校验
+	// P1-01 修复：Refresh token secret 同样校验
 	if c.JWT.RefreshSecret != "" && len(c.JWT.RefreshSecret) < minSecretLen {
 		return fmt.Errorf("jwt refresh secret must be at least %d characters, got %d", minSecretLen, len(c.JWT.RefreshSecret))
 	}
-	// P1-01 fix: RefreshSecret 回退密钥安全 — 如果使用回退逻辑，实际使用的是主密钥，
+	// P1-01 修复：RefreshSecret 回退密钥安全 — 如果使用回退逻辑，实际使用的是主密钥，
 	// 长度已在上面校验过了，无需额外处理
 	mode := strings.ToLower(c.Mode)
 	if mode != "dev" && mode != "prod" && mode != "staging" {
 		return fmt.Errorf("invalid mode %q, expected dev/prod/staging", c.Mode)
 	}
-	// P2-08: Production requires Redis password
+	// P2-08：生产环境要求 Redis 密码
 	if mode == "prod" && c.Redis.Password == "" {
 		return fmt.Errorf("redis password is required in production mode, set REDIS_PASSWORD env")
 	}

@@ -10,18 +10,18 @@ import (
 	"shopmicro/pkg/response"
 )
 
-// stackTracer is wired by recovery_debug.go via build tags.
-// In production builds (-tags prod) this stays nil and
-// runtime/debug is never linked into the binary.
+// stackTracer 由 recovery_debug.go 通过构建标签注入。
+// 在生产构建（-tags prod）中此值为 nil，
+// runtime/debug 不会链接到二进制中。
 var stackTracer func() string
 
-// RecoveryMiddleware catches panics, logs the error, and returns a unified
-// error response. In production mode the full stack trace is suppressed to
-// prevent internal architecture details from leaking into logs.
+// RecoveryMiddleware 捕获 panic，记录错误日志，并返回统一的
+// 错误响应。在生产模式下会抑制完整的堆栈跟踪，
+// 防止内部架构细节泄露到日志中。
 //
-// When compiled with -tags prod, debug.Stack() code is excluded entirely
-// (via recovery_debug.go build tag). The runtime mode check serves as an
-// additional defence-in-depth layer.
+// 使用 -tags prod 编译时，debug.Stack() 代码会被完全排除
+//（通过 recovery_debug.go 的构建标签）。运行模式检查作为
+// 额外的纵深防御层。
 func RecoveryMiddleware(mode string) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		defer func() {
@@ -40,8 +40,8 @@ func RecoveryMiddleware(mode string) app.HandlerFunc {
 						err,
 					)
 				}
-				// P2-17 fix: abort chain first to prevent downstream handlers
-				// writing after the error response is committed.
+				// P2-17 修复：先中止处理链，防止下游处理器
+				// 在错误响应已提交后继续写入。
 				c.Abort()
 				response.InternalError(c)
 			}

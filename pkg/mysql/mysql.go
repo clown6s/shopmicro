@@ -10,22 +10,21 @@ import (
 	"go.opentelemetry.io/otel"
 )
 
-// New creates a new MySQL connection with OTEL tracing.
-// It returns (*sql.DB, cleanup function, error).
+// New 创建一个带有 OTEL 链路追踪的 MySQL 连接。
+// 返回 (*sql.DB, 清理函数, 错误)。
 //
-// The cleanup function closes the database connection and should be
-// called during shutdown.
+// 清理函数会关闭数据库连接，应在关闭期间调用。
 //
-// P1-03: OTEL SpanOptions are centralized here to prevent SQL leakage.
+// P1-03: OTEL SpanOptions 集中在此处管理以防止 SQL 信息泄漏。
 func New(cfg Config) (*sql.DB, func(), error) {
-	// P1-03 fix: disable SQL tracing to prevent data leakage
+	// P1-03 修复：禁用 SQL 追踪以防止数据泄漏
 	spanOpts := otelsql.SpanOptions{
-		OmitConnQuery:        true, // P1-03: omit sql.conn.query span
-		OmitRows:             true, // P1-03: omit sql.rows span
-		OmitConnPrepare:      true, // P1-03: omit sql.conn.prepare span
-		OmitConnectorConnect: true, // P1-03: omit sql.connector.connect span
-		OmitConnResetSession: true, // P1-03: omit reset session
-		DisableQuery:         true, // P1-03 fix: block db.statement from traces
+		OmitConnQuery:        true, // P1-03: 省略 sql.conn.query span
+		OmitRows:             true, // P1-03: 省略 sql.rows span
+		OmitConnPrepare:      true, // P1-03: 省略 sql.conn.prepare span
+		OmitConnectorConnect: true, // P1-03: 省略 sql.connector.connect span
+		OmitConnResetSession: true, // P1-03: 省略 reset session
+		DisableQuery:         true, // P1-03 修复: 阻止 db.statement 出现在追踪中
 	}
 
 	db, err := otelsql.Open(
@@ -38,13 +37,13 @@ func New(cfg Config) (*sql.DB, func(), error) {
 		return nil, nil, err
 	}
 
-	// MySQL connection pool configuration
+	// MySQL 连接池配置
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
 	db.SetConnMaxIdleTime(time.Duration(cfg.ConnMaxIdleTime) * time.Second)
 
-	// Ping MySQL to verify connection
+	// Ping MySQL 以验证连接
 	if err := db.PingContext(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, nil, err

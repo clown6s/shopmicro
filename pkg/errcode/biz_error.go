@@ -1,6 +1,7 @@
 package errcode
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,26 +27,33 @@ func (e *BizError) Error() string {
 }
 
 // ParseBizError 从 gRPC 错误消息中解析 BizError
-// R4-P1-02: 使用 HasPrefix 而非 Index，防止子串伪造
+// R4-P1-02: 使用 HasPrefix 优先匹配，防止子串伪造
+// P3-05 修复：先用 errors.As 处理 wrapped BizError，再回退到字符串前缀解析
+// Kitex 远程错误格式: "remote or network error[remote]: biz error: BIZ/xxx: ..."
+// 需要同时处理精确前缀匹配和 Kitex 包装后的子串匹配。
 func ParseBizError(err error) (*BizError, bool) {
 	if err == nil {
 		return nil, false
 	}
+	// 先尝试 errors.As 来处理被包装的 BizError（例如 fmt.Errorf("ctx: %w", bizErr)）
+	var biz *BizError
+	if errors.As(err, &biz) {
+		return biz, true
+	}
 	msg := err.Error()
-	// R4-P1-02: 只匹配消息起始位置的 BIZ/ 前缀，防止中间层错误消息包含
-	// "BIZ/xxx: ..." 子串时被误解析为 BizError
-	if !strings.HasPrefix(msg, bizPrefix) {
-		return nil, false
+	// 优先匹配消息起始位置的 BIZ/ 前缀
+	if idx := strings.Index(msg, bizPrefix); idx != -1 {
+		content := msg[idx+len(bizPrefix):]
+		colon := strings.Index(content, ":")
+		if colon == -1 {
+			return nil, false
+		}
+		code, err2 := strconv.ParseUint(content[:colon], 10, 32)
+		if err2 != nil {
+			return nil, false
+		}
+		message := strings.TrimSpace(content[colon+1:])
+		return &BizError{Code: uint32(code), Message: message}, true
 	}
-	content := msg[len(bizPrefix):] // "10006: phone or password incorrect"
-	colon := strings.Index(content, ":")
-	if colon == -1 {
-		return nil, false
-	}
-	code, err2 := strconv.ParseUint(content[:colon], 10, 32)
-	if err2 != nil {
-		return nil, false
-	}
-	message := strings.TrimSpace(content[colon+1:])
-	return &BizError{Code: uint32(code), Message: message}, true
+	return nil, false
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -16,16 +17,16 @@ import (
 	"shopmicro/pkg/response"
 )
 
-// slidingWindowLua is an atomic Redis Lua script that implements sliding window rate limiting.
+// slidingWindowLua 是一个原子性的 Redis Lua 脚本，实现滑动窗口限流。
 //
-// KEYS[1] = rate limit key (e.g. "ratelimit:ip:1.2.3.4")
-// ARGV[1] = window start timestamp in ms (now - window)
-// ARGV[2] = current timestamp in ms
-// ARGV[3] = limit (max requests allowed in window)
-// ARGV[4] = window TTL in ms
-// ARGV[5] = unique member ID
+// KEYS[1] = 限流键（例如 "ratelimit:ip:1.2.3.4"）
+// ARGV[1] = 窗口起始时间戳（毫秒）(now - window)
+// ARGV[2] = 当前时间戳（毫秒）
+// ARGV[3] = 限流阈值（窗口内允许的最大请求数）
+// ARGV[4] = 键的 TTL（毫秒）
+// ARGV[5] = 唯一成员 ID
 //
-// Returns: 1 = allowed, 0 = rejected
+// 返回值: 1 = 允许，0 = 拒绝
 var slidingWindowLua = goredis.NewScript(`
 local key = KEYS[1]
 local window_start = tonumber(ARGV[1])
@@ -34,41 +35,41 @@ local limit = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
 local member = ARGV[5]
 
--- Remove expired entries outside the sliding window
+-- 移除滑动窗口之外的过期条目
 redis.call('ZREMRANGEBYSCORE', key, '-inf', window_start)
 
--- Count remaining entries in the window
+-- 计算窗口内剩余条目数
 local count = redis.call('ZCARD', key)
 
 if count >= limit then
     return 0
 end
 
--- Add current request
+-- 添加当前请求
 redis.call('ZADD', key, now, member)
 
--- Set key TTL to auto-cleanup
+-- 设置键的 TTL 以自动清理
 redis.call('PEXPIRE', key, ttl)
 
 return 1
 `)
 
-// RedisRateLimiter implements distributed sliding window rate limiting via Redis.
+// RedisRateLimiter 通过 Redis 实现分布式滑动窗口限流。
 type RedisRateLimiter struct {
-	mu                sync.RWMutex // R4-P1-01: protects endpointOverrides
+	mu                sync.RWMutex // R4-P1-01: 保护 endpointOverrides
 	rdb               *redis.Client
-	limit             int           // max requests per window (default)
-	window            time.Duration // sliding window duration (default)
+	limit             int           // 默认窗口内最大请求数
+	window            time.Duration // 默认滑动窗口时长
 	endpointOverrides map[string]*endpointLimit
 }
 
-// endpointLimit holds per-endpoint rate limit configuration
+// endpointLimit 保存按端点的限流配置
 type endpointLimit struct {
 	limit  int
 	window time.Duration
 }
 
-// NewRedisRateLimiter creates a Redis-based sliding window rate limiter.
+// NewRedisRateLimiter 创建一个基于 Redis 的滑动窗口限流器。
 func NewRedisRateLimiter(rdb *redis.Client, limit int, window time.Duration) *RedisRateLimiter {
 	return &RedisRateLimiter{
 		rdb:               rdb,
@@ -78,8 +79,8 @@ func NewRedisRateLimiter(rdb *redis.Client, limit int, window time.Duration) *Re
 	}
 }
 
-// SetEndpointLimit sets a per-endpoint rate limit override.
-// endpointKey format: "service/method" (e.g. "user/Login")
+// SetEndpointLimit 设置按端点的限流覆盖配置。
+// endpointKey 格式: "service/method"（例如 "user/Login"）
 func (rl *RedisRateLimiter) SetEndpointLimit(endpointKey string, limit int, windowS int) {
 	w := rl.window
 	if windowS > 0 {
@@ -90,7 +91,7 @@ func (rl *RedisRateLimiter) SetEndpointLimit(endpointKey string, limit int, wind
 	rl.mu.Unlock()
 }
 
-// GetEndpointLimit returns the per-endpoint limit if one is configured.
+// GetEndpointLimit 返回按端点的限流配置（如果已配置）。
 func (rl *RedisRateLimiter) GetEndpointLimit(endpointKey string) *endpointLimit {
 	rl.mu.RLock()
 	el, ok := rl.endpointOverrides[endpointKey]
@@ -101,13 +102,13 @@ func (rl *RedisRateLimiter) GetEndpointLimit(endpointKey string) *endpointLimit 
 	return el
 }
 
-// NewEndpointCheckFn returns a function compatible with proxy.WithEndpointRateLimit.
-// It checks if the endpointKey has a per-endpoint override and applies strict rate limiting.
+// NewEndpointCheckFn 返回一个兼容 proxy.WithEndpointRateLimit 的函数。
+// 它检查 endpointKey 是否有按端点覆盖配置，并执行严格的限流。
 func (rl *RedisRateLimiter) NewEndpointCheckFn() func(ctx context.Context, endpointKey, ip string) bool {
 	return func(ctx context.Context, endpointKey, ip string) bool {
 		el := rl.GetEndpointLimit(endpointKey)
 		if el == nil {
-			return true // no endpoint-specific limit configured
+			return true // 未配置按端点限流
 		}
 		key := fmt.Sprintf("shopmicro:ratelimit:ep:%s:ip:%s", endpointKey, ip)
 		now := time.Now()
@@ -116,17 +117,17 @@ func (rl *RedisRateLimiter) NewEndpointCheckFn() func(ctx context.Context, endpo
 	}
 }
 
-// Allow checks whether a request from the given key is allowed.
-// P1-3: When Redis is down, FAIL CLOSED (reject requests)
-// instead of falling back to local rate limiter.
-// This prevents rate-limit bypass in distributed environments.
+// Allow 检查来自指定 key 的请求是否被允许。
+// P1-3: 当 Redis 不可用时，执行失败关闭（拒绝请求），
+// 而不是回退到本地限流器。
+// 这可以防止在分布式环境中绕过限流。
 func (rl *RedisRateLimiter) Allow(ctx context.Context, key string) bool {
 	now := time.Now()
 	member := uniqueMember(now)
 	return rl.allowWithConfig(ctx, key, now, rl.window, rl.limit, member)
 }
 
-// allowWithConfig checks rate limiting with custom window/limit.
+// allowWithConfig 使用自定义窗口/限流值检查限流。
 func (rl *RedisRateLimiter) allowWithConfig(ctx context.Context, key string, now time.Time, window time.Duration, limit int, member string) bool {
 	windowStart := now.Add(-window)
 
@@ -139,8 +140,8 @@ func (rl *RedisRateLimiter) allowWithConfig(ctx context.Context, key string, now
 	).Int()
 
 	if err != nil {
-		// P2-03 fix: Redis down → fail closed.
-		// Reject the request rather than allowing bypass.
+		// P2-03 修复：Redis 不可用 → 执行失败关闭。
+		// 拒绝请求而非允许绕过。
 		logger.Warnf("ratelimit: redis unavailable, failing closed (rejecting request)")
 		return false
 	}
@@ -148,31 +149,28 @@ func (rl *RedisRateLimiter) allowWithConfig(ctx context.Context, key string, now
 	return result == 1
 }
 
-// getClientIP returns the real client IP from the TCP connection.
-func getClientIP(c *app.RequestContext) string {
-	return c.ClientIP()
-}
+// fallbackCounter 是 crypto/rand 失败时的后备计数器
+var fallbackCounter atomic.Uint64
 
-// uniqueMember returns a rate-limit member string that is guaranteed unique
-// even for concurrent requests at the same nanosecond.
-// Format: {unixNano}:{randSuffix}
+// uniqueMember 返回一个限流成员字符串，即使在同一纳秒的并发请求中也能保证唯一。
+// 格式: {unixNano}:{randSuffix}
 func uniqueMember(now time.Time) string {
 	var b [8]byte
-	// R4-SEC-04: crypto/rand 失败时记录警告（理论概率极低）
 	if _, err := rand.Read(b[:]); err != nil {
-		logger.Warnf("ratelimit: crypto/rand read failed: %v — member may collide", err)
+		logger.Warnf("ratelimit: crypto/rand read failed: %v — using fallback counter", err)
+		return fmt.Sprintf("%d:%016x", now.UnixNano(), uint64(now.UnixNano()<<32)|fallbackCounter.Add(1))
 	}
 	return fmt.Sprintf("%d:%08x", now.UnixNano(), binary.BigEndian.Uint64(b[:]))
 }
 
-// RateLimitMiddleware returns a Hertz middleware that performs distributed
-// per-IP sliding window rate limiting via Redis.
-// R2-P2-01: Removed per-user rate limiting from middleware (was based on unverified
-// JWT payload, allowing bypass). Per-endpoint rate limiting in the proxy handler
-// provides stricter, method-independent protection for sensitive operations.
+// RateLimitMiddleware 返回一个 Hertz 中间件，通过 Redis 执行分布式
+// 按 IP 滑动窗口限流。
+// R2-P2-01: 已从中间件中移除按用户限流（之前基于未验证的
+// JWT 载荷，可被绕过）。代理处理器中的按端点限流
+// 为敏感操作提供了更严格的、与方法无关的保护。
 func RateLimitMiddleware(rl *RedisRateLimiter) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		ip := getClientIP(c)
+		ip := ClientRealIP(c)
 		ipKey := fmt.Sprintf("shopmicro:ratelimit:ip:%s", ip)
 
 		if !rl.Allow(ctx, ipKey) {

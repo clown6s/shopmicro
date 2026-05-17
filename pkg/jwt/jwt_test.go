@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const testSecret = "0123456789abcdef0123456789abcdef" // 32 chars
+const testSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" // 64 chars
 const testIssuer = "shopmicro-test"
 
 func TestNewGenerator_ShortSecret(t *testing.T) {
@@ -131,7 +131,7 @@ func TestParse_WrongSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wrongParser, err := NewParser("wrong_secret_01234567890abcdefXX", testIssuer)
+	wrongParser, err := NewParser("wrong_secret_0123456789abcdef_0123456789abcdef_ZZYY_ccdd_eeff001", testIssuer)
 	if err != nil {
 		t.Fatal(err)
 	}

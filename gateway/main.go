@@ -21,9 +21,9 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"shopmicro/gateway/conf"
-	"shopmicro/gateway/health"
 	"shopmicro/gateway/middleware"
 	"shopmicro/gateway/proxy"
+	"shopmicro/gateway/routes"
 
 	pkgconf "shopmicro/pkg/conf"
 	"shopmicro/pkg/logger"
@@ -45,7 +45,7 @@ func Run(configPath string) error {
 
 	cfg.ApplyEnv()
 
-	// Fill zero-value config fields with defaults.
+	// 为零值配置字段填充默认值
 	cfg.SetDefaults()
 
 	if err := cfg.Validate(); err != nil {
@@ -53,17 +53,23 @@ func Run(configPath string) error {
 	}
 
 	// =========================
-	// logger
+	// 日志
 	// =========================
 
 	logger.Init(cfg.Mode)
 	defer logger.L.Sync()
 
 	// =========================
-	// otel tracer
+	// 可信代理 (XFF)
 	// =========================
 
-	// P0-01 fix: 使用配置文件中的 OTEL endpoint
+	middleware.InitTrustedProxies(cfg.TrustedProxies)
+
+	// =========================
+	// otel 链路追踪
+	// =========================
+
+	// P0-01 修复：使用配置文件中的 OTEL endpoint
 	shutdownTracer := otel.InitTracerWithEndpoint(
 		"shopmicro-gateway",
 		cfg.Mode,
@@ -72,7 +78,7 @@ func Run(configPath string) error {
 	defer shutdownTracer(context.Background())
 
 	// =========================
-	// etcd resolver
+	// etcd 服务发现
 	// =========================
 
 	r, err := etcd.NewEtcdResolver(cfg.Etcd.Addrs)
@@ -80,8 +86,8 @@ func Run(configPath string) error {
 		return err
 	}
 
-	// Etcd client for health check (readiness probe)
-	// R4-P3-05: Unified DialTimeout (5s) — same as proxy.newEtcdClient
+	// 用于健康检查的就绪探测的 Etcd 客户端
+	// R4-P3-05: 统一 DialTimeout（5秒）—— 与 proxy.newEtcdClient 一致
 	etcdClient, err := clientv3.New(clientv3.Config{
 		Endpoints:   cfg.Etcd.Addrs,
 		DialTimeout: 5 * time.Second,
@@ -97,7 +103,7 @@ func Run(configPath string) error {
 
 	hlog.SetLevel(hlog.LevelWarn)
 
-	// hertz otel tracing
+	// hertz otel 链路追踪
 	tracer, traceCfg := hertztracing.NewServerTracer()
 
 	h := server.New(
@@ -107,14 +113,14 @@ func Run(configPath string) error {
 
 		server.WithMaxRequestBodySize(1<<20), // 1MB
 
-		// P2-SEC-03 fix: 添加服务器超时配置防止慢客户端攻击
+		// P2-SEC-03 修复：添加服务器超时配置防止慢客户端攻击
 		server.WithReadTimeout(10*time.Second),
 		server.WithWriteTimeout(30*time.Second),
 		server.WithIdleTimeout(60*time.Second),
 	)
 
 	// =========================
-	// redis (for distributed rate limiting)
+	// redis（用于分布式限流）
 	// =========================
 
 	rdb, redisCleanup, err := redis.New(cfg.Redis)
@@ -124,58 +130,37 @@ func Run(configPath string) error {
 	defer redisCleanup()
 
 	// =========================
-	// middleware
+	// 中间件
 	// =========================
 
-	h.Use(hertztracing.ServerMiddleware(traceCfg)) // otel root span + trace context
-	h.Use(middleware.RecoveryMiddleware(cfg.Mode)) // panic recovery
-	h.Use(middleware.CORS(&middleware.CORSConfig{  // cors
+	h.Use(hertztracing.ServerMiddleware(traceCfg)) // otel 根 span + 链路上下文
+	h.Use(middleware.RecoveryMiddleware(cfg.Mode)) // panic 恢复
+	h.Use(middleware.CORS(&middleware.CORSConfig{  // 跨域
 		AllowOrigins:     cfg.CORS.AllowOrigins,
 		AllowCredentials: cfg.CORS.AllowCredentials,
 	}, cfg.Mode))
-	h.Use(middleware.SecurityHeadersMiddleware(cfg.Mode)) // HSTS, CSP, X-Frame-Options…
-	h.Use(middleware.AccessLogMiddleware())               // access log
-	h.Use(middleware.TraceIDMiddleware())                 // trace-id response header
+	h.Use(middleware.SecurityHeadersMiddleware(cfg.Mode)) // HSTS、CSP、X-Frame-Options 等
+	h.Use(middleware.AccessLogMiddleware())               // 访问日志
+	h.Use(middleware.TraceIDMiddleware())                 // trace-id 响应头
+	h.Use(middleware.RealIPMiddleware())                  // X-Forwarded-For 信任链 → _real_ip
 
-	// distributed rate limit (Redis sliding window, per-IP)
+	// 分布式限流（Redis 滑动窗口，按 IP）
 	rl := setupRateLimiter(rdb, cfg)
 	h.Use(middleware.RateLimitMiddleware(rl))
 
 	// =========================
-	// proxy
+	// 代理
 	// =========================
 
 	cbInterval, cbTimeout := cfg.CircuitBreakerDurations()
 
-	p := proxy.New(
-
+	// 构建代理选项
+	opts := []proxy.Option{
 		proxy.WithJWT(cfg.JWT.Secret, cfg.JWT.Issuer),
-
 		proxy.WithRedis(rdb),
 
-		proxy.WithPublicMethods(
-			"RegisterUser",
-			"Login",
-			"RefreshToken",
-		),
-
-		proxy.WithAllowedMethods("user",
-			"RegisterUser",
-			"Login",
-			"RefreshToken",
-			"Logout",
-			"UpdateUser",
-			"DeleteUser",
-			"ListUser",
-		),
-
-		// district service method whitelist
-		proxy.WithAllowedMethods("district",
-			"GetProvinceTree",
-		),
-
-		// Circuit breaker wraps RPC calls inside proxy.Call(),
-		// not HTTP handlers — eliminates double-response bug.
+		// 熔断器包装 proxy.Call() 内部的 RPC 调用，
+		// 而非 HTTP 处理器 —— 消除了双重响应 bug。
 		proxy.WithCircuitBreaker(
 			cfg.CircuitBreaker.MaxRequests,
 			cbInterval,
@@ -183,33 +168,37 @@ func Run(configPath string) error {
 			uint32(cfg.CircuitBreaker.ConsecutiveFailures),
 		),
 
-		// Per-endpoint rate limit enforced in proxy handler (method-independent).
-		// Prevents GET bypass of Login's strict rate limit.
+		// 按端点限流在代理处理器中执行（与方法无关）。
+		// 防止通过 GET 请求绕过 Login 的严格限流。
 		proxy.WithEndpointRateLimit(rl.NewEndpointCheckFn()),
-	)
+	}
+	// 追加路由相关配置：公开方法、白名单、HTTP 方法映射
+	opts = append(opts, routes.ProxyOptions()...)
 
-	// discover services
+	p := proxy.New(opts...)
+
+	// 发现服务
 	if err := p.DiscoverAndRegister(r, cfg.Etcd.Addrs, cfg.ProtoBase); err != nil {
 		return err
 	}
 
-	// watch services — lifecycle context; cancel immediately after
-	// shutdown signal so the watch goroutine exits during graceful shutdown,
-	// not sometime after Run() returns.
+	// 监听服务 —— 使用生命周期上下文；在收到关闭信号后立即取消，
+	// 以便在优雅关闭期间 WatchServices 协程退出，
+	// 而不是在 Run() 返回后才退出。
 	watchCtx, watchCancel := context.WithCancel(context.Background())
 	p.WatchServices(watchCtx, r, cfg.Etcd.Addrs, cfg.ProtoBase)
 
 	// =========================
-	// routes
+	// 路由
 	// =========================
 
-	registerRoutes(h, p, rdb, etcdClient)
+	routes.Register(h, p, rdb, etcdClient)
 
 	// =========================
-	// graceful shutdown
+	// 优雅关闭
 	// =========================
 
-	// P1-13: Use WaitGroup to ensure main() blocks until shutdown completes
+	// P1-13: 使用 WaitGroup 确保 main() 阻塞直到关闭完成
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -222,7 +211,7 @@ func Run(configPath string) error {
 		sig := <-quit
 		logger.Infof("shutdown signal received: %v", sig)
 
-		// P2-05: cancel watchCtx so WatchServices goroutine exits promptly.
+		// P2-05: 取消 watchCtx 以便 WatchServices 协程及时退出。
 		watchCancel()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -241,7 +230,7 @@ func Run(configPath string) error {
 	}()
 
 	// =========================
-	// start server
+	// 启动服务
 	// =========================
 
 	logger.Infof("gateway started at %s", cfg.Server.Addr)
@@ -265,7 +254,7 @@ func setupRateLimiter(rdb *redis.Client, cfg conf.Config) *middleware.RedisRateL
 	rlWindow := time.Duration(cfg.RateLimit.WindowS) * time.Second
 	rl := middleware.NewRedisRateLimiter(rdb, cfg.RateLimit.Limit, rlWindow)
 
-	// P1-15: Configure per-endpoint rate limits for sensitive operations
+	// P1-15: 为敏感操作配置按端点限流
 	for epKey, epCfg := range cfg.RateLimit.Endpoints {
 		rl.SetEndpointLimit(epKey, epCfg.Limit, epCfg.WindowS)
 	}
@@ -273,26 +262,7 @@ func setupRateLimiter(rdb *redis.Client, cfg conf.Config) *middleware.RedisRateL
 	return rl
 }
 
-// registerRoutes 注册健康检查端点和业务 API 路由。
-func registerRoutes(h *server.Hertz, p *proxy.Proxy, rdb *redis.Client, etcdClient *clientv3.Client) {
-	// P2-SEC-06 fix: 健康检查端点返回最小信息，不泄露内部拓扑
-	h.GET("/health", health.Handler())
-
-	// P0-07: Readiness probe for K8s — checks Redis + Etcd connectivity
-	// 注意：/ready 端点在生产环境应通过 K8s 网络策略限制访问
-	h.GET("/ready", health.ReadyHandler(rdb, etcdClient))
-
-	// P1-15: 业务路由 — per-endpoint rate limit 在 proxy.Handler() 内统一执行
-	api := h.Group("/api/v1")
-	handler := p.Handler()
-	api.POST("/:service/:method", handler)
-	api.GET("/:service/:method", handler)
-	api.PUT("/:service/:method", handler)
-	api.DELETE("/:service/:method", handler)
-}
-
 // isHertzStopped 判断 hertz 返回的 err 是否属于"引擎已停止"的情况
-// （常见于 GoLand Stop 按钮触发的正常停止）。
 func isHertzStopped(err error) bool {
 	return strings.Contains(err.Error(), "engine is not running")
 }
@@ -302,7 +272,7 @@ func main() {
 	configPath := flag.String(
 		"c",
 		"conf/config.yaml",
-		"config file path",
+		"配置文件路径",
 	)
 
 	flag.Parse()

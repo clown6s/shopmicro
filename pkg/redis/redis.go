@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/extra/redisotel/v9"
@@ -13,7 +14,7 @@ type Config struct {
 	Password      string `yaml:"password"`
 	DB            int    `yaml:"db"`
 	EnableTracing bool   `yaml:"enableTracing"`
-	// Pool parameters (zero-value falls back to sensible defaults)
+	// 连接池参数（零值将回退到合理的默认值）
 	PoolSize       int `yaml:"poolSize"`
 	MinIdleConns   int `yaml:"minIdleConns"`
 	PoolTimeoutSec int `yaml:"poolTimeoutSec"`
@@ -32,10 +33,10 @@ func (c *Config) setDefaults() {
 		c.PoolTimeoutSec = 4
 	}
 	if c.ConnMaxLifeSec <= 0 {
-		c.ConnMaxLifeSec = 1800 // 30 min
+		c.ConnMaxLifeSec = 1800 // 30 分钟
 	}
 	if c.ConnMaxIdleSec <= 0 {
-		c.ConnMaxIdleSec = 600 // 10 min
+		c.ConnMaxIdleSec = 600 // 10 分钟
 	}
 }
 
@@ -67,7 +68,7 @@ func New(cfg Config) (*Client, func(), error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		_ = rdb.Close() // P2-19: close client on ping failure to prevent leak
+		_ = rdb.Close() // P2-19: ping 失败时关闭客户端以防止泄漏
 		return nil, nil, err
 	}
 
@@ -75,9 +76,9 @@ func New(cfg Config) (*Client, func(), error) {
 	return &Client{rdb: rdb}, cleanup, nil
 }
 
-// RawClient returns the underlying *redis.Client.
-// Use this when you need access to the full go-redis API
-// (e.g., custom commands that Client does not wrap).
+// RawClient 返回底层的 *redis.Client。
+// 当需要访问完整的 go-redis API 时使用
+//（例如 Client 未封装的自定义命令）。
 func (c *Client) RawClient() *redis.Client {
 	return c.rdb
 }
@@ -98,35 +99,35 @@ func (c *Client) Exists(ctx context.Context, keys ...string) (int64, error) {
 	return c.rdb.Exists(ctx, keys...).Result()
 }
 
-// SAdd adds members to a Redis SET.
+// SAdd 向 Redis SET 添加成员。
 func (c *Client) SAdd(ctx context.Context, key string, members ...interface{}) error {
 	return c.rdb.SAdd(ctx, key, members...).Err()
 }
 
-// SRem removes members from a Redis SET.
+// SRem 从 Redis SET 移除成员。
 func (c *Client) SRem(ctx context.Context, key string, members ...interface{}) error {
 	return c.rdb.SRem(ctx, key, members...).Err()
 }
 
-// SIsMember checks if a member exists in a Redis SET.
+// SIsMember 检查成员是否存在于 Redis SET 中。
 func (c *Client) SIsMember(ctx context.Context, key string, member interface{}) (bool, error) {
 	return c.rdb.SIsMember(ctx, key, member).Result()
 }
 
-// Ping checks Redis connectivity. Returns true if Redis is reachable.
+// Ping 检查 Redis 连通性。如果 Redis 可达则返回 true。
 func (c *Client) Ping(ctx context.Context) bool {
 	return c.rdb.Ping(ctx).Err() == nil
 }
 
-// Expire sets a TTL on an existing key.
+// Expire 为已有 key 设置 TTL。
 func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	return c.rdb.Expire(ctx, key, ttl).Err()
 }
 
-// SAddExpire atomically adds members to a SET and sets its TTL.
-// Uses a Redis TxPipeline (MULTI/EXEC) so both commands execute atomically,
-// preventing the race where a server crash between SAdd and Expire
-// leaves the SET without a TTL (tokens would never expire).
+// SAddExpire 原子地向 SET 添加成员并设置其 TTL。
+// 使用 Redis TxPipeline (MULTI/EXEC) 使两条命令原子执行，
+// 防止 SAdd 和 Expire 之间服务器崩溃导致 SET 没有 TTL 的竞态条件
+//（token 将永不过期）。
 func (c *Client) SAddExpire(ctx context.Context, key string, ttl time.Duration, members ...interface{}) error {
 	pipe := c.rdb.TxPipeline()
 	pipe.SAdd(ctx, key, members...)
@@ -135,35 +136,45 @@ func (c *Client) SAddExpire(ctx context.Context, key string, ttl time.Duration, 
 	return err
 }
 
-// SMembers returns all members of a Redis SET.
+// SMembers 返回 Redis SET 的所有成员。
 func (c *Client) SMembers(ctx context.Context, key string) ([]string, error) {
 	return c.rdb.SMembers(ctx, key).Result()
 }
 
-// Incr increments the integer value of a key by 1.
+// Incr 将 key 的整数值加 1。
 func (c *Client) Incr(ctx context.Context, key string) (int64, error) {
 	return c.rdb.Incr(ctx, key).Result()
 }
 
-// GetDel atomically gets the value of a key and deletes it.
-// Requires Redis 6.2+.
+// GetDel 原子地获取 key 的值并删除它。
+// 需要 Redis 6.2+。
 func (c *Client) GetDel(ctx context.Context, key string) (string, error) {
 	return c.rdb.GetDel(ctx, key).Result()
 }
 
-// NewScript creates a Redis Lua script that can be executed atomically.
-// P3-08: SECURITY — Only use hardcoded script strings, never user input.
-// Lua scripts have full Redis access; validate source if from external config.
+// NewScript 创建一个可原子执行的 Redis Lua 脚本。
+// P3-08: 安全性 — 仅使用硬编码的脚本字符串，绝不使用用户输入。
+// Lua 脚本拥有完整的 Redis 访问权限；如果来自外部配置需验证源码。
 func NewScript(src string) *Script {
 	return &Script{s: redis.NewScript(src)}
 }
 
-// Script wraps a redis.Script for atomic Lua execution.
+// Script 封装 redis.Script 用于原子 Lua 执行。
 type Script struct {
 	s *redis.Script
 }
 
-// Run executes the Lua script. keys are KEYS[], args are ARGV[].
+// Run 执行 Lua 脚本。keys 对应 KEYS[]，args 对应 ARGV[]。
 func (sc *Script) Run(ctx context.Context, c *Client, keys []string, args ...interface{}) (interface{}, error) {
 	return sc.s.Run(ctx, c.rdb, keys, args...).Result()
 }
+
+// RunScript 通过源码字符串原子执行 Lua 脚本。
+// 使用 sync.Map 缓存 Script 对象，避免重复创建。
+func (c *Client) RunScript(ctx context.Context, src string, keys []string, args ...interface{}) (interface{}, error) {
+	scriptI, _ := scriptCache.LoadOrStore(src, redis.NewScript(src))
+	script := scriptI.(*redis.Script)
+	return script.Run(ctx, c.rdb, keys, args...).Result()
+}
+
+var scriptCache sync.Map

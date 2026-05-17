@@ -23,6 +23,9 @@ type Config struct {
 	CircuitBreaker CircuitBreakerCfg   `yaml:"circuitBreaker"`
 	Vault          secrets.VaultConfig `yaml:"vault"`
 	OTEL           OTEL                `yaml:"otel"`
+	// TrustedProxies 列出可信反向代理的 CIDR 或 IP 列表。
+	// X-Forwarded-For 从右往左解析；第一个不可信 IP 即为真实客户端。
+	TrustedProxies []string `yaml:"trustedProxies"`
 }
 
 type OTEL struct {
@@ -44,15 +47,15 @@ type JWT struct {
 type RateLimit struct {
 	Limit   int `yaml:"limit"`     // 窗口内最大请求数 (default: 100)
 	WindowS int `yaml:"windowSec"` // 滑动窗口时长（秒） (default: 60)
-	// P1-15: Per-endpoint rate limits for sensitive operations
+	// P1-15: 敏感操作的按端点限流配置
 	Endpoints map[string]EndpointRate `yaml:"endpoints"`
 }
 
-// EndpointRate defines rate limiting for a specific endpoint.
-// Key format: "service/method" (e.g. "user/Login")
+// EndpointRate 定义特定端点的限流配置。
+// 键格式: "service/method"（例如 "user/Login"）
 type EndpointRate struct {
-	Limit   int `yaml:"limit"`     // max requests per window
-	WindowS int `yaml:"windowSec"` // window duration in seconds (default: global window)
+	Limit   int `yaml:"limit"`     // 窗口内最大请求数
+	WindowS int `yaml:"windowSec"` // 窗口时长（秒）(default: 全局窗口)
 }
 
 // CircuitBreakerCfg 熔断器配置
@@ -63,7 +66,7 @@ type CircuitBreakerCfg struct {
 	ConsecutiveFailures int `yaml:"consecutiveFailures"` // 连续失败触发熔断 (default: 5)
 }
 
-// SetDefaults fills zero-value fields with sensible defaults.
+// SetDefaults 为零值字段填充合理的默认值。
 func (c *Config) SetDefaults() {
 	rl := &c.RateLimit
 	if rl.Limit <= 0 {
@@ -87,7 +90,7 @@ func (c *Config) SetDefaults() {
 		cb.ConsecutiveFailures = 5
 	}
 
-	// OTEL defaults
+	// OTEL 默认值
 	if c.OTEL.Endpoint == "" {
 		c.OTEL.Endpoint = "localhost:4317"
 	}
@@ -97,9 +100,9 @@ func (c *Config) SetDefaults() {
 }
 
 func (c *Config) ApplyEnv() {
-	// Initialise secrets provider (Vault if configured, fallback to env)
-	// P2-11 fix: Never use Vault.Token from config.yaml as a default — that would
-	// allow the token to be committed to source control. Only the env var can set it.
+	// 初始化密钥提供者（如配置了 Vault 则使用，否则回退到环境变量）
+	// P2-11 修复：绝不使用 config.yaml 中的 Vault.Token 作为默认值 ——
+	// 那样会导致 token 被提交到代码仓库。只能通过环境变量设置。
 	if c.Vault.Address != "" {
 		if token := conf.Env("VAULT_TOKEN", ""); token != "" {
 			c.Vault.Token = token
@@ -126,16 +129,13 @@ func (c *Config) ApplyEnv() {
 	if v := conf.Env("ETCD_ADDRS", ""); v != "" {
 		c.Etcd.Addrs = strings.Split(v, ",")
 	}
-	// P2-10: Support SERVER_ADDR override for container deployments (port binding)
+	// P2-10: 支持通过 SERVER_ADDR 覆盖配置，用于容器部署（端口绑定）
 	if v := conf.Env("SERVER_ADDR", ""); v != "" {
 		c.Server.Addr = v
 	}
 	// OTEL 配置覆盖
 	if v := conf.Env("OTEL_EXPORTER_OTLP_ENDPOINT", ""); v != "" {
 		c.OTEL.Endpoint = v
-	}
-	if v := conf.Env("OTEL_TRACE_SAMPLE_RATE", ""); v != "" {
-		// 采样率通过 otel.InitTracer 内部处理
 	}
 }
 
@@ -159,14 +159,14 @@ func (c *Config) Validate() error {
 	if mode != "dev" && mode != "prod" && mode != "staging" {
 		return fmt.Errorf("invalid mode %q, expected dev/prod/staging", c.Mode)
 	}
-	// P2-08: Production requires Redis password
+	// P2-08: 生产环境要求 Redis 密码
 	if mode == "prod" && c.Redis.Password == "" {
 		return fmt.Errorf("redis password is required in production mode, set REDIS_PASSWORD env")
 	}
 	return nil
 }
 
-// CircuitBreakerDurations returns the parsed interval and timeout durations.
+// CircuitBreakerDurations 返回解析后的统计间隔和熔断超时时长。
 func (c *Config) CircuitBreakerDurations() (interval, timeout time.Duration) {
 	return time.Duration(c.CircuitBreaker.IntervalS) * time.Second,
 		time.Duration(c.CircuitBreaker.TimeoutS) * time.Second

@@ -13,8 +13,8 @@ var (
 	once sync.Once
 )
 
-// P3-11: Sensitive key patterns to detect in logged data.
-// Used by Safe() to redact values that look like credentials.
+// P3-11: 用于检测日志数据中敏感信息的模式。
+// 由 Safe() 使用，用于对看起来像凭证的值进行脱敏处理。
 var sensitivePatterns = []string{
 	"password", "passwd", "pwd",
 	"secret", "token", "authorization",
@@ -23,14 +23,16 @@ var sensitivePatterns = []string{
 	// R5-P3-01: 常见密钥字段关键词补充
 	"api_key", "apikey", "access_key", "accesskey",
 	"private_key", "privatekey", "signing_key",
+	// DSN 包含数据库凭证 (user:password@tcp(...))
+	"dsn",
 }
 
-// Safe returns a redacted version of the input string if its key (fieldName)
-// matches a known sensitive pattern. Use when logging configuration values.
+// Safe 返回输入字符串的脱敏版本，如果其键名（fieldName）
+// 匹配已知敏感模式。在记录配置值时使用。
 //
 //	logger.Infof("config: %s=%s", "jwt_secret", logger.Safe("jwt_secret", secretValue))
 //
-// If fieldName is empty, returns val unchanged (no redaction).
+// 如果 fieldName 为空，则原样返回 val（不脱敏）。
 func Safe(fieldName, val string) string {
 	if fieldName == "" || val == "" {
 		return val
@@ -48,14 +50,14 @@ func Init(mode string) error {
 	var initErr error
 	once.Do(func() {
 		var cfg zap.Config
-		if mode == "dev" {
+		if strings.ToLower(mode) == "dev" {
 			cfg = zap.NewDevelopmentConfig()
 		} else {
 			cfg = zap.NewProductionConfig()
 		}
 		cfg.EncoderConfig.TimeKey = "ts"
 		cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-		// P1-07: Add stack trace for Error and higher levels
+		// P1-07: 为 Error 及更高级别添加堆栈跟踪
 		log, err := cfg.Build(zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.ErrorLevel))
 		if err != nil {
 			initErr = err

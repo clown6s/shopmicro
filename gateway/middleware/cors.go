@@ -13,25 +13,25 @@ type CORSConfig struct {
 	AllowCredentials bool     // 是否允许携带 Cookie / Authorization 头
 }
 
-// CORS returns a Hertz middleware that applies Cross-Origin Resource Sharing headers.
-// When AllowCredentials is true, AllowOrigins must NOT contain "*" (browser rejects it).
-// Instead, the middleware echoes back the request Origin if it's in the allowed list.
+// CORS 返回一个 Hertz 中间件，用于设置跨域资源共享（CORS）响应头。
+// 当 AllowCredentials 为 true 时，AllowOrigins 不能包含 "*"（浏览器会拒绝）。
+// 此时中间件会回显请求的 Origin 头（前提是该 Origin 在允许列表中）。
 func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 	if cfg == nil {
 		if mode == "prod" {
-			// Production: no CORS headers unless explicitly configured
+			// 生产环境：除非显式配置，否则不设置 CORS 头
 			cfg = &CORSConfig{AllowOrigins: []string{}}
 		} else {
-			// Dev/staging: allow localhost for convenience
+			// 开发/预发环境：允许 localhost 以方便调试
 			cfg = &CORSConfig{AllowOrigins: []string{"http://localhost:3000"}}
 		}
 	}
 	allowAll := len(cfg.AllowOrigins) == 1 && cfg.AllowOrigins[0] == "*"
 	creds := cfg.AllowCredentials
 
-	// R4-P3-02: Browser rejects credentials+wildcard by spec (fail-closed).
-	// No server-side guard needed — if misconfigured, the browser simply blocks the response.
-	// Removed prod-only guard (was dead code since isAllowedOrigin never matches "*").
+	// R4-P3-02: 浏览器按规范会拒绝凭据+通配符的组合（默认安全）。
+	// 服务端无需额外防护 —— 如果配置错误，浏览器会直接阻止响应。
+	// 已移除仅生产环境的防护（因为是无效代码，isAllowedOrigin 不会匹配 "*"）。
 
 	return func(ctx context.Context, c *app.RequestContext) {
 		origin := string(c.GetHeader("Origin"))
@@ -44,7 +44,7 @@ func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, Token")
-		c.Header("Access-Control-Max-Age", "86400")
+		c.Header("Access-Control-Max-Age", "3600")
 
 		if creds {
 			c.Header("Access-Control-Allow-Credentials", "true")
@@ -58,7 +58,7 @@ func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 	}
 }
 
-// P2-SEC-01 fix: 移除通配符子域名匹配功能以防止 DNS rebinding 攻击
+// P2-SEC-01 修复：移除通配符子域名匹配功能以防止 DNS rebinding 攻击
 // 如需支持子域名，请在 allowOrigins 中显式列出每个域名
 func isAllowedOrigin(origin string, allowed []string) bool {
 	for _, a := range allowed {

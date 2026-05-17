@@ -16,7 +16,6 @@ import (
 	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
-	"shopmicro/pkg/redis"
 	"shopmicro/user/data"
 )
 
@@ -42,47 +41,37 @@ var (
 	errRefreshTooMany   = newBiz(errcode.CodeUserInternal, "too many refresh attempts, please try again later")
 )
 
-// P1-21: phone number regex — Chinese mobile format
+// P1-21：手机号正则 — 中国手机号格式
 var phoneRegex = regexp.MustCompile(`^1[3-9]\d{9}$`)
 
-// emailRegex validates basic email format (RFC 5322 simplified)
+// emailRegex 校验基本邮箱格式（RFC 5322 简化版）
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
-// passwordRegex enforces at least one letter + one digit + special chars ok, 8-128 chars
-var passwordRegex = regexp.MustCompile(`^.{8,128}$`)
+// passwordLetterRe 和 passwordDigitRe 拆分为两个检查，因为 Go 的 RE2 引擎
+// 不支持前瞻断言 ((?=...))。使用 (?=.*[a-zA-Z])(?=.*\d) 的单一正则方式
+// 在 Go 的 regexp 包中不可用。
+var passwordLetterRe = regexp.MustCompile(`[a-zA-Z]`)
+var passwordDigitRe = regexp.MustCompile(`\d`)
 
-// passwordValid checks that the password contains at least one letter AND one digit.
+// passwordValid 检查密码长度为 8-128 个字符，且至少包含一个字母和一个数字。
 func passwordValid(pwd string) bool {
-	if !passwordRegex.MatchString(pwd) {
-		return false
-	}
-	var hasLetter, hasDigit bool
-	for _, c := range pwd {
-		switch {
-		case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
-			hasLetter = true
-		case c >= '0' && c <= '9':
-			hasDigit = true
-		}
-		if hasLetter && hasDigit {
-			return true
-		}
-	}
-	return false
+	return len(pwd) >= 8 && len(pwd) <= 128 &&
+		passwordLetterRe.MatchString(pwd) &&
+		passwordDigitRe.MatchString(pwd)
 }
 
-// UserServiceImpl implements the user service gRPC handlers.
+// UserServiceImpl 实现用户服务的 gRPC handler。
 type UserServiceImpl struct {
-	userDal   *data.UserDal
+	userDal   UserStore
 	jwtGen    *jwt.Generator
 	jwtExpHrs int
-	rtGen     *jwt.Generator // refresh token generator
-	rtExpHrs  int            // refresh token expiration hours
-	rdb       *redis.Client
+	rtGen     *jwt.Generator // 刷新令牌生成器
+	rtExpHrs  int            // 刷新令牌过期时间（小时）
+	rdb       RedisOps
 }
 
 func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer string, jwtRefreshSecret string) *UserServiceImpl {
-	// P2-16 fix: guard against zero jwtExpHours to prevent degenerate rtExpHrs
+	// P2-16 修复：防止 jwtExpHours 为零导致 rtExpHrs 异常
 	if jwtExpHours <= 0 {
 		jwtExpHours = 24
 	}
@@ -90,15 +79,18 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer s
 	if err != nil {
 		logger.Fatalf("init jwt generator failed: %v", err)
 	}
-	// Refresh token: 7 days default (must be >= access token)
+	// 刷新令牌：默认 7 天（必须大于等于访问令牌）
 	rtExpHrs := jwtExpHours * 7
 	if rtExpHrs < 24 {
-		rtExpHrs = 168 // at least 7 days
+		rtExpHrs = 168 // 至少 7 天
 	}
 
-	// token secret defeats the purpose of dual-token architecture.
+	// 使用相同密钥会破坏双令牌架构的设计目的。
 	if jwtRefreshSecret == "" {
-		logger.Fatalf("JWT_REFRESH_SECRET is required and must differ from JWT_SECRET")
+		logger.Fatalf("JWT_REFRESH_SECRET is required")
+	}
+	if jwtRefreshSecret == jwtSecret {
+		logger.Fatalf("JWT_REFRESH_SECRET must differ from JWT_SECRET — using the same secret defeats the dual-token architecture")
 	}
 	rtGen, err := jwt.NewGenerator(jwtRefreshSecret, time.Duration(rtExpHrs)*time.Hour, jwtIssuer)
 	if err != nil {
@@ -117,13 +109,13 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer s
 const tokenPrefix = "shopmicro:user:token:"
 const refreshTokenPrefix = "shopmicro:user:refresh:"
 
-// P2-06: Registration rate limit — per-phone, max 5 attempts per hour
+// P2-06：注册频率限制 — 按手机号，每小时最多 5 次
 const registerRateLimitKey = "shopmicro:register:rate:"
 const registerRateLimitMax = 5
-const registerRateLimitWindowSec = 3600 // 1 hour
+const registerRateLimitWindowSec = 3600 // 1 小时
 
-// P2-06: Lua script for atomic rate limit check-and-increment
-var registerRateLimitLua = redis.NewScript(`
+// P2-06：用于原子性频率限制检查并递增的 Lua 脚本
+const registerRateLimitScript = `
 local count = redis.call('INCR', KEYS[1])
 if count == 1 then
     redis.call('EXPIRE', KEYS[1], ARGV[2])
@@ -132,15 +124,15 @@ if tonumber(count) > tonumber(ARGV[1]) then
     return 1
 end
 return 0
-`)
+`
 
-// P2-07: RefreshToken rate limit — per-userID, max 10 per minute
+// P2-07：RefreshToken 频率限制 — 按用户 ID，每分钟最多 10 次
 const refreshRateLimitKey = "shopmicro:refresh:rate:"
 const refreshRateLimitMax = 10
 const refreshRateLimitWindowSec = 60
 
-// P2-07: Lua script for refresh token rate limiting
-var refreshRateLimitLua = redis.NewScript(`
+// P2-07：用于刷新令牌频率限制的 Lua 脚本
+const refreshRateLimitScript = `
 local count = redis.call('INCR', KEYS[1])
 if count == 1 then
     redis.call('EXPIRE', KEYS[1], ARGV[2])
@@ -149,25 +141,25 @@ if tonumber(count) > tonumber(ARGV[1]) then
     return 1
 end
 return 0
-`)
+`
 
-// P1-05: Account-level brute force protection constants
-// R4-P1-03: Atomic INCR + conditional EXPIRE Lua script.
-var loginFailIncrLua = redis.NewScript(`
+// P1-05：账号级别暴力破解保护常量
+// R4-P1-03：原子性 INCR + 条件 EXPIRE 的 Lua 脚本。
+const loginFailIncrScript = `
 local count = redis.call('INCR', KEYS[1])
 if count == 1 then
     redis.call('EXPIRE', KEYS[1], ARGV[1])
 end
 return count
-`)
+`
 
 const (
-	loginMaxFailures = 10               // max failed attempts before lockout
-	loginLockoutTTL  = 15 * time.Minute // lockout duration
+	loginMaxFailures = 10               // 锁定前最大失败尝试次数
+	loginLockoutTTL  = 15 * time.Minute // 锁定持续时间
 )
 
-// R2-P2-04: Atomic Lua script to revoke all user tokens (access + refresh).
-var revokeTokensLua = redis.NewScript(`
+// R2-P2-04：用于撤销用户所有令牌（访问令牌 + 刷新令牌）的原子性 Lua 脚本。
+const revokeTokensScript = `
 local tokenKey = KEYS[1]
 local rtSetKey = KEYS[2]
 local rtTokens = redis.call('SMEMBERS', rtSetKey)
@@ -178,9 +170,9 @@ end
 redis.call('DEL', rtSetKey)
 redis.call('DEL', tokenKey)
 return 1
-`)
+`
 
-// checkLoginAttempts checks if the phone number has too many recent failed login attempts.
+// checkLoginAttempts 检查手机号是否有过多的近期登录失败记录。
 func (s *UserServiceImpl) checkLoginAttempts(ctx context.Context, phone string) error {
 	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
 	count, err := s.rdb.Get(ctx, key)
@@ -197,21 +189,21 @@ func (s *UserServiceImpl) checkLoginAttempts(ctx context.Context, phone string) 
 	return nil
 }
 
-// recordLoginFailure increments the failed login counter for a phone number.
+// recordLoginFailure 递增手机号的登录失败计数器。
 func (s *UserServiceImpl) recordLoginFailure(ctx context.Context, phone string) {
 	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
-	if _, err := loginFailIncrLua.Run(ctx, s.rdb, []string{key}, int(loginLockoutTTL.Seconds())); err != nil {
+	if _, err := s.rdb.RunScript(ctx, loginFailIncrScript, []string{key}, int(loginLockoutTTL.Seconds())); err != nil {
 		logger.Warnf("login: failed to record login failure for phone %s: %v", maskPhone(phone), err)
 	}
 }
 
-// clearLoginFailures removes the failed login counter on successful login.
+// clearLoginFailures 在成功登录后清除登录失败计数器。
 func (s *UserServiceImpl) clearLoginFailures(ctx context.Context, phone string) {
 	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
 	_ = s.rdb.Del(ctx, key)
 }
 
-// checkOwnership verifies the caller's user_id matches the requested user ID.
+// checkOwnership 验证调用者的 user_id 是否与请求的用户 ID 匹配。
 func (s *UserServiceImpl) checkOwnership(ctx context.Context, targetID int64) error {
 	userIDStr, ok := metainfo.GetPersistentValue(ctx, "user_id")
 	if !ok || userIDStr == "" {
@@ -228,10 +220,10 @@ func (s *UserServiceImpl) checkOwnership(ctx context.Context, targetID int64) er
 }
 
 // =========================
-// helpers
+// 辅助函数
 // =========================
 
-// isDuplicateKeyError checks if an error is a MySQL duplicate key error (code 1062).
+// isDuplicateKeyError 检查错误是否为 MySQL 重复键错误（错误码 1062）。
 func isDuplicateKeyError(err error) bool {
 	if err == nil {
 		return false
@@ -243,20 +235,20 @@ func isDuplicateKeyError(err error) bool {
 	return false
 }
 
-// parseInt64 parses a string to int64 using strconv.
+// parseInt64 使用 strconv 将字符串解析为 int64。
 func parseInt64(s string) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
 }
 
-// maskPhone 脱敏手机号：保留后3位，其余用 * 代替
+// maskPhone 脱敏手机号：保留前3后4，中间用 * 代替（中国手机号 11 位）
 func maskPhone(phone string) string {
-	if len(phone) <= 3 {
+	if len(phone) != 11 {
 		return "***"
 	}
-	return "****" + phone[len(phone)-3:]
+	return phone[:3] + "****" + phone[7:]
 }
 
-// maskEmail masks email: a***@example.com
+// maskEmail 脱敏邮箱：a***@example.com
 func maskEmail(email string) string {
 	if email == "" {
 		return ""
@@ -268,8 +260,8 @@ func maskEmail(email string) string {
 	return email[:1] + "***" + email[at:]
 }
 
-// maskUserID returns a consistent masked representation of a user ID.
-// so hiding it in the response body adds no real security.
+// maskUserID 返回用户 ID 的一致性脱敏表示。
+// 在响应体中隐藏它不会增加实际安全性。
 func maskUserID(id int64) int64 {
 	if id == 0 {
 		return 0

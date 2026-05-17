@@ -13,15 +13,14 @@ import (
 
 	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/logger"
-	"shopmicro/pkg/redis"
 )
 
-// getMeta retrieves a persistent metadata value from the gRPC context.
+// getMeta 从 gRPC 上下文中获取持久化的元数据值。
 func getMeta(ctx context.Context, key string) (string, bool) {
 	return metainfo.GetPersistentValue(ctx, key)
 }
 
-// Logout removes the caller's specific token from Redis.
+// Logout 从 Redis 中移除调用者的特定令牌。
 func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *v1.LogoutResp, err error) {
 	userIDStr, ok := getMeta(ctx, "user_id")
 	if !ok || userIDStr == "" {
@@ -53,16 +52,16 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 var errRefreshTokenRequired = newBiz(errcode.CodeUserTokenRequired, "refresh token is required")
 var errRefreshTokenInvalid = newBiz(errcode.CodeUserTokenInvalid, "invalid or expired refresh token")
 
-// refreshTokensLua atomically rotates refresh tokens.
-var refreshTokensLua = redis.NewScript(`
+// refreshTokensScript 原子性地轮换刷新令牌。
+const refreshTokensScript = `
 redis.call('SREM', KEYS[1], ARGV[1])
 redis.call('SADD', KEYS[1], ARGV[2])
 redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[5])
 redis.call('EXPIRE', KEYS[1], ARGV[4])
 return 1
-`)
+`
 
-// RefreshToken issues a new access token + refresh token pair.
+// RefreshToken 签发新的访问令牌 + 刷新令牌对。
 func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshTokenReq) (resp *v1.RefreshTokenResp, err error) {
 	rt := req.GetRefreshToken()
 	if rt == "" {
@@ -80,9 +79,9 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 		return nil, errRefreshTokenInvalid
 	}
 
-	// P2-07: Rate limit refresh token requests per user ID (10/min)
+	// P2-07：按用户 ID 限制刷新令牌频率（每分钟 10 次）
 	refreshRateKey := refreshRateLimitKey + userIDStr
-	limited, rlErr := refreshRateLimitLua.Run(ctx, s.rdb, []string{refreshRateKey}, refreshRateLimitMax, refreshRateLimitWindowSec)
+	limited, rlErr := s.rdb.RunScript(ctx, refreshRateLimitScript, []string{refreshRateKey}, refreshRateLimitMax, refreshRateLimitWindowSec)
 	if rlErr != nil {
 		logger.Warnf("refresh token: rate limit check failed (user_id=%d): %v", userID, rlErr)
 		return nil, errRefreshTooMany
@@ -92,7 +91,7 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 		}
 	}
 
-	// R4-P1-03: Verify user still exists and is not deleted
+	// R4-P1-03：验证用户仍然存在且未被删除
 	if _, err := s.userDal.GetByID(ctx, userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errRefreshTokenInvalid
@@ -123,7 +122,7 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", userID)
 	newRTKey := fmt.Sprintf("%s%s", refreshTokenPrefix, newRT)
 	rtTTL := time.Duration(s.rtExpHrs) * time.Hour
-	if _, err := refreshTokensLua.Run(ctx, s.rdb,
+	if _, err := s.rdb.RunScript(ctx, refreshTokensScript,
 		[]string{rtSetKey, newRTKey},
 		rt, newRT, userIDStr, int(rtTTL.Seconds()), int(rtTTL.Seconds()),
 	); err != nil {

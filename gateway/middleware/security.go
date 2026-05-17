@@ -6,8 +6,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 )
 
-// SecurityHeadersMiddleware adds production-grade security HTTP headers.
-// HSTS is only enabled in "prod" mode to avoid breaking local development over HTTP.
+// SecurityHeadersMiddleware 添加生产级安全 HTTP 响应头。
+// HSTS 仅在 "prod" 模式下启用，以避免在 HTTP 本地开发时出现问题。
 func SecurityHeadersMiddleware(mode string) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		c.Header("X-Content-Type-Options", "nosniff")

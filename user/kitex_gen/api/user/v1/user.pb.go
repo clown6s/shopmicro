@@ -133,16 +133,16 @@ func (x *LoginReq) GetPhone() string {
 }
 
 type LoginResp struct {
-	Id           int64  `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
-	RealName     string `protobuf:"bytes,2,opt,name=realName" json:"realName,omitempty"`
-	Avatar       string `protobuf:"bytes,3,opt,name=avatar" json:"avatar,omitempty"`
-	Gender       Gender `protobuf:"varint,4,opt,name=gender" json:"gender,omitempty"`
-	Age          int32  `protobuf:"varint,5,opt,name=age" json:"age,omitempty"`
-	Phone        string `protobuf:"bytes,6,opt,name=phone" json:"phone,omitempty"`
-	Email        string `protobuf:"bytes,7,opt,name=email" json:"email,omitempty"`
-	Remark       string `protobuf:"bytes,8,opt,name=remark" json:"remark,omitempty"`
-	Token        string `protobuf:"bytes,9,opt,name=token" json:"token,omitempty"`
-	RefreshToken string `protobuf:"bytes,10,opt,name=refreshToken" json:"refreshToken,omitempty"`
+	Id           int64   `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
+	RealName     string  `protobuf:"bytes,2,opt,name=realName" json:"realName,omitempty"`
+	Avatar       string  `protobuf:"bytes,3,opt,name=avatar" json:"avatar,omitempty"`
+	Gender       *Gender `protobuf:"varint,4,opt,name=gender" json:"gender,omitempty"`
+	Age          *int32  `protobuf:"varint,5,opt,name=age" json:"age,omitempty"`
+	Phone        string  `protobuf:"bytes,6,opt,name=phone" json:"phone,omitempty"`
+	Email        string  `protobuf:"bytes,7,opt,name=email" json:"email,omitempty"`
+	Remark       string  `protobuf:"bytes,8,opt,name=remark" json:"remark,omitempty"`
+	Token        string  `protobuf:"bytes,9,opt,name=token" json:"token,omitempty"`
+	RefreshToken string  `protobuf:"bytes,10,opt,name=refreshToken" json:"refreshToken,omitempty"`
 }
 
 func (x *LoginResp) Reset() { *x = LoginResp{} }
@@ -173,15 +173,15 @@ func (x *LoginResp) GetAvatar() string {
 }
 
 func (x *LoginResp) GetGender() Gender {
-	if x != nil {
-		return x.Gender
+	if x != nil && x.Gender != nil {
+		return *x.Gender
 	}
 	return Gender_GENDER_UNKNOWN
 }
 
 func (x *LoginResp) GetAge() int32 {
-	if x != nil {
-		return x.Age
+	if x != nil && x.Age != nil {
+		return *x.Age
 	}
 	return 0
 }
@@ -473,14 +473,14 @@ func (x *ListUserResp) GetTotal() int64 {
 
 // UserInfo 公开用户信息，不含密码
 type UserInfo struct {
-	Id       int64  `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
-	RealName string `protobuf:"bytes,2,opt,name=realName" json:"realName,omitempty"`
-	Avatar   string `protobuf:"bytes,3,opt,name=avatar" json:"avatar,omitempty"`
-	Gender   Gender `protobuf:"varint,4,opt,name=gender" json:"gender,omitempty"`
-	Age      int32  `protobuf:"varint,5,opt,name=age" json:"age,omitempty"`
-	Phone    string `protobuf:"bytes,6,opt,name=phone" json:"phone,omitempty"`
-	Email    string `protobuf:"bytes,7,opt,name=email" json:"email,omitempty"`
-	Remark   string `protobuf:"bytes,8,opt,name=remark" json:"remark,omitempty"`
+	Id       int64   `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
+	RealName string  `protobuf:"bytes,2,opt,name=realName" json:"realName,omitempty"`
+	Avatar   string  `protobuf:"bytes,3,opt,name=avatar" json:"avatar,omitempty"`
+	Gender   *Gender `protobuf:"varint,4,opt,name=gender" json:"gender,omitempty"`
+	Age      *int32  `protobuf:"varint,5,opt,name=age" json:"age,omitempty"`
+	Phone    string  `protobuf:"bytes,6,opt,name=phone" json:"phone,omitempty"`
+	Email    string  `protobuf:"bytes,7,opt,name=email" json:"email,omitempty"`
+	Remark   string  `protobuf:"bytes,8,opt,name=remark" json:"remark,omitempty"`
 }
 
 func (x *UserInfo) Reset() { *x = UserInfo{} }
@@ -511,15 +511,15 @@ func (x *UserInfo) GetAvatar() string {
 }
 
 func (x *UserInfo) GetGender() Gender {
-	if x != nil {
-		return x.Gender
+	if x != nil && x.Gender != nil {
+		return *x.Gender
 	}
 	return Gender_GENDER_UNKNOWN
 }
 
 func (x *UserInfo) GetAge() int32 {
-	if x != nil {
-		return x.Age
+	if x != nil && x.Age != nil {
+		return *x.Age
 	}
 	return 0
 }

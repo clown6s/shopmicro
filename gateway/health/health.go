@@ -7,11 +7,12 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"shopmicro/pkg/logger"
 	"shopmicro/pkg/redis"
 )
 
-// Handler returns a simple liveness probe — always returns 200.
-// K8s livenessProbe should use this endpoint.
+// Handler 返回一个简单的存活探测端点 —— 始终返回 200。
+// K8s livenessProbe 应使用此端点。
 func Handler() app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		c.JSON(200, map[string]interface{}{
@@ -20,33 +21,39 @@ func Handler() app.HandlerFunc {
 	}
 }
 
-// ReadyHandler returns a readiness probe that checks dependency health.
-// K8s readinessProbe should use this endpoint.
-// P2-05 fix: 不返回具体依赖名称，防止架构信息泄露
-// P2-08: Checks both Redis and Etcd connectivity.
+// ReadyHandler 返回一个就绪探测端点，检查依赖服务健康状态。
+// K8s readinessProbe 应使用此端点。
+// P2-05 修复：不返回具体依赖名称，防止架构信息泄露
+// P2-08: 检查 Redis 和 Etcd 连通性。
 func ReadyHandler(rdb *redis.Client, etcdClient *clientv3.Client) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		failed := false
 
-		// Check Redis — with independent timeout to avoid blocking on dead connections
+		// 检查 Redis —— 使用请求上下文，以便关闭时取消等待中的 ping
 		if rdb != nil {
-			pingCtx, pingCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			pingCtx, pingCancel := context.WithTimeout(ctx, 2*time.Second)
 			if !rdb.Ping(pingCtx) {
+				logger.Warn("readiness: redis ping failed")
 				failed = true
 			}
-			pingCancel() // P2-08 fix: cancel immediately after use — not deferred
+			pingCancel()
 		} else {
+			logger.Warn("readiness: redis client is nil")
 			failed = true
 		}
 
-		// Check Etcd — lightweight Get with short timeout
+		// 检查 Etcd —— 带短超时的轻量级 Get 请求
 		if etcdClient != nil {
-			etcdCtx, etcdCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			etcdCtx, etcdCancel := context.WithTimeout(ctx, 2*time.Second)
 			_, err := etcdClient.Get(etcdCtx, "health-check-key", clientv3.WithCountOnly())
 			if err != nil {
+				logger.Warnf("readiness: etcd check failed: %v", err)
 				failed = true
 			}
-			etcdCancel() // P2-08 fix: cancel immediately after use — not deferred
+			etcdCancel()
+		} else {
+			logger.Warn("readiness: etcd client is nil")
+			failed = true
 		}
 
 		if failed {
@@ -56,7 +63,7 @@ func ReadyHandler(rdb *redis.Client, etcdClient *clientv3.Client) app.HandlerFun
 			return
 		}
 
-		// All checks passed
+		// 所有检查通过
 		c.JSON(200, map[string]interface{}{
 			"status": "ready",
 		})

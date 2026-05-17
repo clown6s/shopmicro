@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -16,7 +17,7 @@ import (
 	"shopmicro/pkg/logger"
 )
 
-// RegisterUser handles user registration with phone + password.
+// RegisterUser 处理用户注册（手机号 + 密码）。
 func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUserReq) (*v1.RegisterUserResp, error) {
 	if req.GetPhone() == "" {
 		return nil, errPhoneRequired
@@ -25,9 +26,13 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 		return nil, errPasswordRequired
 	}
 
-	// P2-06: Rate limit registration attempts per phone number
+	if !phoneRegex.MatchString(req.GetPhone()) {
+		return nil, errPhoneFormat
+	}
+
+	// P2-06：按手机号限制注册频率
 	rateKey := registerRateLimitKey + req.GetPhone()
-	limited, err := registerRateLimitLua.Run(ctx, s.rdb, []string{rateKey}, registerRateLimitMax, registerRateLimitWindowSec)
+	limited, err := s.rdb.RunScript(ctx, registerRateLimitScript, []string{rateKey}, registerRateLimitMax, registerRateLimitWindowSec)
 	if err != nil {
 		logger.Warnf("register: rate limit check failed (phone=%s): %v", maskPhone(req.GetPhone()), err)
 		return nil, errRegisterTooMany
@@ -37,15 +42,6 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 		}
 	}
 
-	if !phoneRegex.MatchString(req.GetPhone()) {
-		return nil, errPhoneFormat
-	}
-	if len(req.GetPassword()) < 8 {
-		return nil, errPasswordWeak
-	}
-	if len(req.GetPassword()) > 128 {
-		return nil, errPasswordTooLong
-	}
 	if !passwordValid(req.GetPassword()) {
 		return nil, errPasswordWeak
 	}
@@ -60,10 +56,21 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 		return nil, newBiz(errcode.CodeUserParam, "email too long (max 128)")
 	}
 
-	hashed, err := bcrypt.GenerateFromPassword([]byte(req.GetPassword()), 12)
+	// 在 bcrypt 之前先用 SHA-256 预哈希，避免 72 字节截断限制。
+	// bcrypt 只使用密码的前 72 个字节，因此超过 72 字节的密码
+	// 如果前缀相同会产生相同的哈希值。
+	preHash := sha256.Sum256([]byte(req.GetPassword()))
+	hashed, err := bcrypt.GenerateFromPassword(preHash[:], 12)
 	if err != nil {
 		logger.Errorf("bcrypt hash failed: %v", err)
 		return nil, errInternal
+	}
+
+	if req.GetGender() < 0 || req.GetGender() > 3 {
+		return nil, newBiz(errcode.CodeUserParam, "gender must be 0-3")
+	}
+	if req.GetAge() < 0 || req.GetAge() > 150 {
+		return nil, newBiz(errcode.CodeUserParam, "age must be 0-150")
 	}
 
 	user := &module.User{
@@ -73,13 +80,6 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 		Age:      int16(req.GetAge()),
 		Phone:    req.GetPhone(),
 		Email:    req.GetEmail(),
-	}
-
-	if user.Gender < 0 || user.Gender > 3 {
-		return nil, newBiz(errcode.CodeUserParam, "gender must be 0-3")
-	}
-	if req.GetAge() < 0 || req.GetAge() > 150 {
-		return nil, newBiz(errcode.CodeUserParam, "age must be 0-150")
 	}
 
 	if err := s.userDal.Create(ctx, user); err != nil {
@@ -95,7 +95,7 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 	return &v1.RegisterUserResp{}, nil
 }
 
-// Login authenticates a user by phone and password, returns tokens.
+// Login 通过手机号和密码进行身份认证，返回令牌。
 func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.LoginResp, error) {
 	if req.GetPhone() == "" {
 		return nil, errPhoneRequired
@@ -124,7 +124,8 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 		return nil, errInternal
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.GetPassword())); err != nil {
+	preHash := sha256.Sum256([]byte(req.GetPassword()))
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), preHash[:]); err != nil {
 		logger.Warnf("login failed: wrong password (phone: %s)", maskPhone(req.GetPhone()))
 		s.recordLoginFailure(ctx, req.GetPhone())
 		return nil, errPhonePwdWrong
@@ -160,16 +161,22 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 
 	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", user.ID)
 	if err := s.rdb.SAddExpire(ctx, rtSetKey, rtTTL, refreshToken); err != nil {
-		logger.Errorf("login: store refresh token to reverse set failed: %v", err)
+		// RT 反向集合写入失败意味着 revokeTokensLua 无法找到此令牌。
+		// 回滚已写入的 RT 键值对，防止产生孤立令牌。
+		_ = s.rdb.Del(ctx, rtKey)
+		_ = s.rdb.Del(ctx, tokenKey)
+		logger.Errorf("login: store refresh token to reverse set failed, rolling back: %v", err)
+		return nil, errInternal
 	}
 
+	gender := v1.Gender(user.Gender)
+	age := int32(user.Age)
 	return &v1.LoginResp{
-		// L3 fix: Return masked user ID instead of 0.
-		Id:           maskUserID(user.ID),
+		Id:           user.ID,
 		RealName:     user.RealName,
 		Avatar:       user.Avatar,
-		Gender:       v1.Gender(user.Gender),
-		Age:          int32(user.Age),
+		Gender:       &gender,
+		Age:          &age,
 		Phone:        maskPhone(user.Phone),
 		Email:        maskEmail(user.Email),
 		Remark:       user.Remark,

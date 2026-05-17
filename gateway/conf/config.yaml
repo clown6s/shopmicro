@@ -28,6 +28,15 @@ etcd:
 
 mode: "dev"
 
+# X-Forwarded-For 信任链：列出可信反向代理的 CIDR 或 IP
+# 从右向左解析 XFF，第一个不在列表中的 IP 即为真实客户端 IP
+# 留空或注释则直接使用 TCP 层 IP（不信任任何代理）
+# trustedProxies:
+#   - "10.0.0.0/8"
+#   - "172.16.0.0/12"
+#   - "192.168.0.0/16"
+#   - "127.0.0.1"
+
 # HashiCorp Vault（留空则使用环境变量）
 vault:
   address: ""       # 通过 VAULT_ADDRESS 环境变量设置

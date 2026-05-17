@@ -20,12 +20,12 @@ import (
 // InitTracerWithEndpoint 带有自定义 endpoint 的初始化函数
 // endpoint 可通过环境变量 OTEL_EXPORTER_OTLP_ENDPOINT 覆盖
 func InitTracerWithEndpoint(serviceName, mode, defaultEndpoint string) func(context.Context) error {
-	// P0-01 fix: 支持通过参数传入默认 endpoint
+	// P0-01 修复：支持通过参数传入默认 endpoint
 	endpoint := defaultEndpoint
 	if ep := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); ep != "" {
 		endpoint = ep
 	}
-	// R5-P1-01 fix: capture scheme before stripping — gRPC requires bare host:port
+	// R5-P1-01 修复：在去除前缀前捕获 scheme — gRPC 需要裸 host:port
 	useTLS := strings.HasPrefix(endpoint, "https://")
 	endpoint = strings.TrimPrefix(endpoint, "https://")
 	endpoint = strings.TrimPrefix(endpoint, "http://")
@@ -33,30 +33,30 @@ func InitTracerWithEndpoint(serviceName, mode, defaultEndpoint string) func(cont
 	return initTracerCommon(serviceName, mode, endpoint, useTLS)
 }
 
-// InitTracer initialises the OpenTelemetry tracer provider and global propagator.
-// It returns a shutdown function that MUST be called during graceful shutdown.
+// InitTracer 初始化 OpenTelemetry tracer provider 和全局传播器。
+// 返回一个关闭函数，必须在优雅关闭期间调用。
 //
-// P0-02 fix: endpoint is now configurable via OTEL_EXPORTER_OTLP_ENDPOINT env var
-// (falls back to "localhost:4317"). Initialisation errors are returned instead of panic.
+// P0-02 修复：endpoint 现在可通过 OTEL_EXPORTER_OTLP_ENDPOINT 环境变量配置
+//（回退到 "localhost:4317"）。初始化错误会被返回而不是 panic。
 //
-// P0-11 fix: sampling rate is configurable via OTEL_TRACE_SAMPLE_RATE env var
-// (0.0–1.0, default 0.1 for non-dev). Use "1.0" or mode="dev" for full sampling.
+// P0-11 修复：采样率可通过 OTEL_TRACE_SAMPLE_RATE 环境变量配置
+//（0.0–1.0，非 dev 模式默认 0.1）。使用 "1.0" 或 mode="dev" 进行全量采样。
 func InitTracer(serviceName, mode string) func(context.Context) error {
 	return InitTracerWithEndpoint(serviceName, mode, "localhost:4317")
 }
 
 // initTracerCommon 公共的 tracer 初始化逻辑
-// R5-P1-01 fix: useTLS 参数独立传入，不再依赖 endpoint 中的 scheme 前缀
+// R5-P1-01 修复：useTLS 参数独立传入，不再依赖 endpoint 中的 scheme 前缀
 // gRPC exporter 需要裸 host:port，TLS 由 useTLS 布尔值控制
 func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(context.Context) error {
-	// Use a bounded context so the exporter never blocks forever
+	// 使用有超时的上下文，防止 exporter 永久阻塞
 	initCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(endpoint),
 	}
-	// R5-P1-01 fix: 仅在非 TLS 时添加 WithInsecure()
+	// R5-P1-01 修复：仅在非 TLS 时添加 WithInsecure()
 	if !useTLS {
 		opts = append(opts, otlptracegrpc.WithInsecure())
 	}
@@ -66,7 +66,7 @@ func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(cont
 		opts...,
 	)
 	if err != nil {
-		// genuine misconfiguration. Log at appropriate level with guidance.
+		// 真正的配置错误。以适当的级别记录日志并给出指引。
 		if mode == "dev" {
 			logger.Infof("otel: exporter unavailable in dev mode (endpoint=%s), tracing disabled: %v", endpoint, err)
 		} else {
@@ -76,14 +76,16 @@ func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(cont
 		return func(ctx context.Context) error { return nil }
 	}
 
-	// Configurable sampling rate
-	sampleRate := 0.1 // production default: 10%
+	// 可配置的采样率
+	sampleRate := 0.1 // 生产环境默认：10%
 	if mode == "dev" {
 		sampleRate = 1.0
 	}
 	if sr := os.Getenv("OTEL_TRACE_SAMPLE_RATE"); sr != "" {
 		if parsed, perr := strconv.ParseFloat(sr, 64); perr == nil && parsed >= 0 && parsed <= 1 {
 			sampleRate = parsed
+		} else {
+			logger.Warnf("otel: invalid OTEL_TRACE_SAMPLE_RATE=%q, using default %.2f", sr, sampleRate)
 		}
 	}
 
@@ -108,7 +110,7 @@ func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(cont
 
 	otel.SetTracerProvider(tp)
 
-	// W3C tracecontext propagation
+	// W3C tracecontext 传播
 	otel.SetTextMapPropagator(
 		propagation.NewCompositeTextMapPropagator(
 			propagation.TraceContext{},

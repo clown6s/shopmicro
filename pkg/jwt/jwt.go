@@ -30,9 +30,9 @@ type Generator struct {
 	audience   []string
 }
 
-// NewGenerator creates a JWT generator with the given HMAC secret and expiration.
-// issuer is optional — if empty, the "iss" claim is omitted.
-// audience is optional — if non-empty, the "aud" claim is set.
+// NewGenerator 使用给定的 HMAC 密钥和过期时间创建 JWT 生成器。
+// issuer 是可选的 — 如果为空，则省略 "iss" 声明。
+// audience 是可选的 — 如果非空，则设置 "aud" 声明。
 func NewGenerator(secret string, expiration time.Duration, issuer string) (*Generator, error) {
 	if len(secret) < 64 {
 		return nil, ErrSecretWeak
@@ -40,8 +40,8 @@ func NewGenerator(secret string, expiration time.Duration, issuer string) (*Gene
 	return &Generator{secret: []byte(secret), expiration: expiration, issuer: issuer}, nil
 }
 
-// WithAudience sets the audience claim(s). Returns the generator for chaining.
-// Must be called before Generate().
+// WithAudience 设置 audience 声明。返回生成器本身以支持链式调用。
+// 必须在 Generate() 之前调用。
 func (g *Generator) WithAudience(aud ...string) *Generator {
 	g.audience = aud
 	return g
@@ -58,7 +58,7 @@ func (g *Generator) Generate(userID int64) (string, error) {
 			Issuer:    g.issuer,
 		},
 	}
-	// P2-08: Set audience claim if configured
+	// P2-08: 如果已配置则设置 audience 声明
 	if len(g.audience) > 0 {
 		claims.Audience = g.audience
 	}
@@ -73,9 +73,9 @@ type Parser struct {
 	audience []string
 }
 
-// NewParser creates a JWT parser with the given HMAC secret.
-// Returns an error if the secret is shorter than 64 characters.
-// If issuer is non-empty, tokens with a different "iss" claim are rejected.
+// NewParser 使用给定的 HMAC 密钥创建 JWT 解析器。
+// 如果密钥长度不足 64 字符则返回错误。
+// 如果 issuer 非空，则具有不同 "iss" 声明的 token 会被拒绝。
 func NewParser(secret string, issuer string) (*Parser, error) {
 	if len(secret) < 64 {
 		return nil, ErrSecretWeak
@@ -83,8 +83,8 @@ func NewParser(secret string, issuer string) (*Parser, error) {
 	return &Parser{secret: []byte(secret), issuer: issuer}, nil
 }
 
-// WithAudience sets the expected audience(s). Returns the parser for chaining.
-// If set, tokens without matching "aud" claim will be rejected.
+// WithAudience 设置期望的 audience。返回解析器本身以支持链式调用。
+// 如果设置，没有匹配 "aud" 声明的 token 会被拒绝。
 func (p *Parser) WithAudience(aud ...string) *Parser {
 	p.audience = aud
 	return p
@@ -108,11 +108,11 @@ func (p *Parser) Parse(tokenStr string) (*Claims, error) {
 	if !ok || !token.Valid {
 		return nil, ErrTokenInvalid
 	}
-	// Verify issuer if configured
+	// 如果已配置则验证 issuer
 	if p.issuer != "" && claims.Issuer != p.issuer {
 		return nil, ErrTokenIssuer
 	}
-	// P2-08: Verify audience if configured
+	// P2-08: 如果已配置则验证 audience
 	if len(p.audience) > 0 {
 		audMatch := false
 		for _, expected := range p.audience {
