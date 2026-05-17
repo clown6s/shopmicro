@@ -13,130 +13,91 @@ type DistrictDal struct {
 	db *sql.DB
 }
 
-func (d *DistrictDal) GetList(ctx context.Context, adCode string) ([]*v1.DistrictTree, error) {
+func (d *DistrictDal) GetList(
+	ctx context.Context,
+	adCode string,
+) ([]*v1.DistrictTree, error) {
+
 	var (
 		query string
 		args  []any
 	)
 
-	if adCode != "" {
-		// 递归查询指定行政区所属的完整树结构
-		// 仅返回：province / city / district / street
-		// 限制递归深度防止异常数据导致死循环
+	// 全国
+	if adCode == "" {
+
 		query = `
-WITH RECURSIVE ancestors AS (
-    -- 从当前节点向上查找祖先节点
-    SELECT
-        id,
-        parent_adcode,
-        adcode,
-        name,
-        level,
-        center,
-        1 AS depth
-    FROM district
-    WHERE adcode = ?
-      AND level IN ('province', 'city', 'district', 'street')
+			SELECT
+				id,
+				parent_adcode,
+				adcode,
+				name,
+				level,
+				center
+			FROM district
+			WHERE level IN (
+				'province',
+				'city',
+				'district',
+				'street'
+			)
+			ORDER BY adcode
+		`
 
-    UNION ALL
-
-    SELECT
-        d.id,
-        d.parent_adcode,
-        d.adcode,
-        d.name,
-        d.level,
-        d.center,
-        a.depth + 1
-    FROM district d
-    INNER JOIN ancestors a
-        ON d.adcode = a.parent_adcode
-    WHERE a.depth < 20
-      AND d.level IN ('province', 'city', 'district', 'street')
-),
-
-root AS (
-    -- 获取最顶层祖先节点
-    -- 使用 depth DESC 保证拿到最高层级
-    SELECT
-        id,
-        parent_adcode,
-        adcode,
-        name,
-        level,
-        center
-    FROM ancestors
-    ORDER BY depth DESC
-    LIMIT 1
-),
-
-district_tree AS (
-    -- 从根节点向下递归查询所有子节点
-    SELECT
-        r.id,
-        r.parent_adcode,
-        r.adcode,
-        r.name,
-        r.level,
-        r.center,
-        1 AS depth
-    FROM root r
-
-    UNION ALL
-
-    SELECT
-        d.id,
-        d.parent_adcode,
-        d.adcode,
-        d.name,
-        d.level,
-        d.center,
-        dt.depth + 1
-    FROM district d
-    INNER JOIN district_tree dt
-        ON d.parent_adcode = dt.adcode
-    WHERE dt.depth < 20
-      AND d.level IN ('province', 'city', 'district', 'street')
-)
-
-SELECT DISTINCT
-    id,
-    parent_adcode,
-    adcode,
-    name,
-    level,
-    center
-FROM district_tree
-WHERE level IN ('province', 'city', 'district', 'street')
-ORDER BY adcode
-LIMIT 10000
-`
-		args = append(args, adCode)
 	} else {
-		// 返回全部行政区（不包含 country）
+
+		// 指定节点+所有下辖
+
 		query = `
-SELECT
-    id,
-    parent_adcode,
-    adcode,
-    name,
-    level,
-    center
-FROM district
-WHERE level IN ('province', 'city', 'district', 'street')
-ORDER BY adcode
-`
+		WITH RECURSIVE district_tree AS (
+
+			SELECT
+				id,
+				parent_adcode,
+				adcode,
+				name,
+				level,
+				center
+			FROM district
+			WHERE adcode = ?
+
+			UNION ALL
+
+			SELECT
+				d.id,
+				d.parent_adcode,
+				d.adcode,
+				d.name,
+				d.level,
+				d.center
+			FROM district d
+			JOIN district_tree t
+				ON d.parent_adcode=t.adcode
+		)
+
+		SELECT *
+		FROM district_tree
+		ORDER BY adcode
+		`
+
+		args =
+			append(
+				args,
+				adCode,
+			)
 	}
 
-	rows, err := d.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		zap.L().Error(
-			"districtRepo.Get query failed",
-			zap.String("adCode", adCode),
-			zap.Error(err),
+	rows, err :=
+		d.db.QueryContext(
+			ctx,
+			query,
+			args...,
 		)
-		return nil, fmt.Errorf("query district failed: %w", err)
+
+	if err != nil {
+		return nil, err
 	}
+
 	defer rows.Close()
 
 	return scanDistricts(rows)
