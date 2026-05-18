@@ -50,7 +50,7 @@ otel:
 
 # 分布式限流配置 (Redis 滑动窗口)
 rateLimit:
-  limit: 100          # 窗口内最大请求数
+  limit: 1000000          # 窗口内最大请求数
   windowSec: 60       # 滑动窗口时长（秒）
   endpoints:
     user/Login:
