@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -122,6 +123,9 @@ func ProxyOptions() []proxy.Option {
 			"GetProvinces",
 			"GetChildren",
 		),
+
+		// 方法级超时覆盖
+		proxy.WithMethodTimeout("district", "UpdateDistrict", 120*time.Second),
 	}
 }
 

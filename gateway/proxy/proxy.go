@@ -20,6 +20,7 @@ import (
 	dproto "github.com/cloudwego/dynamicgo/proto"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/kitex/client"
+	"github.com/cloudwego/kitex/client/callopt"
 	"github.com/cloudwego/kitex/client/genericclient"
 	"github.com/cloudwego/kitex/pkg/discovery"
 	"github.com/cloudwego/kitex/pkg/generic"
@@ -92,6 +93,11 @@ type Proxy struct {
 	// 空 map = 所有方法都不缓存（安全默认值）。
 	cacheableMethods map[string]bool
 
+	// methodTimeout 单个 RPC 方法的超时覆盖。
+	// 键格式为 "service/method"，值覆盖 Kitex 默认 RPC 超时。
+	// 未注册的方法使用客户端级默认超时（5s）。
+	methodTimeout map[string]time.Duration
+
 	// R5-P2-10: 标记 etcd watch 协程是否健康，供 /ready 端点查询
 	watchHealthy atomic.Bool
 }
@@ -146,6 +152,17 @@ func WithCacheableMethods(service string, methods ...string) Option {
 	}
 }
 
+// WithMethodTimeout 为指定 RPC 方法设置独立的超时时间，
+// 覆盖客户端级默认 RPC 超时（5s）。
+// 适用于耗时较长的管理操作，如全量数据同步。
+//
+//	proxy.WithMethodTimeout("district", "UpdateDistrict", 120*time.Second)
+func WithMethodTimeout(service, method string, timeout time.Duration) Option {
+	return func(p *Proxy) {
+		p.methodTimeout[service+"/"+method] = timeout
+	}
+}
+
 // WithPublicMethods 标记不需要 JWT 令牌的 RPC 方法。
 // 键格式为 "service/method"（例如 "user/Login"），以防止
 // 跨服务认证绕过 —— 标记为 user 服务公开的 "Login"
@@ -166,6 +183,7 @@ func New(opts ...Option) *Proxy {
 		allowedMethods:   make(map[string]map[string]bool),
 		httpMethodMap:    make(map[string]map[string]bool),
 		cacheableMethods: make(map[string]bool),
+		methodTimeout:    make(map[string]time.Duration),
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -313,6 +331,7 @@ func (p *Proxy) Call(
 	service string,
 	method string,
 	req interface{},
+	callOpts ...callopt.Option,
 ) (interface{}, error) {
 	cli, ok := p.getClient(service)
 	if !ok {
@@ -322,7 +341,7 @@ func (p *Proxy) Call(
 	const maxRetries = 2
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, err := cli.Client.GenericCall(ctx, method, req)
+		resp, err := cli.Client.GenericCall(ctx, method, req, callOpts...)
 		if err == nil {
 			return resp, nil
 		}
@@ -662,7 +681,14 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			}
 		}
 
-		resp, err := p.Call(ctx, service, method, body)
+		// 方法级超时覆盖：长耗时操作（如全量数据同步）需要超过默认 5s 的超时
+		// 使用 callopt.WithRPCTimeout 覆盖 Kitex 客户端级 RPC 超时
+		var callOpts []callopt.Option
+		if timeout, ok := p.methodTimeout[service+"/"+method]; ok {
+			callOpts = append(callOpts, callopt.WithRPCTimeout(timeout))
+		}
+
+		resp, err := p.Call(ctx, service, method, body, callOpts...)
 
 		// Pre-gzip 缓存回填：成功 GET 响应预压缩后缓存，后续直接投递
 		if err == nil {
