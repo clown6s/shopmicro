@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"github.com/cloudwego/hertz/pkg/app"
+
+	"shopmicro/pkg/logger"
 )
 
 // CORSConfig 跨域配置
@@ -29,6 +31,11 @@ func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 	allowAll := len(cfg.AllowOrigins) == 1 && cfg.AllowOrigins[0] == "*"
 	creds := cfg.AllowCredentials
 
+	// P1-08: 通配符 + credentials 在浏览器中会被拒绝，启动时警告
+	if allowAll && creds {
+		logger.Warnf("CORS: AllowOrigins=['*'] with AllowCredentials=true is invalid — browsers will reject responses")
+	}
+
 	// R4-P3-02: 浏览器按规范会拒绝凭据+通配符的组合（默认安全）。
 	// 服务端无需额外防护 —— 如果配置错误，浏览器会直接阻止响应。
 	// 已移除仅生产环境的防护（因为是无效代码，isAllowedOrigin 不会匹配 "*"）。
@@ -39,7 +46,13 @@ func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 			c.Header("Access-Control-Allow-Origin", "*")
 		} else if origin != "" && isAllowedOrigin(origin, cfg.AllowOrigins) {
 			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Vary", "Origin")
+			// 追加而非覆盖，防止 gzip middleware 覆盖此值
+			existing := string(c.Response.Header.Peek("Vary"))
+			if existing != "" {
+				c.Header("Vary", existing+", Origin")
+			} else {
+				c.Header("Vary", "Origin")
+			}
 		}
 
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

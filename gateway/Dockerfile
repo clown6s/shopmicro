@@ -22,6 +22,17 @@ RUN cd pkg && go mod download
 # 复制源码（包括 proto 文件，go work use 已将所有模块纳入工作空间）
 COPY . .
 
+# P2-01: 准备所有服务的 proto 文件到统一目录（替代硬编码 user/）
+RUN mkdir -p /proto-out && \
+    for svc_dir in /build/*/api; do \
+      [ -d "$svc_dir" ] || continue; \
+      svc_name=$(basename "$(dirname "$svc_dir")"); \
+      [ "$svc_name" = "gateway" ] && continue; \
+      [ "$svc_name" = "pkg" ] && continue; \
+      mkdir -p "/proto-out/$svc_name"; \
+      cp -r "$svc_dir" "/proto-out/$svc_name/api"; \
+    done
+
 # 编译 gateway
 RUN cd gateway && go build -o /gateway-bin .
 
@@ -42,12 +53,16 @@ COPY gateway/conf ./conf
 RUN adduser -D -H -s /sbin/nologin appuser
 USER appuser
 
-# 复制服务 proto 文件（供 generic proxy 运行时使用）
+# P2-01: 复制所有服务的 proto 文件（供 generic proxy 运行时使用）
 # proto 约定路径: {protoBase}{service}/api/{service}.proto
 # 设置 PROTO_BASE=/app/service-protos 以使用容器内路径
-COPY --from=builder /build/user/api /app/service-protos/user/api
+COPY --from=builder /proto-out /app/service-protos
 
 EXPOSE 8080
+
+# P3-05: 容器健康检查
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -qO- http://localhost:8080/health || exit 1
 
 # protoBase 在容器内应指向 /app/service-protos/
 # 通过环境变量覆盖 config.yaml 中的 protoBase（无需重新构建镜像）

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	"shopmicro/pkg/conf"
 	"shopmicro/pkg/redis"
@@ -12,17 +11,16 @@ import (
 )
 
 type Config struct {
-	Server         conf.Server         `yaml:"server"`
-	Etcd           conf.Etcd           `yaml:"etcd"`
-	CORS           CORS                `yaml:"cors"`
-	Redis          redis.Config        `yaml:"redis"`
-	JWT            JWT                 `yaml:"jwt"`
-	ProtoBase      string              `yaml:"protoBase"`
-	Mode           string              `yaml:"mode"`
-	RateLimit      RateLimit           `yaml:"rateLimit"`
-	CircuitBreaker CircuitBreakerCfg   `yaml:"circuitBreaker"`
-	Vault          secrets.VaultConfig `yaml:"vault"`
-	OTEL           OTEL                `yaml:"otel"`
+	Server    conf.Server         `yaml:"server"`
+	Etcd      conf.Etcd           `yaml:"etcd"`
+	CORS      CORS                `yaml:"cors"`
+	Redis     redis.Config        `yaml:"redis"`
+	JWT       JWT                 `yaml:"jwt"`
+	ProtoBase string              `yaml:"protoBase"`
+	Mode      string              `yaml:"mode"`
+	RateLimit RateLimit           `yaml:"rateLimit"`
+	Vault     secrets.VaultConfig `yaml:"vault"`
+	OTEL      OTEL                `yaml:"otel"`
 	// TrustedProxies 列出可信反向代理的 CIDR 或 IP 列表。
 	// X-Forwarded-For 从右往左解析；第一个不可信 IP 即为真实客户端。
 	TrustedProxies []string `yaml:"trustedProxies"`
@@ -58,36 +56,16 @@ type EndpointRate struct {
 	WindowS int `yaml:"windowSec"` // 窗口时长（秒）(default: 全局窗口)
 }
 
-// CircuitBreakerCfg 熔断器配置
-type CircuitBreakerCfg struct {
-	MaxRequests         int `yaml:"maxRequests"`         // 半开状态最大请求数 (default: 5)
-	IntervalS           int `yaml:"intervalSec"`         // 统计间隔秒数 (default: 60)
-	TimeoutS            int `yaml:"timeoutSec"`          // 熔断恢复超时秒数 (default: 10)
-	ConsecutiveFailures int `yaml:"consecutiveFailures"` // 连续失败触发熔断 (default: 5)
-}
-
 // SetDefaults 为零值字段填充合理的默认值。
 func (c *Config) SetDefaults() {
+	c.Mode = strings.ToLower(c.Mode)
+
 	rl := &c.RateLimit
 	if rl.Limit <= 0 {
 		rl.Limit = 100
 	}
 	if rl.WindowS <= 0 {
 		rl.WindowS = 60
-	}
-
-	cb := &c.CircuitBreaker
-	if cb.MaxRequests <= 0 {
-		cb.MaxRequests = 5
-	}
-	if cb.IntervalS <= 0 {
-		cb.IntervalS = 60
-	}
-	if cb.TimeoutS <= 0 {
-		cb.TimeoutS = 10
-	}
-	if cb.ConsecutiveFailures <= 0 {
-		cb.ConsecutiveFailures = 5
 	}
 
 	// OTEL 默认值
@@ -127,7 +105,17 @@ func (c *Config) ApplyEnv() {
 		c.ProtoBase = v
 	}
 	if v := conf.Env("ETCD_ADDRS", ""); v != "" {
-		c.Etcd.Addrs = strings.Split(v, ",")
+		addrs := strings.Split(v, ",")
+		cleaned := make([]string, 0, len(addrs))
+		for _, a := range addrs {
+			a = strings.TrimSpace(a)
+			if a != "" {
+				cleaned = append(cleaned, a)
+			}
+		}
+		if len(cleaned) > 0 {
+			c.Etcd.Addrs = cleaned
+		}
 	}
 	// P2-10: 支持通过 SERVER_ADDR 覆盖配置，用于容器部署（端口绑定）
 	if v := conf.Env("SERVER_ADDR", ""); v != "" {
@@ -163,11 +151,8 @@ func (c *Config) Validate() error {
 	if mode == "prod" && c.Redis.Password == "" {
 		return fmt.Errorf("redis password is required in production mode, set REDIS_PASSWORD env")
 	}
+	if c.OTEL.SampleRate < 0 || c.OTEL.SampleRate > 1.0 {
+		return fmt.Errorf("otel sampleRate must be between 0.0 and 1.0, got %v", c.OTEL.SampleRate)
+	}
 	return nil
-}
-
-// CircuitBreakerDurations 返回解析后的统计间隔和熔断超时时长。
-func (c *Config) CircuitBreakerDurations() (interval, timeout time.Duration) {
-	return time.Duration(c.CircuitBreaker.IntervalS) * time.Second,
-		time.Duration(c.CircuitBreaker.TimeoutS) * time.Second
 }

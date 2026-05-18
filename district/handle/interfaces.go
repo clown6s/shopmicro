@@ -6,5 +6,6 @@ import (
 )
 
 type DistrictStore interface {
-	GetList(ctx context.Context, adCode string) ([]*v1.DistrictTree, error)
+	GetProvinces(ctx context.Context) ([]*v1.DistrictNode, error)
+	GetChildrenByParent(ctx context.Context, parentAdCode string) ([]*v1.DistrictNode, error)
 }

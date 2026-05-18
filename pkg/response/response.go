@@ -22,7 +22,7 @@ type R struct {
 
 // JSON 使用预定义的 errcode.ErrCode 发送统一 JSON 响应。
 func JSON(c *app.RequestContext, code errcode.ErrCode, data interface{}) {
-	c.JSON(httpStatus(code.Code), R{Code: code.Code, Message: code.Msg, Data: data})
+	c.JSON(HttpStatus(code.Code), R{Code: code.Code, Message: code.Msg, Data: data})
 }
 
 // OK 发送成功响应（code=0）。
@@ -31,8 +31,8 @@ func OK(c *app.RequestContext, data interface{}) {
 }
 
 // BizErr 使用解析后的 BizError 发送下游业务错误。
-// 使用 httpStatus() 将业务错误码映射到适当的 HTTP 状态码
-//（例如 10014 Unauthorized → 401, 10015 Forbidden → 403）。
+// 使用 HttpStatus() 将业务错误码映射到适当的 HTTP 状态码
+// （例如 10014 Unauthorized → 401, 10015 Forbidden → 403）。
 // P3-14: 在生产环境中，限制消息长度以防止泄漏内部细节。
 func BizErr(c *app.RequestContext, biz *errcode.BizError) {
 	msg := biz.Message
@@ -42,7 +42,7 @@ func BizErr(c *app.RequestContext, biz *errcode.BizError) {
 		logger.Warnf("biz error message truncated (code=%d, len=%d): %s", biz.Code, len(msg), msg)
 		msg = "internal error"
 	}
-	c.JSON(httpStatus(int(biz.Code)), R{Code: int(biz.Code), Message: msg})
+	c.JSON(HttpStatus(int(biz.Code)), R{Code: int(biz.Code), Message: msg})
 }
 
 // Fail 使用自定义 HTTP 状态码发送通用错误。
@@ -75,13 +75,14 @@ func InternalError(c *app.RequestContext) {
 	c.JSON(http.StatusInternalServerError, R{Code: int(errcode.CodeGwServer), Message: "internal server error"})
 }
 
-// httpStatus 将业务错误码映射到适当的 HTTP 状态码。
+// HttpStatus 将业务错误码映射到适当的 HTTP 状态码。
+// 导出版本供 proxy.handleRPCResponse 复用，消除重复映射逻辑。
 //   - 0          → 200 OK
 //   - 10014      → 401 Unauthorized（用户服务）
 //   - 10015      → 403 Forbidden（用户服务）
 //   - 10000-49999 → 400 Bad Request（其他业务错误）
 //   - 50000+     → 500 Internal Server Error（基础设施错误）
-func httpStatus(code int) int {
+func HttpStatus(code int) int {
 	if code == 0 {
 		return consts.StatusOK
 	}

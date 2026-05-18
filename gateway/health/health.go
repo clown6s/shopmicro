@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -15,7 +16,7 @@ import (
 // K8s livenessProbe 应使用此端点。
 func Handler() app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		c.JSON(200, map[string]interface{}{
+		c.JSON(http.StatusOK, map[string]interface{}{
 			"status": "ok",
 		})
 	}
@@ -57,14 +58,14 @@ func ReadyHandler(rdb *redis.Client, etcdClient *clientv3.Client) app.HandlerFun
 		}
 
 		if failed {
-			c.JSON(503, map[string]interface{}{
+			c.JSON(http.StatusServiceUnavailable, map[string]interface{}{
 				"status": "not_ready",
 			})
 			return
 		}
 
 		// 所有检查通过
-		c.JSON(200, map[string]interface{}{
+		c.JSON(http.StatusOK, map[string]interface{}{
 			"status": "ready",
 		})
 	}

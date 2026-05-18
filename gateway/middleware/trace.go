@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -42,12 +43,20 @@ func TraceIDMiddleware() app.HandlerFunc {
 // requestIDCounter 是一个原子计数器，用于降低碰撞概率。
 var requestIDCounter atomic.Uint64
 
+// P3-06: 复用 buffer 减少 GC 压力
+var requestIDBufPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 24)
+		return &buf
+	},
+}
+
 // generateRequestID 创建一个密码学质量的唯一请求 ID。
 // 格式: 时间戳(8 位十六进制) + 随机数(8 位十六进制) + 计数器(8 位十六进制) = 24 字符字符串。
 func generateRequestID() string {
 	const hexChars = "0123456789abcdef"
 
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 
 	// 从 crypto/rand 读取 8 字节（64 位密码学熵）
 	var rngBytes [8]byte
@@ -66,12 +75,16 @@ func generateRequestID() string {
 		r2,                       // 单调递增计数器
 	}
 
-	buf := make([]byte, 24)
+	// P3-06: 从 pool 获取 buffer，用完归还
+	bufPtr := requestIDBufPool.Get().(*[]byte)
+	buf := *bufPtr
 	for i := 2; i >= 0; i-- {
 		for j := 7; j >= 0; j-- {
 			buf[i*8+j] = hexChars[parts[i]&0xf]
 			parts[i] >>= 4
 		}
 	}
-	return string(buf)
+	result := string(buf)
+	requestIDBufPool.Put(bufPtr)
+	return result
 }

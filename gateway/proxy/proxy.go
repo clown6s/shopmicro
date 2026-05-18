@@ -24,7 +24,6 @@ import (
 	"github.com/cloudwego/kitex/pkg/generic"
 	"github.com/cloudwego/kitex/pkg/transmeta"
 	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
-	"github.com/sony/gobreaker"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -41,6 +40,12 @@ const (
 	// etcdRegistryPrefix 是 kitex registry-etcd 使用的键命名空间。
 	etcdRegistryPrefix = "kitex/registry-etcd"
 	tokenPrefix        = "shopmicro:user:token:"
+
+	// P3-07: query 参数最大数量，防止 URL 过长导致解析 DoS
+	maxQueryParams = 20
+
+	// P3-03: etcd 连接超时
+	etcdDialTimeout = 5 * time.Second
 )
 
 // ServiceClient 将 kitex 泛化客户端与其描述符绑定。
@@ -66,21 +71,9 @@ type Proxy struct {
 	// 如果某个方法未注册，则允许所有 HTTP 方法。
 	httpMethodMap map[string]map[string]bool
 
-	// perServiceCB 为每个服务存储一个熔断器。
-	perServiceCB sync.Map // map[string]*gobreaker.CircuitBreaker
-	cbSettings   *cbConfig
-
 	// epRateLimitFn 在代理处理器中检查按端点限流。
 	// 返回 true 表示允许，false 表示拒绝。nil = 不进行端点限流。
 	epRateLimitFn func(ctx context.Context, endpointKey, ip string) bool
-}
-
-// cbConfig 保存熔断器配置。
-type cbConfig struct {
-	maxRequests         uint32
-	interval            time.Duration
-	timeout             time.Duration
-	consecutiveFailures uint32
 }
 
 // Option 在构建时配置 Proxy。
@@ -103,20 +96,6 @@ func WithJWT(secret string, issuer string) Option {
 func WithRedis(rdb *redis.Client) Option {
 	return func(p *Proxy) {
 		p.rdb = rdb
-	}
-}
-
-// WithCircuitBreaker 为 RPC 调用启用按服务熔断。
-// 当某个服务的连续 RPC 失败过多时，后续调用会
-// 立即被快速拒绝（gobreaker.ErrOpenState），而非等待超时。
-func WithCircuitBreaker(maxRequests int, interval, timeout time.Duration, consecutiveFailures uint32) Option {
-	return func(p *Proxy) {
-		p.cbSettings = &cbConfig{
-			maxRequests:         uint32(maxRequests),
-			interval:            interval,
-			timeout:             timeout,
-			consecutiveFailures: consecutiveFailures,
-		}
 	}
 }
 
@@ -272,22 +251,6 @@ func (p *Proxy) getClient(service string) (*ServiceClient, bool) {
 	return c, ok
 }
 
-func (p *Proxy) getBreaker(service string) *gobreaker.CircuitBreaker {
-	if p.cbSettings == nil {
-		return nil
-	}
-	cbI, _ := p.perServiceCB.LoadOrStore(service, gobreaker.NewCircuitBreaker(gobreaker.Settings{
-		Name:        "gateway:" + service,
-		MaxRequests: p.cbSettings.maxRequests,
-		Interval:    p.cbSettings.interval,
-		Timeout:     p.cbSettings.timeout,
-		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			return counts.ConsecutiveFailures >= p.cbSettings.consecutiveFailures
-		},
-	}))
-	return cbI.(*gobreaker.CircuitBreaker)
-}
-
 // =========================
 // 调用 RPC
 // =========================
@@ -296,12 +259,6 @@ func (p *Proxy) getBreaker(service string) *gobreaker.CircuitBreaker {
 // req 必须是 JSON 编码的字符串（用于 JSONPbGeneric）。
 // method 必须是 CamelCase 的 protobuf RPC 名称（例如 "ListUser"，而非
 // gRPC 全路径 "api.user.v1.UserService/ListUser"）。
-//
-// Kitex 在内部（middlewares.go）处理连接级重试，
-// 因此这里不需要手动重试循环 —— 单次调用即可。
-//
-// 如果熔断器已启用（通过 WithCircuitBreaker）且该服务的
-// 熔断器已打开，立即返回 gobreaker.ErrOpenState。
 func (p *Proxy) Call(
 	ctx context.Context,
 	service string,
@@ -313,21 +270,7 @@ func (p *Proxy) Call(
 		return nil, fmt.Errorf("service not found: %s", service)
 	}
 
-	call := func() (interface{}, error) {
-		// JSONPbGeneric: WriteJSON.Write 调用 LookupMethodByName(method)，
-		// 期望的是 CamelCase 方法名，而非 gRPC 全路径。
-		// 直接使用 method；泛化客户端已知服务名。
-		return cli.Client.GenericCall(ctx, method, req)
-	}
-
-	cb := p.getBreaker(service)
-	if cb == nil {
-		return call()
-	}
-
-	return cb.Execute(func() (interface{}, error) {
-		return call()
-	})
+	return cli.Client.GenericCall(ctx, method, req)
 }
 
 // =========================
@@ -531,12 +474,32 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			}
 		}
 
+		// P3-03: 验证 POST/PUT 请求的 Content-Type 为 application/json
+		reqMethod := strings.ToUpper(string(c.Request.Method()))
+		if reqMethod == http.MethodPost || reqMethod == http.MethodPut {
+			ct := string(c.ContentType())
+			if ct != "" && !strings.HasPrefix(ct, "application/json") {
+				response.Fail(c, http.StatusUnsupportedMediaType, int(errcode.CodeGwParam), "content type must be application/json")
+				c.Abort()
+				return
+			}
+		}
+
 		// HTTP 方法校验 —— 限制每个 RPC 方法允许的 GET/POST/PUT/DELETE。
 		if methods, ok := p.httpMethodMap[service+"/"+method]; ok {
-			reqMethod := strings.ToUpper(string(c.Request.Method()))
 			if !methods[reqMethod] {
 				logger.Warnf("rejected request: http method not allowed (service=%s, method=%s, http=%s)", service, method, reqMethod)
 				response.Fail(c, http.StatusMethodNotAllowed, int(errcode.CodeGwParam), "method not allowed")
+				c.Abort()
+				return
+			}
+		}
+
+		// P3-07: 限制 query 参数数量防止 DoS
+		if queryString := c.Request.QueryString(); len(queryString) > 0 {
+			paramCount := strings.Count(string(queryString), "&") + 1
+			if paramCount > maxQueryParams {
+				response.Fail(c, http.StatusBadRequest, int(errcode.CodeGwParam), "too many query parameters")
 				c.Abort()
 				return
 			}
@@ -559,6 +522,17 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			return
 		}
 		ctx = authCtx
+
+		// Pre-gzip 缓存命中检查：跳过 RPC 调用，直接投递预压缩响应
+		if string(c.Request.Method()) == http.MethodGet {
+			ae := string(c.Request.Header.Peek("Accept-Encoding"))
+			if strings.Contains(ae, "gzip") {
+				if gzipped, ok := getPreGzip(preGzipCacheKey(service, method, c.Request.QueryString())); ok {
+					servePreGzip(c, gzipped)
+					return
+				}
+			}
+		}
 
 		// 将请求体传递给泛化客户端。
 		// GET 请求的参数通常在 query string 中，需要合并到 JSON body。
@@ -583,6 +557,14 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		}
 
 		resp, err := p.Call(ctx, service, method, body)
+
+		// Pre-gzip 缓存回填：成功 GET 响应预压缩后缓存，后续直接投递
+		if err == nil {
+			if p.tryPreGzipCache(c, service, method, resp) {
+				return
+			}
+		}
+
 		p.handleRPCResponse(c, service, method, resp, err)
 	}
 }
@@ -642,36 +624,36 @@ func (p *Proxy) authenticate(ctx context.Context, c *app.RequestContext, service
 // 处理熔断器错误、下游业务错误和包装的 JSON 响应。
 func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string, resp interface{}, err error) {
 	if err != nil {
-		// 熔断器已打开 —— 快速拒绝返回 503。
-		if errors.Is(err, gobreaker.ErrOpenState) {
-			response.ServiceUnavailable(c)
-			c.Abort()
-			return
-		}
 		// 尝试解析下游 BizError（支持 Kitex 远程错误包装格式）。
 		// 优先检查原始 err，再检查 unwrap 后的 err。
 		if biz, ok := errcode.ParseBizError(err); ok {
 			// 业务错误是客户端问题，不记 ERROR 日志
 			response.BizErr(c, biz)
+			c.Abort()
 			return
 		}
 		unwrapped := errors.Unwrap(err)
 		if unwrapped != nil {
 			if biz, ok := errcode.ParseBizError(unwrapped); ok {
 				response.BizErr(c, biz)
+				c.Abort()
 				return
 			}
 		}
 		// 请求体序列化错误 —— JSON 字段类型与 proto 定义不匹配。
 		// 这是客户端问题，返回 400 并提示检查请求参数。
-		// 同时重置熔断器计数，防止客户端传参错误累积触发熔断。
 		errMsg := err.Error()
+		if strings.Contains(errMsg, "service not found") {
+			logger.Warnf("service not found: service=%s method=%s", service, method)
+			response.Fail(c, http.StatusNotFound, int(errcode.CodeGwParam), "service not found")
+			c.Abort()
+			return
+		}
 		if strings.Contains(errMsg, "json convert to protobuf failed") ||
 			strings.Contains(errMsg, "marshal message failed") ||
 			strings.Contains(errMsg, "failed to unmarshal") ||
 			strings.Contains(errMsg, "cannot parse") {
 			logger.Warnf("request serialization failed: service=%s method=%s err=%v", service, method, err)
-			p.resetBreaker(service)
 			response.Fail(c, http.StatusBadRequest, int(errcode.CodeGwParam), "请求参数类型错误，请检查字段类型")
 			c.Abort()
 			return
@@ -679,6 +661,7 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 		// 内部/网络错误 —— 绝不暴露给客户端。
 		logger.Errorf("rpc call failed: service=%s method=%s err=%v", service, method, err)
 		response.Fail(c, http.StatusInternalServerError, int(errcode.CodeGwServer), "internal server error")
+		c.Abort()
 		return
 	}
 
@@ -687,50 +670,50 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 	if s, ok := resp.(string); ok && s != "" {
 		var m map[string]interface{}
 		if err := json.Unmarshal([]byte(s), &m); err != nil {
-			// 反序列化失败 —— 将原始字符串作为 data 返回
-			response.OK(c, s)
+			// P1-05: 反序列化失败不泄露原始内容，返回通用错误
+			logger.Warnf("rpc response unmarshal failed: service=%s method=%s err=%v", service, method, err)
+			response.Fail(c, http.StatusInternalServerError, int(errcode.CodeGwServer), "internal server error")
+			c.Abort()
 			return
 		}
 
 		// 通过 "code" 字段的存在检测包装响应
 		if codeRaw, hasCode := m["code"]; hasCode {
-			code, _ := codeRaw.(float64) // JSON 数字为 float64
+			// P0-02: 严格检查 code 类型，非 float64 视为异常
+			code, ok := codeRaw.(float64)
+			if !ok {
+				logger.Warnf("rpc response has non-numeric code: service=%s method=%s code=%v", service, method, codeRaw)
+				response.Fail(c, http.StatusInternalServerError, int(errcode.CodeGwServer), "internal server error")
+				c.Abort()
+				return
+			}
 
 			if int(code) != 0 {
-				// 错误响应 —— 使用正确的 HTTP 状态码传递
-				statusCode := http.StatusOK
-				switch int(code) {
-				case int(errcode.CodeUserUnauthorized):
-					statusCode = http.StatusUnauthorized
-				case int(errcode.CodeUserForbidden):
-					statusCode = http.StatusForbidden
-				default:
-					if int(code) < 50000 {
-						statusCode = http.StatusBadRequest
-					} else {
-						statusCode = http.StatusInternalServerError
-					}
-				}
 				msg, _ := m["message"].(string)
-				c.JSON(statusCode, response.R{
+				c.JSON(response.HttpStatus(int(code)), response.R{
 					Code:    int(code),
 					Message: msg,
 					Data:    m["data"],
 				})
+				c.Abort()
 				return
 			}
 
 			// Code == 0（成功包装）：提取 data 字段
 			response.OK(c, m["data"])
+			c.Abort()
 			return
 		}
 
 		// 原始 protobuf 响应 —— 将整个 body 包装为 "data"
 		response.OK(c, m)
+		c.Abort()
 		return
 	}
 
+	// 非 string 响应（理论上不会发生，JSONPbGeneric 始终返回 string）
 	response.OK(c, resp)
+	c.Abort()
 }
 
 // =========================
@@ -807,7 +790,7 @@ func (p *Proxy) retryRegister(ctx context.Context, serviceName, protoPath string
 func newEtcdClient(addrs []string) (*clientv3.Client, error) {
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   addrs,
-		DialTimeout: 5 * time.Second,
+		DialTimeout: etcdDialTimeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("connect to etcd %v: %w", addrs, err)
@@ -815,21 +798,8 @@ func newEtcdClient(addrs []string) (*clientv3.Client, error) {
 	return cli, nil
 }
 
-// GetCircuitBreakerStatus 返回所有熔断器状态的快照。
-// 适用于调试/服务状态端点。
-func (p *Proxy) GetCircuitBreakerStatus() map[string]string {
-	result := make(map[string]string)
-	p.perServiceCB.Range(func(key, value interface{}) bool {
-		cb := value.(*gobreaker.CircuitBreaker)
-		result[key.(string)] = cb.State().String()
-		return true
-	})
-	return result
-}
-
 // mergeQueryToJSON 将 URL query string 参数合并到 JSON body 中。
-// query 参数中的数字值会自动转为 JSON 数字类型，
-// 确保与 proto 的 int32/int64 字段匹配。
+// query 参数保持 string 类型，不做 int/bool 自动转换。
 func mergeQueryToJSON(body, queryString string) (string, error) {
 	var m map[string]interface{}
 	if err := json.Unmarshal([]byte(body), &m); err != nil {
@@ -863,19 +833,6 @@ func mergeQueryToJSON(body, queryString string) (string, error) {
 		return body, fmt.Errorf("marshal merged: %w", err)
 	}
 	return string(out), nil
-}
-
-// RemoveCircuitBreaker 移除指定服务的熔断器。
-// 在服务注销时调用以防止无限制的内存增长。
-func (p *Proxy) RemoveCircuitBreaker(service string) {
-	p.perServiceCB.Delete(service)
-}
-
-// resetBreaker 重置指定服务的熔断器状态。
-// 在检测到客户端请求错误（如序列化失败）时调用，
-// 防止客户端错误累积触发服务熔断。
-func (p *Proxy) resetBreaker(service string) {
-	p.perServiceCB.Delete(service)
 }
 
 // mergeQueryToJSONTyped 使用 proto 服务描述符做类型感知的 query→JSON 合并。

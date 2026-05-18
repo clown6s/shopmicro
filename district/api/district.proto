@@ -5,26 +5,32 @@ package api.district.v1;
 option go_package = "shopmicro/district/kitex_gen/api/district/v1";
 
 service DistrictService {
-    rpc GetProvinceTree (GetProvinceTreeReq) returns (GetProvinceTreeResp);
+    rpc GetProvinces (GetProvincesReq) returns (GetProvincesResp);
+    rpc GetChildren (GetChildrenReq) returns (GetChildrenResp);
 }
 
-message GetProvinceTreeReq {
-  string adCode = 1;
-  reserved 2 to 99;
+// GetProvinces —— 返回省级行政区列表（扁平，无 children）
+message GetProvincesReq {
 }
 
-message GetProvinceTreeResp {
-  repeated DistrictTree data = 3;
-  reserved 4 to 99;
+message GetProvincesResp {
+  repeated DistrictNode list = 1;
 }
 
-message DistrictTree {
+// GetChildren —— 返回指定行政区划的直接下级子节点
+message GetChildrenReq {
+  string parentAdCode = 1;
+}
+
+message GetChildrenResp {
+  repeated DistrictNode list = 1;
+}
+
+// DistrictNode —— 扁平节点，无 children 字段，用于懒加载接口
+message DistrictNode {
   int64 id = 1;
-  string parentAdCode = 2;
-  string adCode = 3;
-  string name = 4;
-  string level = 5;
-  string center = 6;
-  repeated DistrictTree children = 7;
-  reserved 8 to 99;
+  string adCode = 2;
+  string name = 3;
+  string level = 4;
+  string center = 5;
 }

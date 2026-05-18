@@ -20,7 +20,7 @@ var stackTracer func() string
 // 防止内部架构细节泄露到日志中。
 //
 // 使用 -tags prod 编译时，debug.Stack() 代码会被完全排除
-//（通过 recovery_debug.go 的构建标签）。运行模式检查作为
+// （通过 recovery_debug.go 的构建标签）。运行模式检查作为
 // 额外的纵深防御层。
 func RecoveryMiddleware(mode string) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
@@ -40,10 +40,9 @@ func RecoveryMiddleware(mode string) app.HandlerFunc {
 						err,
 					)
 				}
-				// P2-17 修复：先中止处理链，防止下游处理器
-				// 在错误响应已提交后继续写入。
-				c.Abort()
+				// 先写响应再中止处理链
 				response.InternalError(c)
+				c.Abort()
 			}
 		}()
 		c.Next(ctx)

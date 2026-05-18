@@ -56,10 +56,3 @@ rateLimit:
     user/Login:
       limit: 5            # 每分钟每IP最多5次登录尝试
       windowSec: 60
-
-# 熔断器配置
-circuitBreaker:
-  maxRequests: 5             # 半开状态最大探测请求数
-  intervalSec: 60            # 统计间隔（秒）
-  timeoutSec: 10             # 熔断恢复超时（秒）
-  consecutiveFailures: 5     # 连续失败触发熔断

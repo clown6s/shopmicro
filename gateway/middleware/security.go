@@ -12,9 +12,11 @@ func SecurityHeadersMiddleware(mode string) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-Frame-Options", "DENY")
-		c.Header("X-XSS-Protection", "1; mode=block")
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
-		c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+		c.Header("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+		// P0-03: 移除全局 no-store Cache-Control。
+		// GET 响应由 proxy 层按需设置（public, max-age=3600），
+		// preGzip 缓存命中时也不覆盖此头，避免安全策略与业务缓存冲突。
 
 		if mode == "prod" {
 			c.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")

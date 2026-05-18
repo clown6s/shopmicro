@@ -38,7 +38,7 @@ func AccessLogMiddleware() app.HandlerFunc {
 
 		// 跳过健康检查端点以减少日志噪音。
 		path := string(c.Path())
-		if path == "/health" || path == "/ready" {
+		if path == "/health" || path == "/ready" || path == "/metrics" {
 			c.Next(ctx)
 			return
 		}
@@ -57,12 +57,18 @@ func AccessLogMiddleware() app.HandlerFunc {
 		}
 
 		// R4-SEC-03: IP 脱敏以满足隐私合规要求 (GDPR)
+		userAgent := string(c.Request.Header.Peek("User-Agent"))
+		if len(userAgent) > 128 {
+			userAgent = userAgent[:128]
+		}
 		logger.C().Desugar().Info("[ACCESS]",
 			zap.String("method", string(c.Method())),
 			zap.String("path", string(c.Path())),
 			zap.Int("status", c.Response.StatusCode()),
 			zap.String("latency", latency.String()),
 			zap.String("ip", maskIP(ClientRealIP(c))),
+			zap.String("user_id", c.GetString("user_id")),
+			zap.String("user_agent", userAgent),
 			zap.String("trace_id", traceID),
 		)
 	}

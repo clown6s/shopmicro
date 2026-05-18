@@ -1,8 +1,11 @@
 package routes
 
 import (
+	"context"
+	"net"
 	"net/http"
 
+	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -10,6 +13,53 @@ import (
 	"shopmicro/gateway/proxy"
 	pkgredis "shopmicro/pkg/redis"
 )
+
+// privateRanges 内网地址段，包级别初始化一次
+var privateRanges = []struct {
+	network *net.IPNet
+}{
+	{mustParseCIDR("10.0.0.0/8")},
+	{mustParseCIDR("172.16.0.0/12")},
+	{mustParseCIDR("192.168.0.0/16")},
+	{mustParseCIDR("127.0.0.0/8")},
+	{mustParseCIDR("::1/128")},
+}
+
+// isPrivateIP 判断 IP 是否属于内网地址（RFC 1918 + 环回地址）
+func isPrivateIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, r := range privateRanges {
+		if r.network.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
+func mustParseCIDR(s string) *net.IPNet {
+	_, network, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
+	return network
+}
+
+// P1-03: metricsHandler 包装 health.MetricsHandler，限制仅内网访问
+func metricsHandler() app.HandlerFunc {
+	inner := health.MetricsHandler()
+	return func(ctx context.Context, c *app.RequestContext) {
+		clientIP := c.ClientIP()
+		if !isPrivateIP(clientIP) {
+			c.String(http.StatusForbidden, "forbidden")
+			c.Abort()
+			return
+		}
+		inner(ctx, c)
+	}
+}
 
 // ProxyOptions 返回所有代理层的路由相关配置选项，
 // 包括：公开方法白名单、RPC 方法白名单、HTTP 方法映射。
@@ -22,7 +72,8 @@ func ProxyOptions() []proxy.Option {
 			"RefreshToken",
 		),
 		proxy.WithPublicMethods("district",
-			"GetProvinceTree",
+			"GetProvinces",
+			"GetChildren",
 		),
 
 		// RPC 方法白名单
@@ -36,7 +87,8 @@ func ProxyOptions() []proxy.Option {
 			"ListUser",
 		),
 		proxy.WithAllowedMethods("district",
-			"GetProvinceTree",
+			"GetProvinces",
+			"GetChildren",
 		),
 
 		// HTTP 方法映射 —— 限制每个 RPC 方法允许的 HTTP 请求方法
@@ -47,7 +99,8 @@ func ProxyOptions() []proxy.Option {
 		proxy.WithHTTPMethod("user", "UpdateUser", http.MethodPut),
 		proxy.WithHTTPMethod("user", "DeleteUser", http.MethodDelete),
 		proxy.WithHTTPMethod("user", "ListUser", http.MethodGet),
-		proxy.WithHTTPMethod("district", "GetProvinceTree", http.MethodGet),
+		proxy.WithHTTPMethod("district", "GetProvinces", http.MethodGet),
+		proxy.WithHTTPMethod("district", "GetChildren", http.MethodGet),
 	}
 }
 
@@ -61,6 +114,9 @@ func Register(
 	// 健康检查端点
 	h.GET("/health", health.Handler())
 	h.GET("/ready", health.ReadyHandler(rdb, etcdClient))
+
+	// P2-02: Prometheus 格式的运行时指标端点（P1-03: 限制内网访问）
+	h.GET("/metrics", metricsHandler())
 
 	// 业务路由 — HTTP 方法校验在 proxy.Handler() 内完成
 	api := h.Group("/api/v1")

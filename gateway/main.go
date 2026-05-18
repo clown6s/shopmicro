@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
+
+	"github.com/hertz-contrib/gzip"
 
 	hertztracing "github.com/hertz-contrib/obs-opentelemetry/tracing"
 
@@ -69,7 +72,11 @@ func Run(configPath string) error {
 	// otel 链路追踪
 	// =========================
 
-	// P0-01 修复：使用配置文件中的 OTEL endpoint
+	// P2-03: 将配置文件中的采样率通过环境变量传递给 otel 初始化
+	if cfg.OTEL.SampleRate > 0 {
+		os.Setenv("OTEL_TRACE_SAMPLE_RATE", strconv.FormatFloat(cfg.OTEL.SampleRate, 'f', -1, 64))
+	}
+
 	shutdownTracer := otel.InitTracerWithEndpoint(
 		"shopmicro-gateway",
 		cfg.Mode,
@@ -144,6 +151,7 @@ func Run(configPath string) error {
 		AllowCredentials: cfg.CORS.AllowCredentials,
 	}, cfg.Mode))
 	h.Use(middleware.SecurityHeadersMiddleware(cfg.Mode)) // HSTS、CSP、X-Frame-Options 等
+	h.Use(gzip.Gzip(gzip.DefaultCompression))             // gzip 压缩，减少大响应传输量
 	h.Use(middleware.AccessLogMiddleware())               // 访问日志
 	h.Use(middleware.TraceIDMiddleware())                 // trace-id 响应头
 	h.Use(middleware.RealIPMiddleware())                  // X-Forwarded-For 信任链 → _real_ip
@@ -156,21 +164,10 @@ func Run(configPath string) error {
 	// 代理
 	// =========================
 
-	cbInterval, cbTimeout := cfg.CircuitBreakerDurations()
-
 	// 构建代理选项
 	opts := []proxy.Option{
 		proxy.WithJWT(cfg.JWT.Secret, cfg.JWT.Issuer),
 		proxy.WithRedis(rdb),
-
-		// 熔断器包装 proxy.Call() 内部的 RPC 调用，
-		// 而非 HTTP 处理器 —— 消除了双重响应 bug。
-		proxy.WithCircuitBreaker(
-			cfg.CircuitBreaker.MaxRequests,
-			cbInterval,
-			cbTimeout,
-			uint32(cfg.CircuitBreaker.ConsecutiveFailures),
-		),
 
 		// 按端点限流在代理处理器中执行（与方法无关）。
 		// 防止通过 GET 请求绕过 Login 的严格限流。
