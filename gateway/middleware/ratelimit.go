@@ -81,10 +81,10 @@ func NewRedisRateLimiter(rdb *redis.Client, limit int, window time.Duration) *Re
 
 // SetEndpointLimit 设置按端点的限流覆盖配置。
 // endpointKey 格式: "service/method"（例如 "user/Login"）
-func (rl *RedisRateLimiter) SetEndpointLimit(endpointKey string, limit int, windowS int) {
+func (rl *RedisRateLimiter) SetEndpointLimit(endpointKey string, limit int, windowSec int) {
 	w := rl.window
-	if windowS > 0 {
-		w = time.Duration(windowS) * time.Second
+	if windowSec > 0 {
+		w = time.Duration(windowSec) * time.Second
 	}
 	rl.mu.Lock()
 	rl.endpointOverrides[endpointKey] = &endpointLimit{limit: limit, window: w}
@@ -92,6 +92,7 @@ func (rl *RedisRateLimiter) SetEndpointLimit(endpointKey string, limit int, wind
 }
 
 // GetEndpointLimit 返回按端点的限流配置（如果已配置）。
+// 返回值拷贝而非指针，避免并发读写 map 中的共享结构体。
 func (rl *RedisRateLimiter) GetEndpointLimit(endpointKey string) *endpointLimit {
 	rl.mu.RLock()
 	el, ok := rl.endpointOverrides[endpointKey]
@@ -99,7 +100,8 @@ func (rl *RedisRateLimiter) GetEndpointLimit(endpointKey string) *endpointLimit 
 	if !ok {
 		return nil
 	}
-	return el
+	cp := *el
+	return &cp
 }
 
 // NewEndpointCheckFn 返回一个兼容 proxy.WithEndpointRateLimit 的函数。

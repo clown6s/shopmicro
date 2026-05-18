@@ -13,7 +13,8 @@ func SecurityHeadersMiddleware(mode string) app.HandlerFunc {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-Frame-Options", "DENY")
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
-		c.Header("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+		// 注意：不设置 Content-Security-Policy —— gateway 仅返回 JSON，
+		// CSP 只对 HTML 有意义，设置反而增加无用的响应头开销。
 		// P0-03: 移除全局 no-store Cache-Control。
 		// GET 响应由 proxy 层按需设置（public, max-age=3600），
 		// preGzip 缓存命中时也不覆盖此头，避免安全策略与业务缓存冲突。

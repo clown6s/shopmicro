@@ -7,6 +7,7 @@ import (
 
 // Config 保存 MySQL 连接配置。
 // 该结构体设计为嵌入到服务级别的 Config 结构体中。
+// 注意：DSN 字段包含明文密码，String() 方法已脱敏处理。
 type Config struct {
 	DSN string `yaml:"dsn"`
 	// 连接池参数（零值将回退到合理的默认值）
@@ -16,8 +17,20 @@ type Config struct {
 	ConnMaxIdleTime int `yaml:"connMaxIdleTimeSec"`
 }
 
+// String 返回脱敏后的 DSN（密码替换为 ***），防止日志泄漏。
+func (c Config) String() string {
+	dsn := c.DSN
+	// 脱敏: user:password@ → user:***@
+	if atIdx := strings.LastIndex(dsn, "@"); atIdx > 0 {
+		if colonIdx := strings.Index(dsn[:atIdx], ":"); colonIdx >= 0 {
+			dsn = dsn[:colonIdx+1] + "***" + dsn[atIdx:]
+		}
+	}
+	return dsn
+}
+
 // hasDSNParam 检查是否存在带有正确边界感知的参数
-//（例如 "?parseTime=" 或 "&parseTime="）以避免因
+// （例如 "?parseTime=" 或 "&parseTime="）以避免因
 // 密码或值包含参数名作为子串而产生误判。
 func hasDSNParam(dsn, param string) bool {
 	return strings.Contains(dsn, "?"+param+"=") || strings.Contains(dsn, "&"+param+"=")
@@ -47,9 +60,10 @@ func (c *Config) Validate() error {
 	}
 
 	// 确保存在超时参数以保障生产环境安全。
+	// 默认 10s：在重查询和网络延迟下提供合理余量。
 	for _, p := range []string{"readTimeout", "writeTimeout", "timeout"} {
 		if !hasDSNParam(c.DSN, p) {
-			c.DSN += sep + p + "=5s"
+			c.DSN += sep + p + "=10s"
 			sep = "&"
 		}
 	}

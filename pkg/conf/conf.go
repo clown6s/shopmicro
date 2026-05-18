@@ -1,6 +1,7 @@
 package conf
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -28,6 +29,13 @@ type Base struct {
 // Load 加载配置文件，然后从 .env 文件覆盖敏感字段
 // 优先级: 环境变量 > .env 文件 > config.yaml
 func Load(path string, cfg interface{}) error {
+	if path == "" {
+		return fmt.Errorf("conf: config path is required")
+	}
+	if cfg == nil {
+		return fmt.Errorf("conf: cfg must not be nil")
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -36,17 +44,12 @@ func Load(path string, cfg interface{}) error {
 		return err
 	}
 
-	// M1 修复：记录 .env 加载错误，而不是静默忽略。
-	// 文件不存在是预期行为（没有 .env 也可以），但解析错误需要关注。
+	// .env 加载是可选的：文件不存在不报错，但解析失败记 warn
 	if err := godotenv.Load(); err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("[conf] failed to load .env from working directory: %v", err)
-		}
+		log.Printf("[conf] .env not found in working directory (non-fatal)")
 	}
 	if err := godotenv.Load(filepath.Join(filepath.Dir(path), ".env")); err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("[conf] failed to load .env from config dir: %v", err)
-		}
+		log.Printf("[conf] .env not found in config directory (non-fatal)")
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
@@ -9,8 +10,9 @@ import (
 )
 
 var (
-	L    *zap.SugaredLogger
-	once sync.Once
+	L           *zap.SugaredLogger
+	once        sync.Once
+	initialized bool
 )
 
 // P3-11: 用于检测日志数据中敏感信息的模式。
@@ -47,8 +49,15 @@ func Safe(fieldName, val string) string {
 }
 
 func Init(mode string) error {
+	if initialized {
+		// sync.Once 保证只执行一次，重复调用被静默忽略。
+		// 此警告用于帮助开发者发现意外多次初始化的问题。
+		fmt.Fprintf(zap.NewStdLog(zap.NewNop()).Writer(), "[WARN] logger.Init called more than once (mode=%s), ignoring\n", mode)
+		return nil
+	}
 	var initErr error
 	once.Do(func() {
+		initialized = true
 		var cfg zap.Config
 		if strings.ToLower(mode) == "dev" {
 			cfg = zap.NewDevelopmentConfig()

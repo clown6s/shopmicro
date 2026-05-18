@@ -17,6 +17,11 @@ import (
 //
 // P1-03: OTEL SpanOptions 集中在此处管理以防止 SQL 信息泄漏。
 func New(cfg Config) (*sql.DB, func(), error) {
+	// 先校验配置，提供清晰的错误信息
+	if err := cfg.Validate(); err != nil {
+		return nil, nil, err
+	}
+
 	// P1-03 修复：禁用 SQL 追踪以防止数据泄漏
 	spanOpts := otelsql.SpanOptions{
 		OmitConnQuery:        true, // P1-03: 省略 sql.conn.query span
@@ -43,11 +48,14 @@ func New(cfg Config) (*sql.DB, func(), error) {
 	db.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
 	db.SetConnMaxIdleTime(time.Duration(cfg.ConnMaxIdleTime) * time.Second)
 
-	// Ping MySQL 以验证连接
-	if err := db.PingContext(context.Background()); err != nil {
+	// Ping MySQL 以验证连接（带 10s 超时防止阻塞）
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := db.PingContext(pingCtx); err != nil {
+		pingCancel()
 		_ = db.Close()
 		return nil, nil, err
 	}
+	pingCancel()
 
 	cleanup := func() { _ = db.Close() }
 	return db, cleanup, nil

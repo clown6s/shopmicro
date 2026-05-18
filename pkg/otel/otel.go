@@ -37,10 +37,10 @@ func InitTracerWithEndpoint(serviceName, mode, defaultEndpoint string) func(cont
 // 返回一个关闭函数，必须在优雅关闭期间调用。
 //
 // P0-02 修复：endpoint 现在可通过 OTEL_EXPORTER_OTLP_ENDPOINT 环境变量配置
-//（回退到 "localhost:4317"）。初始化错误会被返回而不是 panic。
+// （回退到 "localhost:4317"）。初始化错误会被返回而不是 panic。
 //
 // P0-11 修复：采样率可通过 OTEL_TRACE_SAMPLE_RATE 环境变量配置
-//（0.0–1.0，非 dev 模式默认 0.1）。使用 "1.0" 或 mode="dev" 进行全量采样。
+// （0.0–1.0，非 dev 模式默认 0.1）。使用 "1.0" 或 mode="dev" 进行全量采样。
 func InitTracer(serviceName, mode string) func(context.Context) error {
 	return InitTracerWithEndpoint(serviceName, mode, "localhost:4317")
 }
@@ -69,11 +69,14 @@ func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(cont
 		// 真正的配置错误。以适当的级别记录日志并给出指引。
 		if mode == "dev" {
 			logger.Infof("otel: exporter unavailable in dev mode (endpoint=%s), tracing disabled: %v", endpoint, err)
-		} else {
-			logger.Warnf("otel: failed to create exporter (endpoint=%s, tracing disabled). "+
-				"Verify OTEL_EXPORTER_OTLP_ENDPOINT is reachable: %v", endpoint, err)
+			return func(ctx context.Context) error { return nil }
 		}
-		return func(ctx context.Context) error { return nil }
+		// 生产/预发环境：OTLP 不可达是一个严重问题。
+		// 返回一个 noop shutdown func，使调用方的 defer 安全执行。
+		// 调用方应检查返回值是否为 nil 来判断初始化是否成功。
+		logger.Errorf("otel: failed to create exporter (endpoint=%s), tracing DISABLED. "+
+			"Verify OTEL_EXPORTER_OTLP_ENDPOINT is reachable: %v", endpoint, err)
+		return nil
 	}
 
 	// 可配置的采样率

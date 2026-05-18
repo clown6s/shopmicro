@@ -3,6 +3,7 @@ package data
 import (
 	"database/sql"
 
+	"shopmicro/pkg/logger"
 	"shopmicro/pkg/mysql"
 	"shopmicro/pkg/redis"
 )
@@ -29,8 +30,14 @@ func New(cfg mysql.Config, redisCfg redis.Config) (*Data, func(), error) {
 	}
 
 	cleanup := func() {
+		// panic-safe：确保 DB 和 Redis 都能被清理
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("db cleanup panic during shutdown (recovered): %v", r)
+			}
+			redisCleanup()
+		}()
 		dbCleanup()
-		redisCleanup()
 	}
 
 	d := &Data{

@@ -41,7 +41,7 @@ RUN cd gateway && go build -o /gateway-bin .
 # ============================================================
 FROM alpine:3.19
 
-RUN apk --no-cache add ca-certificates tzdata
+RUN apk --no-cache add ca-certificates tzdata curl
 
 WORKDIR /app
 
@@ -60,9 +60,9 @@ COPY --from=builder /proto-out /app/service-protos
 
 EXPOSE 8080
 
-# P3-05: 容器健康检查
+# R5-P3-04: 使用 curl 替代 wget（Alpine busybox wget 未来版本可能移除）
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -qO- http://localhost:8080/health || exit 1
+  CMD curl -sf http://localhost:8080/health || exit 1
 
 # protoBase 在容器内应指向 /app/service-protos/
 # 通过环境变量覆盖 config.yaml 中的 protoBase（无需重新构建镜像）

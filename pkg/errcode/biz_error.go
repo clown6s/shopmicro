@@ -41,8 +41,24 @@ func ParseBizError(err error) (*BizError, bool) {
 		return biz, true
 	}
 	msg := err.Error()
-	// 优先匹配消息起始位置的 BIZ/ 前缀
-	if idx := strings.Index(msg, bizPrefix); idx != -1 {
+	// 优先匹配消息起始位置的 BIZ/ 前缀（精确匹配）
+	if strings.HasPrefix(msg, bizPrefix) {
+		content := msg[len(bizPrefix):]
+		colon := strings.Index(content, ":")
+		if colon == -1 {
+			return nil, false
+		}
+		code, err2 := strconv.ParseUint(content[:colon], 10, 32)
+		if err2 != nil {
+			return nil, false
+		}
+		message := strings.TrimSpace(content[colon+1:])
+		return &BizError{Code: uint32(code), Message: message}, true
+	}
+	// 回退：Kitex 远程错误包裹格式
+	// "remote or network error[remote]: biz error: BIZ/xxx: ..."
+	// 此时 BIZ/ 不在消息开头，使用子串搜索
+	if idx := strings.Index(msg, bizPrefix); idx > 0 {
 		content := msg[idx+len(bizPrefix):]
 		colon := strings.Index(content, ":")
 		if colon == -1 {

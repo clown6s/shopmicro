@@ -37,9 +37,10 @@ func (c *Config) ApplyEnv() {
 			c.Vault.Token = token
 		}
 		if c.Vault.Token == "" {
-			logger.Warnf("vault address is set but VAULT_TOKEN env var is missing — vault init will fail")
+			logger.Warnf("vault address is set but VAULT_TOKEN env var is missing — skipping vault init")
+		} else {
+			secrets.InitProvider(c.Vault)
 		}
-		secrets.InitProvider(c.Vault)
 	}
 
 	if v := conf.Env("MYSQL_DSN", ""); v != "" {
@@ -63,6 +64,12 @@ func (c *Config) ApplyEnv() {
 func (c *Config) Validate() error {
 	if err := c.MySQL.Validate(); err != nil {
 		return err
+	}
+	if c.Redis.Addr == "" {
+		return fmt.Errorf("redis address is required, set REDIS_ADDR env or config.yaml")
+	}
+	if err := c.Redis.Validate(); err != nil {
+		return fmt.Errorf("redis config invalid: %w", err)
 	}
 
 	mode := strings.ToLower(c.Mode)

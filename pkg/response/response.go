@@ -36,13 +36,21 @@ func OK(c *app.RequestContext, data interface{}) {
 // P3-14: 在生产环境中，限制消息长度以防止泄漏内部细节。
 func BizErr(c *app.RequestContext, biz *errcode.BizError) {
 	msg := biz.Message
+	truncated := false
 	// P3-14: 截断过长的消息 — 内部错误通常包含
 	// 不应传递给客户端的堆栈跟踪或 SQL 详情
 	if len(msg) > 128 {
 		logger.Warnf("biz error message truncated (code=%d, len=%d): %s", biz.Code, len(msg), msg)
 		msg = "internal error"
+		truncated = true
 	}
-	c.JSON(HttpStatus(int(biz.Code)), R{Code: int(biz.Code), Message: msg})
+	httpCode := HttpStatus(int(biz.Code))
+	// 消息被截断为 "internal error" 时，强制使用 HTTP 500 避免语义矛盾
+	// （400 暗示客户端错误，但实际是内部错误被截断）
+	if truncated && httpCode < 500 {
+		httpCode = consts.StatusInternalServerError
+	}
+	c.JSON(httpCode, R{Code: int(biz.Code), Message: msg})
 }
 
 // Fail 使用自定义 HTTP 状态码发送通用错误。
@@ -91,6 +99,8 @@ func HttpStatus(code int) int {
 		return consts.StatusUnauthorized
 	case int(errcode.CodeUserForbidden):
 		return consts.StatusForbidden
+	case int(errcode.CodeUserInternal):
+		return consts.StatusInternalServerError
 	}
 	if code < 50000 {
 		return consts.StatusBadRequest

@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -20,6 +21,19 @@ type Config struct {
 	PoolTimeoutSec int `yaml:"poolTimeoutSec"`
 	ConnMaxLifeSec int `yaml:"connMaxLifetimeSec"`
 	ConnMaxIdleSec int `yaml:"connMaxIdleTimeSec"`
+}
+
+func (c *Config) Validate() error {
+	if c.Addr == "" {
+		return fmt.Errorf("redis addr is required")
+	}
+	if c.PoolSize < 0 {
+		return fmt.Errorf("redis poolSize must be non-negative, got %d", c.PoolSize)
+	}
+	if c.MinIdleConns < 0 {
+		return fmt.Errorf("redis minIdleConns must be non-negative, got %d", c.MinIdleConns)
+	}
+	return nil
 }
 
 func (c *Config) setDefaults() {
@@ -78,7 +92,7 @@ func New(cfg Config) (*Client, func(), error) {
 
 // RawClient 返回底层的 *redis.Client。
 // 当需要访问完整的 go-redis API 时使用
-//（例如 Client 未封装的自定义命令）。
+// （例如 Client 未封装的自定义命令）。
 func (c *Client) RawClient() *redis.Client {
 	return c.rdb
 }
@@ -127,7 +141,7 @@ func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) erro
 // SAddExpire 原子地向 SET 添加成员并设置其 TTL。
 // 使用 Redis TxPipeline (MULTI/EXEC) 使两条命令原子执行，
 // 防止 SAdd 和 Expire 之间服务器崩溃导致 SET 没有 TTL 的竞态条件
-//（token 将永不过期）。
+// （token 将永不过期）。
 func (c *Client) SAddExpire(ctx context.Context, key string, ttl time.Duration, members ...interface{}) error {
 	pipe := c.rdb.TxPipeline()
 	pipe.SAdd(ctx, key, members...)
@@ -171,10 +185,14 @@ func (sc *Script) Run(ctx context.Context, c *Client, keys []string, args ...int
 
 // RunScript 通过源码字符串原子执行 Lua 脚本。
 // 使用 sync.Map 缓存 Script 对象，避免重复创建。
+// 注意：此缓存仅用于硬编码的常量 Lua 脚本（如限流、令牌轮换等），
+// 不应用于动态用户输入。缓存永不清理，因为脚本数量是固定的。
 func (c *Client) RunScript(ctx context.Context, src string, keys []string, args ...interface{}) (interface{}, error) {
 	scriptI, _ := scriptCache.LoadOrStore(src, redis.NewScript(src))
 	script := scriptI.(*redis.Script)
 	return script.Run(ctx, c.rdb, keys, args...).Result()
 }
 
+// scriptCache 缓存硬编码的常量 Lua 脚本对象。
+// 仅用于 RunScript 方法中固定的脚本字符串，不用于动态脚本。
 var scriptCache sync.Map

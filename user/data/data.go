@@ -29,8 +29,9 @@ func New(cfg mysql.Config, redisCfg redis.Config) (*Data, func(), error) {
 	}
 
 	cleanup := func() {
-		dbCleanup()
+		// 先关闭 Redis：关闭期间可能需要 Redis 撤销 token
 		redisCleanup()
+		dbCleanup()
 	}
 
 	d := &Data{

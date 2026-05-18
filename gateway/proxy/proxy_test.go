@@ -6,16 +6,17 @@ import (
 )
 
 func TestBearerToken_Valid(t *testing.T) {
-	token, ok := bearerToken("Bearer abc123")
-	if !ok || token != "abc123" {
-		t.Fatalf("expected (abc123, true), got (%q, %v)", token, ok)
+	// R5-P1-05: JWT 必须包含两个点（三段 base64url）
+	token, ok := bearerToken("Bearer eyJhbG.eyJzdG.SflKx")
+	if !ok || token != "eyJhbG.eyJzdG.SflKx" {
+		t.Fatalf("expected (eyJhbG.eyJzdG.SflKx, true), got (%q, %v)", token, ok)
 	}
 }
 
 func TestBearerToken_ValidLowerCase(t *testing.T) {
-	token, ok := bearerToken("bearer abc123")
-	if !ok || token != "abc123" {
-		t.Fatalf("expected (abc123, true), got (%q, %v)", token, ok)
+	token, ok := bearerToken("bearer eyJhbG.eyJzdG.SflKx")
+	if !ok || token != "eyJhbG.eyJzdG.SflKx" {
+		t.Fatalf("expected (eyJhbG.eyJzdG.SflKx, true), got (%q, %v)", token, ok)
 	}
 }
 
@@ -27,7 +28,7 @@ func TestBearerToken_Empty(t *testing.T) {
 }
 
 func TestBearerToken_NoBearer(t *testing.T) {
-	_, ok := bearerToken("Token abc123")
+	_, ok := bearerToken("Token eyJhbG.eyJzdG.SflKx")
 	if ok {
 		t.Fatal("non-Bearer scheme should fail")
 	}
@@ -47,10 +48,26 @@ func TestBearerToken_MultipleParts(t *testing.T) {
 	}
 }
 
+func TestBearerToken_InvalidFormat(t *testing.T) {
+	// R5-P1-05: 不含两个点的字符串应被拒绝
+	_, ok := bearerToken("Bearer nodots")
+	if ok {
+		t.Fatal("token without dots should fail")
+	}
+	_, ok = bearerToken("Bearer one.dot")
+	if ok {
+		t.Fatal("token with one dot should fail")
+	}
+	_, ok = bearerToken("Bearer a.b.c.d")
+	if ok {
+		t.Fatal("token with three dots should fail")
+	}
+}
+
 func TestBearerToken_Whitespace(t *testing.T) {
-	token, ok := bearerToken("  Bearer abc123  ")
-	if !ok || token != "abc123" {
-		t.Fatalf("expected (abc123, true), got (%q, %v)", token, ok)
+	token, ok := bearerToken("  Bearer eyJhbG.eyJzdG.SflKx  ")
+	if !ok || token != "eyJhbG.eyJzdG.SflKx" {
+		t.Fatalf("expected (eyJhbG.eyJzdG.SflKx, true), got (%q, %v)", token, ok)
 	}
 }
 

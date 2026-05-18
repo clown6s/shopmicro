@@ -32,6 +32,7 @@ import (
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/otel"
 	"shopmicro/pkg/redis"
+	"shopmicro/pkg/secrets"
 )
 
 func Run(configPath string) error {
@@ -82,6 +83,9 @@ func Run(configPath string) error {
 		cfg.Mode,
 		cfg.OTEL.Endpoint,
 	)
+	if shutdownTracer == nil {
+		return fmt.Errorf("otel init failed — see logs above for details")
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -215,6 +219,9 @@ func Run(configPath string) error {
 		// P2-05: 取消 watchCtx 以便 WatchServices 协程及时退出。
 		watchCancel()
 
+		// 关闭 Vault provider（清理 HTTP 空闲连接）
+		secrets.CloseProvider()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -252,12 +259,12 @@ func Run(configPath string) error {
 
 // setupRateLimiter 根据配置初始化限流器（含 per-endpoint 覆盖）。
 func setupRateLimiter(rdb *redis.Client, cfg conf.Config) *middleware.RedisRateLimiter {
-	rlWindow := time.Duration(cfg.RateLimit.WindowS) * time.Second
+	rlWindow := time.Duration(cfg.RateLimit.WindowSec) * time.Second
 	rl := middleware.NewRedisRateLimiter(rdb, cfg.RateLimit.Limit, rlWindow)
 
 	// P1-15: 为敏感操作配置按端点限流
 	for epKey, epCfg := range cfg.RateLimit.Endpoints {
-		rl.SetEndpointLimit(epKey, epCfg.Limit, epCfg.WindowS)
+		rl.SetEndpointLimit(epKey, epCfg.Limit, epCfg.WindowSec)
 	}
 
 	return rl

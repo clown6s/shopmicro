@@ -2,8 +2,10 @@ package handler
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
@@ -16,6 +18,25 @@ import (
 	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/logger"
 )
+
+// timingDummyHash 是用于时序攻击缓解的随机 bcrypt 哈希。
+// 在包初始化时生成，确保每次启动使用不同的哈希值，
+// 防止攻击者通过固定哈希的确定性计时签名推断手机号是否存在。
+var timingDummyHash []byte
+
+func init() {
+	// 生成随机 32 字节作为 dummy 密码，使 bcrypt 比较时间与真实哈希一致
+	dummyPwd := make([]byte, 32)
+	if _, err := rand.Read(dummyPwd); err != nil {
+		// crypto/rand 失败是致命错误（意味着 OS CSPRNG 不可用）
+		panic("crypto/rand read failed: " + err.Error())
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(base64.StdEncoding.EncodeToString(dummyPwd)), 12)
+	if err != nil {
+		panic("bcrypt generate timing dummy failed: " + err.Error())
+	}
+	timingDummyHash = hash
+}
 
 // RegisterUser 处理用户注册（手机号 + 密码）。
 func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUserReq) (*v1.RegisterUserResp, error) {
@@ -32,7 +53,7 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 
 	// P2-06：按手机号限制注册频率
 	rateKey := registerRateLimitKey + req.GetPhone()
-	limited, err := s.rdb.RunScript(ctx, registerRateLimitScript, []string{rateKey}, registerRateLimitMax, registerRateLimitWindowSec)
+	limited, err := s.rdb.RunScript(ctx, rateLimitScript, []string{rateKey}, registerRateLimitMax, registerRateLimitWindowSec)
 	if err != nil {
 		logger.Warnf("register: rate limit check failed (phone=%s): %v", maskPhone(req.GetPhone()), err)
 		return nil, errRegisterTooMany
@@ -84,13 +105,12 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 
 	if err := s.userDal.Create(ctx, user); err != nil {
 		if isDuplicateKeyError(err) {
+			// 返回通用的"手机号已存在"错误，不泄露登录失败计数器信息
 			return nil, errPhoneExists
 		}
 		logger.Errorf("create user failed: %v", err)
 		return nil, errInternal
 	}
-
-	s.clearLoginFailures(ctx, req.GetPhone())
 
 	return &v1.RegisterUserResp{}, nil
 }
@@ -104,7 +124,10 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 		return nil, errPasswordRequired
 	}
 	if !phoneRegex.MatchString(req.GetPhone()) {
-		_ = bcrypt.CompareHashAndPassword([]byte("$2a$12$000000000000000000000000000000000000000000000000000000"), []byte(req.GetPassword()))
+		// Timing attack mitigation: 对无效手机号也执行一次 bcrypt 比较，
+		// 使其响应时间与"手机号不存在"的情况一致，防止通过响应时间差异
+		// 推断手机号是否存在于数据库中。
+		_ = bcrypt.CompareHashAndPassword(timingDummyHash, []byte(req.GetPassword()))
 		return nil, errPhonePwdWrong
 	}
 
@@ -115,7 +138,9 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 	user, err := s.userDal.GetByPhone(ctx, req.GetPhone())
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			_ = bcrypt.CompareHashAndPassword([]byte("$2a$12$000000000000000000000000000000000000000000000000000000"), []byte(req.GetPassword()))
+			// Timing attack mitigation: 手机号不存在时也执行 bcrypt，
+			// 使其响应时间与"密码错误"的情况一致。
+			_ = bcrypt.CompareHashAndPassword(timingDummyHash, []byte(req.GetPassword()))
 			logger.Warnf("login failed: phone not found (%s)", maskPhone(req.GetPhone()))
 			s.recordLoginFailure(ctx, req.GetPhone())
 			return nil, errPhonePwdWrong
@@ -155,7 +180,9 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 	rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, refreshToken)
 	rtTTL := time.Duration(s.rtExpHrs) * time.Hour
 	if err := s.rdb.Set(ctx, rtKey, user.ID, rtTTL); err != nil {
-		logger.Errorf("login: store refresh token to redis failed: %v", err)
+		// RT 写入失败，回滚已写入的 access token SET 成员
+		_ = s.rdb.Del(ctx, tokenKey)
+		logger.Errorf("login: store refresh token to redis failed, rolling back: %v", err)
 		return nil, errInternal
 	}
 

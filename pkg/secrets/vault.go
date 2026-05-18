@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/vault/api"
@@ -23,15 +24,33 @@ type VaultConfig struct {
 	Namespace string `yaml:"namespace"`
 }
 
+// Validate 检查 Vault key 的合法性，防止路径穿越攻击。
+func validateVaultKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("vault: key must not be empty")
+	}
+	if strings.Contains(key, "..") || strings.Contains(key, "\x00") {
+		return fmt.Errorf("vault: key contains invalid characters (path traversal detected)")
+	}
+	if key[0] == '/' {
+		return fmt.Errorf("vault: key must not start with /")
+	}
+	return nil
+}
+
 // VaultProvider 实现了基于 Vault KV v2 的 Provider 接口。
 type VaultProvider struct {
 	client    *api.Client
 	mountPath string
 	httpC     *http.Client // 缓存的引用，用于清理
+	closeOnce sync.Once
 }
 
 // NewVaultProvider 创建新的 VaultProvider 并验证连通性。
 // 如果 Vault 健康检查或令牌查询失败则返回错误。
+//
+// 注意：Vault token 无自动续期机制。token 过期后 Get() 会返回 ("", false)。
+// 请使用长期有效的 periodic token（而非一次性 token），并确保 TTL 足够长。
 func NewVaultProvider(cfg VaultConfig) (*VaultProvider, error) {
 	if cfg.Address == "" {
 		return nil, fmt.Errorf("vault: address is required")
@@ -88,6 +107,10 @@ func NewVaultProvider(cfg VaultConfig) (*VaultProvider, error) {
 // key 是相对于挂载路径的路径，例如 "data/mysql" → 读取 "secret/data/mysql"。
 // 如果未找到 key 或发生任何错误则返回 ("", false)。
 func (v *VaultProvider) Get(key string) (string, bool) {
+	if err := validateVaultKey(key); err != nil {
+		logger.Warnf("secrets: %v (key=%q)", err, key)
+		return "", false
+	}
 	secretPath := v.mountPath + "/data/" + key
 
 	secret, err := v.client.Logical().Read(secretPath)
@@ -139,10 +162,13 @@ func (v *VaultProvider) Get(key string) (string, bool) {
 func (v *VaultProvider) Name() string { return "vault" }
 
 // Close 清理 Vault 客户端资源（清除令牌并关闭空闲 HTTP 连接）。
+// 线程安全：多次调用只执行一次。
 func (v *VaultProvider) Close() {
-	v.client.SetToken("")
-	if v.httpC != nil {
-		v.httpC.CloseIdleConnections()
-	}
-	logger.Info("secrets: vault provider closed")
+	v.closeOnce.Do(func() {
+		v.client.SetToken("")
+		if v.httpC != nil {
+			v.httpC.CloseIdleConnections()
+		}
+		logger.Info("secrets: vault provider closed")
+	})
 }

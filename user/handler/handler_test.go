@@ -103,7 +103,7 @@ func TestMaskPhone(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"13800138000", "****000"},
+		{"13800138000", "138****8000"},
 		{"123", "***"},
 		{"", "***"},
 	}

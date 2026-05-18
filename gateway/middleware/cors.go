@@ -30,6 +30,13 @@ func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 	}
 	allowAll := len(cfg.AllowOrigins) == 1 && cfg.AllowOrigins[0] == "*"
 	creds := cfg.AllowCredentials
+	// 拷贝切片，避免闭包捕获可变引用（防热更新竞态）
+	allowOrigins := append([]string{}, cfg.AllowOrigins...)
+	// R5-P3-02: 使用 map 替代线性扫描，O(1) 查找
+	allowOriginSet := make(map[string]bool, len(allowOrigins))
+	for _, o := range allowOrigins {
+		allowOriginSet[o] = true
+	}
 
 	// P1-08: 通配符 + credentials 在浏览器中会被拒绝，启动时警告
 	if allowAll && creds {
@@ -42,25 +49,31 @@ func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 
 	return func(ctx context.Context, c *app.RequestContext) {
 		origin := string(c.GetHeader("Origin"))
+
+		// R5-P0-01: 仅在 Origin 被允许时才设置 CORS 响应头，防止信息泄露
+		originAllowed := false
 		if allowAll && !creds {
 			c.Header("Access-Control-Allow-Origin", "*")
-		} else if origin != "" && isAllowedOrigin(origin, cfg.AllowOrigins) {
+			originAllowed = true
+		} else if origin != "" && allowOriginSet[origin] {
 			c.Header("Access-Control-Allow-Origin", origin)
-			// 追加而非覆盖，防止 gzip middleware 覆盖此值
 			existing := string(c.Response.Header.Peek("Vary"))
 			if existing != "" {
 				c.Header("Vary", existing+", Origin")
 			} else {
 				c.Header("Vary", "Origin")
 			}
+			originAllowed = true
 		}
 
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, Token")
-		c.Header("Access-Control-Max-Age", "3600")
-
-		if creds {
-			c.Header("Access-Control-Allow-Credentials", "true")
+		if originAllowed {
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE")
+			// R5-P2-03: 补充常见自定义请求头
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, Token, X-Request-Id, Accept-Language")
+			c.Header("Access-Control-Max-Age", "3600")
+			if creds {
+				c.Header("Access-Control-Allow-Credentials", "true")
+			}
 		}
 
 		if string(c.Method()) == http.MethodOptions {
@@ -69,15 +82,4 @@ func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 		}
 		c.Next(ctx)
 	}
-}
-
-// P2-SEC-01 修复：移除通配符子域名匹配功能以防止 DNS rebinding 攻击
-// 如需支持子域名，请在 allowOrigins 中显式列出每个域名
-func isAllowedOrigin(origin string, allowed []string) bool {
-	for _, a := range allowed {
-		if a == origin {
-			return true
-		}
-	}
-	return false
 }

@@ -30,6 +30,37 @@ var preGzipCache sync.Map
 // 缓存条目计数，用于限制总缓存数量防止内存耗尽
 var preGzipCount atomic.Int64
 
+// init 启动定期清理 goroutine，每 30 分钟清理一次过期缓存条目。
+func init() {
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			cleanPreGzipCache()
+		}
+	}()
+}
+
+// cleanPreGzipCache 遍历缓存并删除过期条目。
+// 由于 sync.Map 没有 Range + Delete 的原子操作，
+// 使用 Range 收集过期 key 后再逐个删除。
+func cleanPreGzipCache() {
+	now := time.Now()
+	var expiredKeys []string
+	preGzipCache.Range(func(key, value interface{}) bool {
+		entry := value.(*preGzipEntry)
+		if now.After(entry.expiry) {
+			expiredKeys = append(expiredKeys, key.(string))
+		}
+		return true
+	})
+	for _, k := range expiredKeys {
+		if _, deleted := preGzipCache.LoadAndDelete(k); deleted {
+			preGzipCount.Add(-1)
+		}
+	}
+}
+
 const (
 	// preGzipTTL 缓存有效期
 	preGzipTTL = 3600 * time.Second
@@ -42,12 +73,17 @@ const (
 
 	// P1-04: query string 最大长度，超过此值的请求不缓存
 	preGzipMaxQueryLen = 2048
+
+	// R5-P0-02: 缓存键最大长度，防止构造超长 key 消耗内存
+	preGzipMaxKeyLen = 4096
 )
 
 // preGzipCacheKey 构建缓存键：service/method?queryString（参数排序确保一致性）。
 func preGzipCacheKey(service, method string, queryString []byte) string {
 	key := "pregzip:" + service + "/" + method
 	if len(queryString) > 0 {
+		// queryString 已在 Handler() 中通过 url.ParseQuery 校验过（非法则返回 400），
+		// 此处忽略解析错误是安全的。
 		params, _ := url.ParseQuery(string(queryString))
 		keys := make([]string, 0, len(params))
 		for k := range params {
@@ -62,9 +98,15 @@ func preGzipCacheKey(service, method string, queryString []byte) string {
 			}
 			buf.WriteString(k)
 			buf.WriteByte('=')
-			buf.WriteString(params[k][0])
+			vals := params[k]
+			sort.Strings(vals)
+			buf.WriteString(strings.Join(vals, ","))
 		}
 		key += buf.String()
+	}
+	// R5-P0-02: 超长缓存键不缓存，防止内存消耗
+	if len(key) > preGzipMaxKeyLen {
+		return ""
 	}
 	return key
 }
@@ -77,8 +119,9 @@ func getPreGzip(key string) ([]byte, bool) {
 	}
 	entry := val.(*preGzipEntry)
 	if time.Now().After(entry.expiry) {
-		preGzipCache.Delete(key)
-		preGzipCount.Add(-1)
+		if _, deleted := preGzipCache.LoadAndDelete(key); deleted {
+			preGzipCount.Add(-1)
+		}
 		return nil, false
 	}
 	return entry.data, true
@@ -139,6 +182,12 @@ func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, r
 		return false
 	}
 
+	cacheKey := preGzipCacheKey(service, method, queryString)
+	// R5-P0-02: 超长 key 跳过缓存
+	if cacheKey == "" {
+		return false
+	}
+
 	// RPC 响应必须是 JSON 字符串
 	s, ok := resp.(string)
 	if !ok || s == "" {
@@ -192,7 +241,7 @@ func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, r
 	w.Close()
 
 	gzipped := buf.Bytes()
-	cacheKey := preGzipCacheKey(service, method, queryString)
+	// R5-P0-02: cacheKey 已在函数开头计算并校验
 	setPreGzip(cacheKey, gzipped)
 
 	// 直接投递预压缩响应

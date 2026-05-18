@@ -43,8 +43,8 @@ type JWT struct {
 
 // RateLimit 分布式限流配置 (Redis 滑动窗口)
 type RateLimit struct {
-	Limit   int `yaml:"limit"`     // 窗口内最大请求数 (default: 100)
-	WindowS int `yaml:"windowSec"` // 滑动窗口时长（秒） (default: 60)
+	Limit     int `yaml:"limit"`     // 窗口内最大请求数 (default: 100)
+	WindowSec int `yaml:"windowSec"` // 滑动窗口时长（秒） (default: 60)
 	// P1-15: 敏感操作的按端点限流配置
 	Endpoints map[string]EndpointRate `yaml:"endpoints"`
 }
@@ -52,8 +52,8 @@ type RateLimit struct {
 // EndpointRate 定义特定端点的限流配置。
 // 键格式: "service/method"（例如 "user/Login"）
 type EndpointRate struct {
-	Limit   int `yaml:"limit"`     // 窗口内最大请求数
-	WindowS int `yaml:"windowSec"` // 窗口时长（秒）(default: 全局窗口)
+	Limit     int `yaml:"limit"`     // 窗口内最大请求数
+	WindowSec int `yaml:"windowSec"` // 窗口时长（秒）(default: 全局窗口)
 }
 
 // SetDefaults 为零值字段填充合理的默认值。
@@ -64,16 +64,20 @@ func (c *Config) SetDefaults() {
 	if rl.Limit <= 0 {
 		rl.Limit = 100
 	}
-	if rl.WindowS <= 0 {
-		rl.WindowS = 60
+	if rl.WindowSec <= 0 {
+		rl.WindowSec = 60
 	}
 
-	// OTEL 默认值
+	// R5-P2-12: OTEL 采样率根据运行模式设置合理默认值
 	if c.OTEL.Endpoint == "" {
 		c.OTEL.Endpoint = "localhost:4317"
 	}
 	if c.OTEL.SampleRate <= 0 {
-		c.OTEL.SampleRate = 0.1
+		if c.Mode == "dev" {
+			c.OTEL.SampleRate = 1.0
+		} else {
+			c.OTEL.SampleRate = 0.1
+		}
 	}
 }
 
@@ -128,31 +132,42 @@ func (c *Config) ApplyEnv() {
 }
 
 func (c *Config) Validate() error {
-	mode := strings.ToLower(c.Mode)
+	// c.Mode 已在 SetDefaults() 中 toLower，此处直接使用
 
-	// JWT 密钥验证：生产环境要求 64 字符，开发环境放宽到 32 字符
-	minSecretLen := 64
-	if mode == "dev" {
-		minSecretLen = 32
-	}
-	if len(c.JWT.Secret) < minSecretLen {
-		return fmt.Errorf("jwt secret must be at least %d characters, got %d", minSecretLen, len(c.JWT.Secret))
+	// JWT 密钥验证：HMAC-SHA256 安全要求至少 64 字符
+	if len(c.JWT.Secret) < 64 {
+		return fmt.Errorf("jwt secret must be at least 64 characters, got %d", len(c.JWT.Secret))
 	}
 	if c.Redis.Addr == "" {
 		return fmt.Errorf("redis addr is required, set REDIS_ADDR env or config.yaml")
 	}
+	if err := c.Redis.Validate(); err != nil {
+		return fmt.Errorf("redis config invalid: %w", err)
+	}
 	if len(c.Etcd.Addrs) == 0 {
 		return fmt.Errorf("etcd addresses are required, set ETCD_ADDRS env or config.yaml")
 	}
-	if mode != "dev" && mode != "prod" && mode != "staging" {
+	if c.Mode != "dev" && c.Mode != "prod" && c.Mode != "staging" {
 		return fmt.Errorf("invalid mode %q, expected dev/prod/staging", c.Mode)
 	}
 	// P2-08: 生产环境要求 Redis 密码
-	if mode == "prod" && c.Redis.Password == "" {
+	if c.Mode == "prod" && c.Redis.Password == "" {
 		return fmt.Errorf("redis password is required in production mode, set REDIS_PASSWORD env")
 	}
 	if c.OTEL.SampleRate < 0 || c.OTEL.SampleRate > 1.0 {
 		return fmt.Errorf("otel sampleRate must be between 0.0 and 1.0, got %v", c.OTEL.SampleRate)
+	}
+	// 校验按端点限流配置：Limit 和 WindowSec 必须为正数
+	for epKey, epCfg := range c.RateLimit.Endpoints {
+		if epCfg.Limit < 1 {
+			return fmt.Errorf("rate limit endpoint %q: limit must be >= 1, got %d", epKey, epCfg.Limit)
+		}
+		if epCfg.WindowSec < 1 {
+			return fmt.Errorf("rate limit endpoint %q: windowSec must be >= 1, got %d", epKey, epCfg.WindowSec)
+		}
+	}
+	if c.JWT.Issuer == "" && c.Mode == "prod" {
+		log.Printf("[WARN] jwt issuer is empty in production mode — tokens from any issuer will be accepted")
 	}
 	return nil
 }

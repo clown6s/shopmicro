@@ -10,22 +10,43 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"shopmicro/gateway/health"
+	"shopmicro/gateway/middleware"
 	"shopmicro/gateway/proxy"
+	"shopmicro/pkg/logger"
 	pkgredis "shopmicro/pkg/redis"
 )
 
-// privateRanges 内网地址段，包级别初始化一次
-var privateRanges = []struct {
+// privateRanges 内网/特殊地址段，包级别初始化一次
+// 覆盖：RFC 1918 (IPv4), RFC 6598 (CGNAT), link-local, loopback,
+//
+//	RFC 4193 (IPv6 ULA), IPv6 link-local
+var privateRanges []struct {
 	network *net.IPNet
-}{
-	{mustParseCIDR("10.0.0.0/8")},
-	{mustParseCIDR("172.16.0.0/12")},
-	{mustParseCIDR("192.168.0.0/16")},
-	{mustParseCIDR("127.0.0.0/8")},
-	{mustParseCIDR("::1/128")},
 }
 
-// isPrivateIP 判断 IP 是否属于内网地址（RFC 1918 + 环回地址）
+func init() {
+	ranges := []string{
+		"10.0.0.0/8",     // RFC 1918 私有地址
+		"172.16.0.0/12",  // RFC 1918 私有地址
+		"192.168.0.0/16", // RFC 1918 私有地址
+		"169.254.0.0/16", // 链路本地 IPv4 (link-local)
+		"100.64.0.0/10",  // CGNAT RFC 6598
+		"127.0.0.0/8",    // 环回地址
+		"::1/128",        // IPv6 环回
+		"fc00::/7",       // IPv6 ULA RFC 4193
+		"fe80::/10",      // IPv6 链路本地
+	}
+	privateRanges = make([]struct{ network *net.IPNet }, len(ranges))
+	for i, cidr := range ranges {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			logger.Fatalf("routes: invalid private range CIDR %q: %v", cidr, err)
+		}
+		privateRanges[i].network = network
+	}
+}
+
+// isPrivateIP 判断 IP 是否属于内网/特殊地址段（RFC 1918 + CGNAT + link-local + loopback + IPv6 ULA/link-local）
 func isPrivateIP(ip string) bool {
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
@@ -39,19 +60,11 @@ func isPrivateIP(ip string) bool {
 	return false
 }
 
-func mustParseCIDR(s string) *net.IPNet {
-	_, network, err := net.ParseCIDR(s)
-	if err != nil {
-		panic(err)
-	}
-	return network
-}
-
 // P1-03: metricsHandler 包装 health.MetricsHandler，限制仅内网访问
 func metricsHandler() app.HandlerFunc {
 	inner := health.MetricsHandler()
 	return func(ctx context.Context, c *app.RequestContext) {
-		clientIP := c.ClientIP()
+		clientIP := middleware.ClientRealIP(c)
 		if !isPrivateIP(clientIP) {
 			c.String(http.StatusForbidden, "forbidden")
 			c.Abort()

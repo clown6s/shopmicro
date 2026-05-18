@@ -28,6 +28,7 @@ import (
 	v1 "shopmicro/user/kitex_gen/api/user/v1/userservice"
 
 	pkgconf "shopmicro/pkg/conf"
+	pkghealth "shopmicro/pkg/health"
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/otel"
 
@@ -66,6 +67,9 @@ func Run(configPath string) error {
 	// =========================
 
 	shutdownTracer := otel.InitTracer("user-service", cfg.Mode)
+	if shutdownTracer == nil {
+		return fmt.Errorf("otel init failed — see logs above for details")
+	}
 	defer shutdownTracer(context.Background())
 
 	// =========================
@@ -116,15 +120,20 @@ func Run(configPath string) error {
 	// kitex 服务端
 	// =========================
 
-	svr := v1.NewServer(
+	// 创建 user handler
+	userHandler, err := handler.NewUserHandler(
+		dataProvider,
+		cfg.JWT.Secret,
+		cfg.JWT.Expiration,
+		cfg.JWT.Issuer,
+		cfg.JWT.RefreshSecret,
+	)
+	if err != nil {
+		return fmt.Errorf("create user handler failed: %w", err)
+	}
 
-		handler.NewUserHandler(
-			dataProvider,
-			cfg.JWT.Secret,
-			cfg.JWT.Expiration,
-			cfg.JWT.Issuer,
-			cfg.JWT.RefreshSecret,
-		),
+	svr := v1.NewServer(
+		userHandler,
 
 		server.WithServerBasicInfo(
 			&rpcinfo.EndpointBasicInfo{
@@ -160,11 +169,17 @@ func Run(configPath string) error {
 
 	healthSrv := &http.Server{
 		Addr:         cfg.GetHealthAddr(),
-		Handler:      buildHealthMux(dataProvider, healthy),
+		Handler:      pkghealth.BuildHealthMux(pkghealth.Dependencies{DB: dataProvider.DB, Rdb: dataProvider.Rdb}, healthy),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 5 * time.Second,
 		IdleTimeout:  30 * time.Second,
 	}
+	// 确保 health server 在 Run 返回后被关闭
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer shutdownCancel()
+		_ = healthSrv.Shutdown(shutdownCtx)
+	}()
 	go func() {
 		if err := healthSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Warnf("health check server stopped: %v", err)
@@ -210,10 +225,6 @@ func Run(configPath string) error {
 		case <-time.After(5 * time.Second):
 			logger.Warnf("kitex shutdown timed out after 5s, forcing exit")
 		}
-
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_ = healthSrv.Shutdown(shutdownCtx)
-		shutdownCancel()
 	}()
 
 	// =========================
@@ -227,17 +238,18 @@ func Run(configPath string) error {
 	)
 
 	if err := svr.Run(); err != nil {
-		if isKitexStopped(err) {
-			logger.Warnf("kitex already stopped")
-			wg.Wait()
-			return nil
+		if !isKitexStopped(err) {
+			return err
 		}
-		wg.Wait()
-		return err
 	}
 
 	wg.Wait()
 	return nil
+}
+
+// isKitexStopped 检查错误是否表示 Kitex 服务端已停止。
+func isKitexStopped(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 // panicRecoveryMiddleware 捕获 kitex handler panic，防止 panic 导致进程崩溃。
@@ -251,64 +263,6 @@ func panicRecoveryMiddleware(next endpoint.Endpoint) endpoint.Endpoint {
 		}()
 		return next(ctx, req, resp)
 	}
-}
-
-// buildHealthMux 构建健康检查 HTTP 路由。
-//   - /health  存活探针 — 返回最小信息，不泄露内部依赖细节
-//   - /healthz 就绪探针 — 检查 MySQL + Redis 连通性（内部使用，生产需网络策略限制）
-func buildHealthMux(d *data.Data, healthy *atomic.Bool) *http.ServeMux {
-	mux := http.NewServeMux()
-
-	// P2-SEC-06：/health 仅做基础存活检查，不暴露依赖细节
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		if !healthy.Load() {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, `{"status":"degraded"}`)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"ok"}`)
-	})
-
-	// P3-R5-03：/healthz 用于 K8s readiness probe（内部使用）
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-
-		unhealthy := false
-
-		if d.DB == nil {
-			logger.Warn("healthz: db is nil")
-			unhealthy = true
-		} else if err := d.DB.PingContext(ctx); err != nil {
-			logger.Warnf("healthz: dependency check failed: %v", err)
-			unhealthy = true
-		}
-
-		if d.Rdb == nil {
-			logger.Warn("healthz: rdb is nil")
-			unhealthy = true
-		} else if !d.Rdb.Ping(ctx) {
-			logger.Warn("healthz: dependency check failed: redis")
-			unhealthy = true
-		}
-
-		if unhealthy {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, `{"status":"unhealthy"}`)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"ok"}`)
-	})
-
-	return mux
-}
-
-// isKitexStopped 检查错误是否表示 Kitex 服务端已停止。
-func isKitexStopped(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 func main() {

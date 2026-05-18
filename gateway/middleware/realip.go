@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"github.com/cloudwego/hertz/pkg/app"
+
+	"shopmicro/pkg/logger"
 )
 
 // contextKeyRealIP 是 Hertz 上下文中存储解析后的真实客户端 IP 的键名。
@@ -38,7 +40,8 @@ func parseTrustedNets(proxies []string) []net.IPNet {
 		}
 		ip := net.ParseIP(p)
 		if ip == nil {
-			continue // 跳过无效条目
+			logger.Warnf("realip: invalid trusted proxy entry %q, skipping", p)
+			continue
 		}
 		if ip4 := ip.To4(); ip4 != nil {
 			nets = append(nets, net.IPNet{IP: ip4, Mask: net.IPv4Mask(255, 255, 255, 255)})

@@ -37,14 +37,15 @@ var (
 	errForbidden        = newBiz(errcode.CodeUserForbidden, "forbidden: cannot operate other user's data")
 	errEmailFormat      = newBiz(errcode.CodeUserEmailFormat, "invalid email format")
 	errAccountLocked    = newBiz(errcode.CodeUserAccountLocked, "account temporarily locked due to too many failed login attempts")
-	errRegisterTooMany  = newBiz(errcode.CodeUserInternal, "too many registration attempts, please try again later")
-	errRefreshTooMany   = newBiz(errcode.CodeUserInternal, "too many refresh attempts, please try again later")
+	errRegisterTooMany  = newBiz(errcode.CodeUserParam, "too many registration attempts, please try again later")
+	errRefreshTooMany   = newBiz(errcode.CodeUserParam, "too many refresh attempts, please try again later")
 )
 
 // P1-21：手机号正则 — 中国手机号格式
 var phoneRegex = regexp.MustCompile(`^1[3-9]\d{9}$`)
 
-// emailRegex 校验基本邮箱格式（RFC 5322 简化版）
+// emailRegex 校验基本邮箱格式（RFC 5322 简化版）。
+// 注意：不支持国际化域名 (IDN)，如需支持应在入库前转换为 Punycode。
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
 // passwordLetterRe 和 passwordDigitRe 拆分为两个检查，因为 Go 的 RE2 引擎
@@ -70,14 +71,14 @@ type UserServiceImpl struct {
 	rdb       RedisOps
 }
 
-func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer string, jwtRefreshSecret string) *UserServiceImpl {
+func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer string, jwtRefreshSecret string) (*UserServiceImpl, error) {
 	// P2-16 修复：防止 jwtExpHours 为零导致 rtExpHrs 异常
 	if jwtExpHours <= 0 {
 		jwtExpHours = 24
 	}
 	gen, err := jwt.NewGenerator(jwtSecret, time.Duration(jwtExpHours)*time.Hour, jwtIssuer)
 	if err != nil {
-		logger.Fatalf("init jwt generator failed: %v", err)
+		return nil, fmt.Errorf("init jwt generator failed: %w", err)
 	}
 	// 刷新令牌：默认 7 天（必须大于等于访问令牌）
 	rtExpHrs := jwtExpHours * 7
@@ -87,14 +88,14 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer s
 
 	// 使用相同密钥会破坏双令牌架构的设计目的。
 	if jwtRefreshSecret == "" {
-		logger.Fatalf("JWT_REFRESH_SECRET is required")
+		return nil, fmt.Errorf("JWT_REFRESH_SECRET is required")
 	}
 	if jwtRefreshSecret == jwtSecret {
-		logger.Fatalf("JWT_REFRESH_SECRET must differ from JWT_SECRET — using the same secret defeats the dual-token architecture")
+		return nil, fmt.Errorf("JWT_REFRESH_SECRET must differ from JWT_SECRET — using the same secret defeats the dual-token architecture")
 	}
 	rtGen, err := jwt.NewGenerator(jwtRefreshSecret, time.Duration(rtExpHrs)*time.Hour, jwtIssuer)
 	if err != nil {
-		logger.Fatalf("init refresh token generator failed: %v", err)
+		return nil, fmt.Errorf("init refresh token generator failed: %w", err)
 	}
 	return &UserServiceImpl{
 		userDal:   d.User(),
@@ -103,45 +104,33 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer s
 		rtGen:     rtGen,
 		rtExpHrs:  rtExpHrs,
 		rdb:       d.Rdb,
-	}
+	}, nil
 }
 
 const tokenPrefix = "shopmicro:user:token:"
 const refreshTokenPrefix = "shopmicro:user:refresh:"
+
+// P2-06/P2-07：共享的频率限制 Lua 脚本（原子性 INCR + 条件 EXPIRE）
+const rateLimitScript = `
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+if tonumber(count) > tonumber(ARGV[1]) then
+    return 1
+end
+return 0
+`
 
 // P2-06：注册频率限制 — 按手机号，每小时最多 5 次
 const registerRateLimitKey = "shopmicro:register:rate:"
 const registerRateLimitMax = 5
 const registerRateLimitWindowSec = 3600 // 1 小时
 
-// P2-06：用于原子性频率限制检查并递增的 Lua 脚本
-const registerRateLimitScript = `
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then
-    redis.call('EXPIRE', KEYS[1], ARGV[2])
-end
-if tonumber(count) > tonumber(ARGV[1]) then
-    return 1
-end
-return 0
-`
-
 // P2-07：RefreshToken 频率限制 — 按用户 ID，每分钟最多 10 次
 const refreshRateLimitKey = "shopmicro:refresh:rate:"
 const refreshRateLimitMax = 10
 const refreshRateLimitWindowSec = 60
-
-// P2-07：用于刷新令牌频率限制的 Lua 脚本
-const refreshRateLimitScript = `
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then
-    redis.call('EXPIRE', KEYS[1], ARGV[2])
-end
-if tonumber(count) > tonumber(ARGV[1]) then
-    return 1
-end
-return 0
-`
 
 // P1-05：账号级别暴力破解保护常量
 // R4-P1-03：原子性 INCR + 条件 EXPIRE 的 Lua 脚本。
@@ -258,13 +247,4 @@ func maskEmail(email string) string {
 		return "***"
 	}
 	return email[:1] + "***" + email[at:]
-}
-
-// maskUserID 返回用户 ID 的一致性脱敏表示。
-// 在响应体中隐藏它不会增加实际安全性。
-func maskUserID(id int64) int64 {
-	if id == 0 {
-		return 0
-	}
-	return id ^ 0x5A5A5A5A5A5A5A5A
 }

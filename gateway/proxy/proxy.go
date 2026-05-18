@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bytedance/gopkg/cloud/metainfo"
@@ -46,7 +47,17 @@ const (
 
 	// P3-03: etcd 连接超时
 	etcdDialTimeout = 5 * time.Second
+
+	// R5-P1-02: 请求体最大大小（Hertz 默认 1MB，此处留 100KB 余量给 JSON 合并）
+	maxBodySize = 900 * 1024
+
+	// R5-P1-05: Bearer token 最大长度，防止超长 token 浪费资源
+	maxTokenLen = 4096
 )
+
+// R5-P3-01: 哨兵错误，用于标识 "service not found" 错误，
+// 避免依赖字符串匹配做错误检测。
+var ErrServiceNotFound = errors.New("service not found")
 
 // ServiceClient 将 kitex 泛化客户端与其描述符绑定。
 type ServiceClient struct {
@@ -74,6 +85,9 @@ type Proxy struct {
 	// epRateLimitFn 在代理处理器中检查按端点限流。
 	// 返回 true 表示允许，false 表示拒绝。nil = 不进行端点限流。
 	epRateLimitFn func(ctx context.Context, endpointKey, ip string) bool
+
+	// R5-P2-10: 标记 etcd watch 协程是否健康，供 /ready 端点查询
+	watchHealthy atomic.Bool
 }
 
 // Option 在构建时配置 Proxy。
@@ -177,6 +191,14 @@ func (p *Proxy) registerService(
 	protoPath string,
 	resolver discovery.Resolver,
 ) error {
+	// Double-check locking: 先用读锁检查是否已存在，避免不必要的写锁竞争。
+	p.mu.RLock()
+	if _, ok := p.clients[serviceName]; ok {
+		p.mu.RUnlock()
+		return nil
+	}
+	p.mu.RUnlock()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -259,6 +281,8 @@ func (p *Proxy) getClient(service string) (*ServiceClient, bool) {
 // req 必须是 JSON 编码的字符串（用于 JSONPbGeneric）。
 // method 必须是 CamelCase 的 protobuf RPC 名称（例如 "ListUser"，而非
 // gRPC 全路径 "api.user.v1.UserService/ListUser"）。
+//
+// 对可重试的瞬态错误（连接重置、超时）最多重试 2 次，使用指数退避。
 func (p *Proxy) Call(
 	ctx context.Context,
 	service string,
@@ -267,10 +291,33 @@ func (p *Proxy) Call(
 ) (interface{}, error) {
 	cli, ok := p.getClient(service)
 	if !ok {
-		return nil, fmt.Errorf("service not found: %s", service)
+		return nil, fmt.Errorf("%w: %s", ErrServiceNotFound, service)
 	}
 
-	return cli.Client.GenericCall(ctx, method, req)
+	const maxRetries = 2
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, err := cli.Client.GenericCall(ctx, method, req)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		// 仅对瞬态错误重试：超时、连接重置、context deadline
+		errMsg := err.Error()
+		isTransient := strings.Contains(errMsg, "connection reset") ||
+			strings.Contains(errMsg, "connection refused") ||
+			strings.Contains(errMsg, "timeout") ||
+			strings.Contains(errMsg, "deadline") ||
+			errors.Is(err, context.DeadlineExceeded)
+		if !isTransient || attempt == maxRetries {
+			return nil, err
+		}
+		// 指数退避：100ms, 200ms
+		backoff := time.Duration(1<<(attempt+1)) * 50 * time.Millisecond
+		time.Sleep(backoff)
+		logger.Warnf("rpc transient error, retrying %d/%d: service=%s method=%s err=%v", attempt+1, maxRetries, service, method, err)
+	}
+	return nil, lastErr
 }
 
 // =========================
@@ -301,6 +348,8 @@ func (p *Proxy) DiscoverAndRegister(
 	}
 
 	seen := make(map[string]struct{})
+	// R5-P2-01: 收集注册失败的服务，启动后汇总输出
+	var regFailures []string
 	for _, kv := range resp.Kvs {
 		svcName := extractServiceName(string(kv.Key), prefix)
 		if svcName == "" {
@@ -324,8 +373,12 @@ func (p *Proxy) DiscoverAndRegister(
 		}
 
 		if err := p.registerService(ctx, svcName, protoPath, resolver); err != nil {
+			regFailures = append(regFailures, svcName)
 			logger.Warnf("failed to register service %s: %v", svcName, err)
 		}
+	}
+	if len(regFailures) > 0 {
+		logger.Errorf("services failed to register at startup: %v", regFailures)
 	}
 	return nil
 }
@@ -349,6 +402,8 @@ func (p *Proxy) WatchServices(
 				return // 父上下文已取消
 			}
 
+			// R5-P2-10: 标记 watch 健康
+			p.watchHealthy.Store(true)
 			err := p.watchOnce(ctx, resolver, etcdAddrs, protoBase)
 
 			if ctx.Err() != nil {
@@ -359,6 +414,8 @@ func (p *Proxy) WatchServices(
 			if err == nil {
 				backoff = time.Second
 			} else {
+				// R5-P2-10: watch 异常时标记不健康
+				p.watchHealthy.Store(false)
 				// Watch 通道关闭（etcd 连接丢失或其他错误）
 				logger.Warnf("WatchServices: watch channel closed, reconnecting in %v: %v", backoff, err)
 				select {
@@ -397,32 +454,41 @@ func (p *Proxy) watchOnce(
 			return fmt.Errorf("etcd watch error: %w", wresp.Err())
 		}
 		for _, ev := range wresp.Events {
-			if ev.Type != clientv3.EventTypePut {
-				continue
-			}
 			svcName := extractServiceName(string(ev.Kv.Key), prefix)
 			if svcName == "" {
 				continue
 			}
-			if _, ok := p.getClient(svcName); ok {
-				continue // 已注册
-			}
-			protoPath := buildProtoPath(protoBase, svcName)
 
-			// DiscoverAndRegister 会捕获缺失文件并失败。
-			if _, err := os.Stat(protoPath); err != nil {
-				if os.IsNotExist(err) {
-					logger.Warnf("WatchServices: proto file not found for %s: %s — service registered but not usable until proto is in place", svcName, protoPath)
+			switch ev.Type {
+			case clientv3.EventTypePut:
+				if _, ok := p.getClient(svcName); ok {
+					continue // 已注册
+				}
+				protoPath := buildProtoPath(protoBase, svcName)
+
+				// DiscoverAndRegister 会捕获缺失文件并失败。
+				if _, err := os.Stat(protoPath); err != nil {
+					if os.IsNotExist(err) {
+						logger.Warnf("WatchServices: proto file not found for %s: %s — service registered but not usable until proto is in place", svcName, protoPath)
+						continue
+					}
+					logger.Warnf("WatchServices: stat proto for %s: %v", svcName, err)
 					continue
 				}
-				logger.Warnf("WatchServices: stat proto for %s: %v", svcName, err)
-				continue
-			}
 
-			// R2-P2-04: 对瞬态错误最多重试注册 3 次
-			regErr := p.retryRegister(ctx, svcName, protoPath, resolver, 3)
-			if regErr != nil {
-				logger.Warnf("WatchServices: failed to register %s after retries: %v", svcName, regErr)
+				// R2-P2-04: 对瞬态错误最多重试注册 3 次
+				regErr := p.retryRegister(ctx, svcName, protoPath, resolver, 3)
+				if regErr != nil {
+					logger.Warnf("WatchServices: failed to register %s after retries: %v", svcName, regErr)
+				}
+			case clientv3.EventTypeDelete:
+				// 服务实例下线时清理客户端缓存，防止内存泄漏
+				p.mu.Lock()
+				if _, exists := p.clients[svcName]; exists {
+					delete(p.clients, svcName)
+					logger.Infof("WatchServices: removed stale client for %s (instance deregistered)", svcName)
+				}
+				p.mu.Unlock()
 			}
 		}
 	}
@@ -495,10 +561,18 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			}
 		}
 
-		// P3-07: 限制 query 参数数量防止 DoS
+		// R5-P2-06+P2-07: 一次性解析 query string，复用于参数计数校验和 JSON 合并，
+		// 避免在 count check / typed-merge / fallback-merge 中重复解析。
+		var queryParams url.Values
 		if queryString := c.Request.QueryString(); len(queryString) > 0 {
-			paramCount := strings.Count(string(queryString), "&") + 1
-			if paramCount > maxQueryParams {
+			var parseErr error
+			queryParams, parseErr = url.ParseQuery(string(queryString))
+			if parseErr != nil {
+				response.Fail(c, http.StatusBadRequest, int(errcode.CodeGwParam), "invalid query parameters")
+				c.Abort()
+				return
+			}
+			if len(queryParams) > maxQueryParams {
 				response.Fail(c, http.StatusBadRequest, int(errcode.CodeGwParam), "too many query parameters")
 				c.Abort()
 				return
@@ -524,7 +598,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		ctx = authCtx
 
 		// Pre-gzip 缓存命中检查：跳过 RPC 调用，直接投递预压缩响应
-		if string(c.Request.Method()) == http.MethodGet {
+		if reqMethod == http.MethodGet {
 			ae := string(c.Request.Header.Peek("Accept-Encoding"))
 			if strings.Contains(ae, "gzip") {
 				if gzipped, ok := getPreGzip(preGzipCacheKey(service, method, c.Request.QueryString())); ok {
@@ -535,21 +609,27 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		}
 
 		// 将请求体传递给泛化客户端。
-		// GET 请求的参数通常在 query string 中，需要合并到 JSON body。
-		body := string(c.Request.Body())
+		// R5-P1-02: 显式限制请求体大小（Hertz 默认 1MB，此处留余量给 JSON 合并）
+		rawBody := c.Request.Body()
+		if len(rawBody) > maxBodySize {
+			response.Fail(c, http.StatusRequestEntityTooLarge, int(errcode.CodeGwParam), "request body too large")
+			c.Abort()
+			return
+		}
+		body := string(rawBody)
 		if body == "" || body == "null" {
 			body = "{}"
 		}
 		// 将 query string 参数合并到 JSON body 中（主要用于 GET 请求的分页参数等）。
-		// 使用 proto 描述符做类型感知转换，避免 string 字段的值被错误转为数字。
-		if queryString := c.Request.QueryString(); len(queryString) > 0 {
+		// R5-P2-07: 使用预解析的 queryParams，避免重复解析 query string。
+		if len(queryParams) > 0 {
 			if sc, ok := p.getClient(service); ok && sc.svcDesc != nil {
-				if merged, err := p.mergeQueryToJSONTyped(body, string(queryString), sc.svcDesc, method); err == nil {
+				if merged, err := p.mergeQueryToJSONTyped(body, queryParams, sc.svcDesc, method); err == nil {
 					body = merged
 				} else {
 					logger.Warnf("merge query to json failed: %v", err)
 				}
-			} else if merged, err := mergeQueryToJSON(body, string(queryString)); err == nil {
+			} else if merged, err := mergeQueryToJSON(body, queryParams); err == nil {
 				body = merged
 			} else {
 				logger.Warnf("merge query to json (fallback) failed: %v", err)
@@ -573,8 +653,16 @@ func (p *Proxy) Handler() app.HandlerFunc {
 // 如果认证成功或方法是公开的，返回增强的上下文（含 metainfo）。
 // 如果认证失败，返回 false 并写入错误响应。
 func (p *Proxy) authenticate(ctx context.Context, c *app.RequestContext, service, method string) (context.Context, bool) {
-	if p.jwtParser == nil || p.publicMethod[service+"/"+method] {
+	// R5-P1-01: 先检查公开方法，再检查 parser 是否存在。
+	// 原代码 `p.jwtParser == nil || p.publicMethod[...]` 会导致 parser 为 nil 时所有方法变公开。
+	if p.publicMethod[service+"/"+method] {
 		return ctx, true
+	}
+	if p.jwtParser == nil {
+		logger.Errorf("authentication requested but jwt parser not configured (service=%s method=%s)", service, method)
+		response.Fail(c, http.StatusServiceUnavailable, int(errcode.CodeGwServer), "authentication not configured")
+		c.Abort()
+		return nil, false
 	}
 
 	tokenStr, ok := bearerToken(string(c.GetHeader("Authorization")))
@@ -640,15 +728,17 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 				return
 			}
 		}
-		// 请求体序列化错误 —— JSON 字段类型与 proto 定义不匹配。
-		// 这是客户端问题，返回 400 并提示检查请求参数。
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "service not found") {
+		// R5-P3-01: 使用哨兵错误替代字符串匹配
+		if errors.Is(err, ErrServiceNotFound) {
 			logger.Warnf("service not found: service=%s method=%s", service, method)
 			response.Fail(c, http.StatusNotFound, int(errcode.CodeGwParam), "service not found")
 			c.Abort()
 			return
 		}
+		errMsg := err.Error()
+		// 请求体序列化错误 —— JSON 字段类型与 proto 定义不匹配。
+		// 注意：这些字符串匹配依赖于 Kitex/protobuf 的内部错误消息，
+		// 版本升级后可能变化。如有变动需同步更新以下条件。
 		if strings.Contains(errMsg, "json convert to protobuf failed") ||
 			strings.Contains(errMsg, "marshal message failed") ||
 			strings.Contains(errMsg, "failed to unmarshal") ||
@@ -689,8 +779,14 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 			}
 
 			if int(code) != 0 {
+				// R5-P2-08: 下游 code 必须在 4xx/5xx 范围内才用作 HTTP status，
+				// 防止下游服务返回 301/302 等非错误状态码导致 API 合约混乱。
+				httpCode := int(code)
+				if httpCode < 400 || httpCode > 599 {
+					httpCode = http.StatusInternalServerError
+				}
 				msg, _ := m["message"].(string)
-				c.JSON(response.HttpStatus(int(code)), response.R{
+				c.JSON(response.HttpStatus(httpCode), response.R{
 					Code:    int(code),
 					Message: msg,
 					Data:    m["data"],
@@ -746,7 +842,16 @@ func bearerToken(authHeader string) (string, bool) {
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
 		return "", false
 	}
-	return parts[1], true
+	token := parts[1]
+	// R5-P1-05: 校验 JWT 基本格式（三段 base64url）和长度上限，
+	// 防止超长/畸形 token 浪费 Redis 比较和下游处理资源。
+	if len(token) > maxTokenLen {
+		return "", false
+	}
+	if strings.Count(token, ".") != 2 {
+		return "", false
+	}
+	return token, true
 }
 
 // buildProtoPath 返回 {protoBase}/{service}/api/{service}.proto。
@@ -798,21 +903,16 @@ func newEtcdClient(addrs []string) (*clientv3.Client, error) {
 	return cli, nil
 }
 
-// mergeQueryToJSON 将 URL query string 参数合并到 JSON body 中。
+// mergeQueryToJSON 将 URL query 参数合并到 JSON body 中。
+// R5-P2-07: 接收预解析的 url.Values，避免重复解析 query string。
 // query 参数保持 string 类型，不做 int/bool 自动转换。
-func mergeQueryToJSON(body, queryString string) (string, error) {
+func mergeQueryToJSON(body string, params url.Values) (string, error) {
 	var m map[string]interface{}
 	if err := json.Unmarshal([]byte(body), &m); err != nil {
 		return body, fmt.Errorf("parse body: %w", err)
 	}
 	if m == nil {
 		m = make(map[string]interface{})
-	}
-
-	// Hertz QueryString 返回未转义的原始 query string
-	params, err := url.ParseQuery(queryString)
-	if err != nil {
-		return body, fmt.Errorf("parse query: %w", err)
 	}
 
 	for key, values := range params {
@@ -836,18 +936,19 @@ func mergeQueryToJSON(body, queryString string) (string, error) {
 }
 
 // mergeQueryToJSONTyped 使用 proto 服务描述符做类型感知的 query→JSON 合并。
+// R5-P2-07: 接收预解析的 url.Values，避免重复解析 query string。
 // 根据 proto 字段类型决定是否将 query value 转为数字/布尔，
 // 避免 string 字段（如 adCode）被错误转为数字导致 Kitex 序列化失败。
-func (p *Proxy) mergeQueryToJSONTyped(body, queryString string, svcDesc *dproto.ServiceDescriptor, method string) (string, error) {
+func (p *Proxy) mergeQueryToJSONTyped(body string, params url.Values, svcDesc *dproto.ServiceDescriptor, method string) (string, error) {
 	// 查找方法描述符，获取输入消息类型
 	mtdDesc := svcDesc.LookupMethodByName(method)
 	if mtdDesc == nil {
 		// 找不到方法描述符，回退到无类型转换
-		return mergeQueryToJSON(body, queryString)
+		return mergeQueryToJSON(body, params)
 	}
 	inputMsg := mtdDesc.Input().Message()
 	if inputMsg == nil {
-		return mergeQueryToJSON(body, queryString)
+		return mergeQueryToJSON(body, params)
 	}
 
 	var m map[string]interface{}
@@ -856,11 +957,6 @@ func (p *Proxy) mergeQueryToJSONTyped(body, queryString string, svcDesc *dproto.
 	}
 	if m == nil {
 		m = make(map[string]interface{})
-	}
-
-	params, err := url.ParseQuery(queryString)
-	if err != nil {
-		return body, fmt.Errorf("parse query: %w", err)
 	}
 
 	for key, values := range params {

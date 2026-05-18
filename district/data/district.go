@@ -7,7 +7,7 @@ import (
 
 	v1 "shopmicro/district/kitex_gen/api/district/v1"
 
-	"go.uber.org/zap"
+	"shopmicro/pkg/logger"
 )
 
 type DistrictDal struct {
@@ -32,8 +32,15 @@ func (d *DistrictDal) GetProvinces(ctx context.Context) ([]*v1.DistrictNode, err
 	return scanNodes(rows)
 }
 
+// maxAdCodeLen 行政区划代码最大长度（中国标准 adcode 6 位，留足扩展余量）
+const maxAdCodeLen = 20
+
 // GetChildrenByParent 查询指定行政区划的直接下级子节点
 func (d *DistrictDal) GetChildrenByParent(ctx context.Context, parentAdCode string) ([]*v1.DistrictNode, error) {
+	if len(parentAdCode) > maxAdCodeLen || parentAdCode == "" {
+		return []*v1.DistrictNode{}, nil
+	}
+
 	const query = `
 		SELECT id, adcode, name, level, center
 		FROM district
@@ -61,13 +68,13 @@ func scanNodes(rows *sql.Rows) ([]*v1.DistrictNode, error) {
 			&item.Level,
 			&item.Center,
 		); err != nil {
-			zap.L().Error("districtRepo scan nodes failed", zap.Error(err))
+			logger.Errorf("districtRepo scan nodes failed: %v", err)
 			return nil, fmt.Errorf("scan district nodes failed: %w", err)
 		}
 		nodes = append(nodes, item)
 	}
 	if err := rows.Err(); err != nil {
-		zap.L().Error("districtRepo nodes rows error", zap.Error(err))
+		logger.Errorf("districtRepo nodes rows error: %v", err)
 		return nil, fmt.Errorf("district nodes rows error: %w", err)
 	}
 	if nodes == nil {

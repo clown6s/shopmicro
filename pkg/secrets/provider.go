@@ -40,7 +40,12 @@ var EnvProviderInstance Provider = &EnvProvider{}
 
 // loadDefaultProvider 以竞态安全的方式返回当前密钥 provider。
 func loadDefaultProvider() Provider {
-	return defaultProvider.Load().(Provider)
+	if v := defaultProvider.Load(); v != nil {
+		if p, ok := v.(Provider); ok {
+			return p
+		}
+	}
+	return EnvProviderInstance
 }
 
 // storeDefaultProvider 以竞态安全的方式设置全局密钥 provider。
@@ -65,4 +70,13 @@ func InitProvider(cfg VaultConfig) {
 		return
 	}
 	storeDefaultProvider(vp)
+}
+
+// CloseProvider 关闭当前密钥 provider 的资源。
+// 如果当前 provider 是 *VaultProvider，则调用其 Close() 方法清理 HTTP 连接。
+// 此函数应在优雅关闭阶段调用。
+func CloseProvider() {
+	if vp, ok := loadDefaultProvider().(*VaultProvider); ok {
+		vp.Close()
+	}
 }

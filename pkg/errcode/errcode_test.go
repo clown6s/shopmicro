@@ -58,6 +58,18 @@ func TestParseBizError(t *testing.T) {
 			wantCode: 0,
 			wantMsg:  "ok",
 		},
+		{
+			name:     "Kitex wrapped format",
+			err:      errors.New("remote or network error[remote]: biz error: BIZ/10006: phone or password incorrect"),
+			wantOK:   true,
+			wantCode: 10006,
+			wantMsg:  "phone or password incorrect",
+		},
+		{
+			name:   "BIZ/ in middle not at start (false positive check)",
+			err:    errors.New("category: BUSINESS/Sales/100 - something"),
+			wantOK: false,
+		},
 	}
 
 	for _, tt := range tests {

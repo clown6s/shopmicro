@@ -19,6 +19,7 @@ func Handler() app.HandlerFunc {
 		c.JSON(http.StatusOK, map[string]interface{}{
 			"status": "ok",
 		})
+		c.Abort()
 	}
 }
 
@@ -61,6 +62,7 @@ func ReadyHandler(rdb *redis.Client, etcdClient *clientv3.Client) app.HandlerFun
 			c.JSON(http.StatusServiceUnavailable, map[string]interface{}{
 				"status": "not_ready",
 			})
+			c.Abort()
 			return
 		}
 
@@ -68,5 +70,6 @@ func ReadyHandler(rdb *redis.Client, etcdClient *clientv3.Client) app.HandlerFun
 		c.JSON(http.StatusOK, map[string]interface{}{
 			"status": "ready",
 		})
+		c.Abort()
 	}
 }

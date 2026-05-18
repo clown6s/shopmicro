@@ -78,9 +78,9 @@ func TestValidate_DSN_TimeoutNotConfusedByReadTimeout(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	// Must add "timeout=5s" (connect timeout) — old logic would skip it because
+	// Must add "timeout=10s" (connect timeout) — old logic would skip it because
 	// "readTimeout" contains the substring "timeout"
-	if !contains(cfg.DSN, "&timeout=5s") && !contains(cfg.DSN, "?timeout=5s") {
+	if !contains(cfg.DSN, "&timeout=10s") && !contains(cfg.DSN, "?timeout=10s") {
 		t.Fatalf("DSN missing connect timeout (confused by readTimeout): %s", cfg.DSN)
 	}
 	// Should NOT duplicate readTimeout

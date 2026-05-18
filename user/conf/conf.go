@@ -84,9 +84,6 @@ func (c *Config) Validate() error {
 	// P1-01 修复：JWT 密钥长度与 gateway/pkg/jwt 保持一致
 	// pkg/jwt/jwt.go NewGenerator/NewParser 要求 64 字符
 	minSecretLen := 64
-	if strings.ToLower(c.Mode) == "dev" {
-		minSecretLen = 32
-	}
 	if len(c.JWT.Secret) < minSecretLen {
 		return fmt.Errorf("jwt secret must be at least %d characters, got %d", minSecretLen, len(c.JWT.Secret))
 	}

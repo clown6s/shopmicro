@@ -4,10 +4,33 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync/atomic"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
+
+// R5-P3-06: 缓存 runtime.MemStats，避免每次 /metrics 请求触发 STW 暂停。
+// 每 10 秒在后台 goroutine 中更新一次，Prometheus 15s 抓取间隔下数据足够新鲜。
+var cachedMemStats atomic.Pointer[runtime.MemStats]
+
+func init() {
+	// 立即填充一次，避免首次请求返回零值
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	cachedMemStats.Store(&m)
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			cachedMemStats.Store(&m)
+		}
+	}()
+}
 
 // MetricsHandler 暴露 Prometheus 格式的运行时指标端点，供 Prometheus 抓取。
 // 零外部依赖：直接输出 Prometheus exposition format，无需 prometheus client 库。
@@ -16,8 +39,14 @@ func MetricsHandler() app.HandlerFunc {
 		c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		c.Status(consts.StatusOK)
 
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
+		// R5-P3-06: 使用缓存的 memstats，避免 STW
+		m := cachedMemStats.Load()
+		if m == nil {
+			// 极端情况：init 尚未完成（理论上不会发生）
+			var fresh runtime.MemStats
+			runtime.ReadMemStats(&fresh)
+			m = &fresh
+		}
 
 		fmt.Fprintf(c, "# HELP go_goroutines Number of goroutines that currently exist\n")
 		fmt.Fprintf(c, "# TYPE go_goroutines gauge\n")

@@ -41,8 +41,10 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 	}
 
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, userID)
-	if err := s.rdb.SRem(ctx, tokenKey, tokenStr); err != nil {
-		logger.Errorf("logout: failed to remove token from redis (user_id=%d): %v", userID, err)
+	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", userID)
+	// 同时撤销 access token 和 refresh token
+	if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}); err != nil {
+		logger.Errorf("logout: failed to revoke tokens atomically (user_id=%d): %v", userID, err)
 		return nil, errInternal
 	}
 
@@ -52,12 +54,15 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 var errRefreshTokenRequired = newBiz(errcode.CodeUserTokenRequired, "refresh token is required")
 var errRefreshTokenInvalid = newBiz(errcode.CodeUserTokenInvalid, "invalid or expired refresh token")
 
-// refreshTokensScript 原子性地轮换刷新令牌。
+// refreshTokensScript 原子性地轮换刷新令牌 + 存储新 access token。
+// KEYS[1]=rtSetKey, KEYS[2]=newRTKey, KEYS[3]=tokenKey
 const refreshTokensScript = `
 redis.call('SREM', KEYS[1], ARGV[1])
 redis.call('SADD', KEYS[1], ARGV[2])
 redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[5])
 redis.call('EXPIRE', KEYS[1], ARGV[4])
+redis.call('SADD', KEYS[3], ARGV[6])
+redis.call('EXPIRE', KEYS[3], ARGV[7])
 return 1
 `
 
@@ -68,6 +73,9 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 		return nil, errRefreshTokenRequired
 	}
 
+	// 原子消费旧 refresh token（防重放）。
+	// 权衡：GetDel 后如果进程崩溃，旧 RT 已消费但新 AT/RT 未写入，用户需重新登录。
+	// 这是标准的 token rotation 安全设计（RFC 6749 §6）。
 	rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, rt)
 	userIDStr, err := s.rdb.GetDel(ctx, rtKey)
 	if err != nil || userIDStr == "" {
@@ -81,7 +89,7 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 
 	// P2-07：按用户 ID 限制刷新令牌频率（每分钟 10 次）
 	refreshRateKey := refreshRateLimitKey + userIDStr
-	limited, rlErr := s.rdb.RunScript(ctx, refreshRateLimitScript, []string{refreshRateKey}, refreshRateLimitMax, refreshRateLimitWindowSec)
+	limited, rlErr := s.rdb.RunScript(ctx, rateLimitScript, []string{refreshRateKey}, refreshRateLimitMax, refreshRateLimitWindowSec)
 	if rlErr != nil {
 		logger.Warnf("refresh token: rate limit check failed (user_id=%d): %v", userID, rlErr)
 		return nil, errRefreshTooMany
@@ -113,20 +121,16 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 	}
 
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, userID)
-	ttl := time.Duration(s.jwtExpHrs) * time.Hour
-	if err := s.rdb.SAddExpire(ctx, tokenKey, ttl, token); err != nil {
-		logger.Errorf("refresh token: store new access token failed: %v", err)
-		return nil, errInternal
-	}
-
+	atTTL := time.Duration(s.jwtExpHrs) * time.Hour
 	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", userID)
 	newRTKey := fmt.Sprintf("%s%s", refreshTokenPrefix, newRT)
 	rtTTL := time.Duration(s.rtExpHrs) * time.Hour
+	// 原子性：AT 写入 + RT 轮换 在同一个 Lua 脚本中完成
 	if _, err := s.rdb.RunScript(ctx, refreshTokensScript,
-		[]string{rtSetKey, newRTKey},
-		rt, newRT, userIDStr, int(rtTTL.Seconds()), int(rtTTL.Seconds()),
+		[]string{rtSetKey, newRTKey, tokenKey},
+		rt, newRT, userIDStr, int(rtTTL.Seconds()), int(rtTTL.Seconds()), token, int(atTTL.Seconds()),
 	); err != nil {
-		logger.Errorf("refresh token: atomic RT rotation failed (user_id=%d): %v", userID, err)
+		logger.Errorf("refresh token: atomic token rotation failed (user_id=%d): %v", userID, err)
 		return nil, errInternal
 	}
 
