@@ -3,7 +3,12 @@ package data
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"time"
 
 	v1 "shopmicro/district/kitex_gen/api/district/v1"
 
@@ -11,7 +16,9 @@ import (
 )
 
 type DistrictDal struct {
-	db *sql.DB
+	db          *sql.DB
+	amapKey     string
+	amapTimeout time.Duration
 }
 
 // GetProvinces 查询所有省级行政区
@@ -56,6 +63,193 @@ func (d *DistrictDal) GetChildrenByParent(ctx context.Context, parentAdCode stri
 
 	return scanNodes(rows)
 }
+
+// UpdateDistrict 从高德地图拉取行政区划数据，全量替换 district 表。
+func (d *DistrictDal) UpdateDistrict(ctx context.Context) error {
+	amapResp, err := d.fetchAMapData(ctx)
+	if err != nil {
+		return fmt.Errorf("fetch amap data: %w", err)
+	}
+
+	records := flattenDistricts(amapResp.Districts, 0)
+	if len(records) == 0 {
+		return fmt.Errorf("no district data fetched from amap")
+	}
+
+	logger.Infof("district update: fetched %d records from amap, starting full replace", len(records))
+
+	if err := d.fullReplace(ctx, records); err != nil {
+		return fmt.Errorf("full replace: %w", err)
+	}
+
+	logger.Infof("district update: full replace done, total %d records", len(records))
+	return nil
+}
+
+// ==================== 高德地图数据获取 ====================
+
+const amapURL = "https://restapi.amap.com/v3/config/district"
+
+type amapResponse struct {
+	Status    string         `json:"status"`
+	Count     string         `json:"count"`
+	Districts []amapDistrict `json:"districts"`
+}
+
+type amapDistrict struct {
+	AdCode    string          `json:"adcode"`
+	Name      string          `json:"name"`
+	Level     string          `json:"level"`
+	Center    string          `json:"center"`
+	Districts []amapDistrict  `json:"districts"`
+	CityCode  json.RawMessage `json:"citycode"` // 类型不一致（string/array），不保存
+}
+
+// fetchAMapData 请求高德地图行政区划接口，subdistrict=4 获取到区县级。
+func (d *DistrictDal) fetchAMapData(ctx context.Context) (*amapResponse, error) {
+	timeout := d.amapTimeout
+	if timeout == 0 {
+		timeout = 120 * time.Second
+	}
+
+	httpCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(httpCtx, http.MethodGet,
+		fmt.Sprintf("%s?subdistrict=4&key=%s", amapURL, d.amapKey), nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("amap api returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+
+	var amapResp amapResponse
+	if err := json.Unmarshal(body, &amapResp); err != nil {
+		return nil, fmt.Errorf("unmarshal amap response: %w", err)
+	}
+
+	if amapResp.Status != "1" {
+		return nil, fmt.Errorf("amap api error, status=%s", amapResp.Status)
+	}
+
+	return &amapResp, nil
+}
+
+// ==================== 数据扁平化 ====================
+
+type districtRecord struct {
+	AdCode       int
+	Name         string
+	Level        string
+	Center       string
+	ParentAdCode int
+}
+
+// flattenDistricts 递归将嵌套的高德数据展平为扁记录列表。
+// parentAdCode=0 时表示顶级（country），跳过不存。
+func flattenDistricts(districts []amapDistrict, parentAdCode int) []districtRecord {
+	var records []districtRecord
+
+	for _, d := range districts {
+		// 跳过国家级（高德返回的根节点）
+		if d.Level == "country" {
+			records = append(records, flattenDistricts(d.Districts, 0)...)
+			continue
+		}
+
+		adCode, err := strconv.Atoi(d.AdCode)
+		if err != nil || adCode == 0 {
+			logger.Warnf("skip invalid adcode: %s (%s)", d.AdCode, d.Name)
+			continue
+		}
+
+		records = append(records, districtRecord{
+			AdCode:       adCode,
+			Name:         d.Name,
+			Level:        d.Level,
+			Center:       d.Center,
+			ParentAdCode: parentAdCode,
+		})
+
+		// 递归子节点
+		if len(d.Districts) > 0 {
+			records = append(records, flattenDistricts(d.Districts, adCode)...)
+		}
+	}
+
+	return records
+}
+
+// ==================== 全量替换 ====================
+
+const batchSize = 500
+
+// fullReplace 事务内 DELETE 全表 + 分批 INSERT。
+func (d *DistrictDal) fullReplace(ctx context.Context, records []districtRecord) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+
+	// 确保出错时回滚
+	defer func() {
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil {
+				logger.Errorf("district update rollback failed: %v", rbErr)
+			}
+		}
+	}()
+
+	// 清空全表
+	if _, err = tx.ExecContext(ctx, "DELETE FROM district"); err != nil {
+		return fmt.Errorf("delete all districts: %w", err)
+	}
+
+	// 分批插入
+	const insertSQL = `INSERT INTO district (ad_code, name, level, center, parent_adcode, created_at) VALUES (?,?,?,?,?,NOW())`
+	stmt, err := tx.PrepareContext(ctx, insertSQL)
+	if err != nil {
+		return fmt.Errorf("prepare insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for i := 0; i < len(records); i += batchSize {
+		end := i + batchSize
+		if end > len(records) {
+			end = len(records)
+		}
+		batch := records[i:end]
+
+		for _, r := range batch {
+			if _, err = stmt.ExecContext(ctx, r.AdCode, r.Name, r.Level, r.Center, r.ParentAdCode); err != nil {
+				return fmt.Errorf("insert district %d (%s): %w", r.AdCode, r.Name, err)
+			}
+		}
+
+		logger.Infof("district update: inserted batch %d-%d/%d", i, end, len(records))
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// ==================== 扫描工具 ====================
 
 func scanNodes(rows *sql.Rows) ([]*v1.DistrictNode, error) {
 	var nodes []*v1.DistrictNode

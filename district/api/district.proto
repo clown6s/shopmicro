@@ -7,11 +7,11 @@ option go_package = "shopmicro/district/kitex_gen/api/district/v1";
 service DistrictService {
     rpc GetProvinces (GetProvincesReq) returns (GetProvincesResp);
     rpc GetChildren (GetChildrenReq) returns (GetChildrenResp);
+    rpc UpdateDistrict (UpdateDistrictReq) returns (UpdateDistrictResp);
 }
 
 // GetProvinces —— 返回省级行政区列表（扁平，无 children）
-message GetProvincesReq {
-}
+message GetProvincesReq {}
 
 message GetProvincesResp {
   repeated DistrictNode list = 1;
@@ -25,6 +25,10 @@ message GetChildrenReq {
 message GetChildrenResp {
   repeated DistrictNode list = 1;
 }
+
+message UpdateDistrictReq {}
+
+message UpdateDistrictResp {}
 
 // DistrictNode —— 扁平节点，无 children 字段，用于懒加载接口
 message DistrictNode {

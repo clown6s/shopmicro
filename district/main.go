@@ -76,7 +76,7 @@ func Run(configPath string) error {
 	// 数据层
 	// =========================
 
-	dataProvider, cleanup, err := data.New(cfg.MySQL, cfg.Redis)
+	dataProvider, cleanup, err := data.New(cfg.MySQL, cfg.Redis, cfg.AMap.Key, time.Duration(cfg.AMap.Timeout)*time.Second)
 	if err != nil {
 		return err
 	}

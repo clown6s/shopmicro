@@ -60,3 +60,11 @@ func (s *DistrictServiceImpl) GetChildren(ctx context.Context, req *v1.GetChildr
 
 	return result.(*v1.GetChildrenResp), nil
 }
+
+// UpdateDistrict 从高德地图拉取行政区划数据，全量替换数据库。
+func (s *DistrictServiceImpl) UpdateDistrict(ctx context.Context, req *v1.UpdateDistrictReq) (*v1.UpdateDistrictResp, error) {
+	if err := s.districtDal.UpdateDistrict(ctx); err != nil {
+		return nil, err
+	}
+	return &v1.UpdateDistrictResp{}, nil
+}

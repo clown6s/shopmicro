@@ -55,7 +55,7 @@ const (
 	maxTokenLen = 4096
 )
 
-// R5-P3-01: 哨兵错误，用于标识 "service not found" 错误，
+// ErrServiceNotFound R5-P3-01: 哨兵错误，用于标识 "service not found" 错误，
 // 避免依赖字符串匹配做错误检测。
 var ErrServiceNotFound = errors.New("service not found")
 
@@ -85,6 +85,12 @@ type Proxy struct {
 	// epRateLimitFn 在代理处理器中检查按端点限流。
 	// 返回 true 表示允许，false 表示拒绝。nil = 不进行端点限流。
 	epRateLimitFn func(ctx context.Context, endpointKey, ip string) bool
+
+	// cacheableMethods pre-gzip 缓存方法白名单。
+	// 只有显式注册的 "service/method" 才会走预压缩缓存，
+	// 防止用户级 GET 接口被缓存导致跨用户数据泄漏。
+	// 空 map = 所有方法都不缓存（安全默认值）。
+	cacheableMethods map[string]bool
 
 	// R5-P2-10: 标记 etcd watch 协程是否健康，供 /ready 端点查询
 	watchHealthy atomic.Bool
@@ -122,6 +128,24 @@ func WithEndpointRateLimit(fn func(ctx context.Context, endpointKey, ip string) 
 	}
 }
 
+// WithCacheableMethods 注册允许 pre-gzip 缓存的 RPC 方法白名单。
+// 键格式为 "service/method"（例如 "district/GetProvinces"）。
+// 只有白名单中的方法才会被预压缩缓存，防止用户级 GET 接口
+// 被缓存导致跨用户数据泄漏。默认所有方法都不缓存。
+//
+// ⚠️ 仅限非用户特定的公开数据接口，禁止缓存用户级接口。
+// 错误示例：proxy.WithCacheableMethods("order", "ListOrders") —— 会导致跨用户数据泄漏。
+//
+//	proxy.WithCacheableMethods("district", "GetProvinces", "GetChildren")
+//	proxy.WithCacheableMethods("goods", "GetCategories")
+func WithCacheableMethods(service string, methods ...string) Option {
+	return func(p *Proxy) {
+		for _, m := range methods {
+			p.cacheableMethods[service+"/"+m] = true
+		}
+	}
+}
+
 // WithPublicMethods 标记不需要 JWT 令牌的 RPC 方法。
 // 键格式为 "service/method"（例如 "user/Login"），以防止
 // 跨服务认证绕过 —— 标记为 user 服务公开的 "Login"
@@ -137,10 +161,11 @@ func WithPublicMethods(service string, methods ...string) Option {
 // New 使用给定选项创建 Proxy。
 func New(opts ...Option) *Proxy {
 	p := &Proxy{
-		clients:        make(map[string]*ServiceClient),
-		publicMethod:   make(map[string]bool),
-		allowedMethods: make(map[string]map[string]bool),
-		httpMethodMap:  make(map[string]map[string]bool),
+		clients:          make(map[string]*ServiceClient),
+		publicMethod:     make(map[string]bool),
+		allowedMethods:   make(map[string]map[string]bool),
+		httpMethodMap:    make(map[string]map[string]bool),
+		cacheableMethods: make(map[string]bool),
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -598,7 +623,8 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		ctx = authCtx
 
 		// Pre-gzip 缓存命中检查：跳过 RPC 调用，直接投递预压缩响应
-		if reqMethod == http.MethodGet {
+		// 仅白名单方法且客户端接受 gzip 时才查缓存
+		if reqMethod == http.MethodGet && p.cacheableMethods[service+"/"+method] {
 			ae := string(c.Request.Header.Peek("Accept-Encoding"))
 			if strings.Contains(ae, "gzip") {
 				if gzipped, ok := getPreGzip(preGzipCacheKey(service, method, c.Request.QueryString())); ok {
@@ -653,7 +679,6 @@ func (p *Proxy) Handler() app.HandlerFunc {
 // 如果认证成功或方法是公开的，返回增强的上下文（含 metainfo）。
 // 如果认证失败，返回 false 并写入错误响应。
 func (p *Proxy) authenticate(ctx context.Context, c *app.RequestContext, service, method string) (context.Context, bool) {
-	// R5-P1-01: 先检查公开方法，再检查 parser 是否存在。
 	// 原代码 `p.jwtParser == nil || p.publicMethod[...]` 会导致 parser 为 nil 时所有方法变公开。
 	if p.publicMethod[service+"/"+method] {
 		return ctx, true

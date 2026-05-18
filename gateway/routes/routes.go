@@ -84,10 +84,10 @@ func ProxyOptions() []proxy.Option {
 			"Login",
 			"RefreshToken",
 		),
-		proxy.WithPublicMethods("district",
-			"GetProvinces",
-			"GetChildren",
-		),
+		//proxy.WithPublicMethods("district",
+		//	"GetProvinces",
+		//	"GetChildren",
+		//),
 
 		// RPC 方法白名单
 		proxy.WithAllowedMethods("user",
@@ -102,6 +102,7 @@ func ProxyOptions() []proxy.Option {
 		proxy.WithAllowedMethods("district",
 			"GetProvinces",
 			"GetChildren",
+			"UpdateDistrict",
 		),
 
 		// HTTP 方法映射 —— 限制每个 RPC 方法允许的 HTTP 请求方法
@@ -114,6 +115,13 @@ func ProxyOptions() []proxy.Option {
 		proxy.WithHTTPMethod("user", "ListUser", http.MethodGet),
 		proxy.WithHTTPMethod("district", "GetProvinces", http.MethodGet),
 		proxy.WithHTTPMethod("district", "GetChildren", http.MethodGet),
+		proxy.WithHTTPMethod("district", "UpdateDistrict", http.MethodPost),
+
+		// pre-gzip 缓存白名单：只有非用户特定的公开 GET 方法才允许缓存
+		proxy.WithCacheableMethods("district",
+			"GetProvinces",
+			"GetChildren",
+		),
 	}
 }
 

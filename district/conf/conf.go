@@ -11,12 +11,18 @@ import (
 	"shopmicro/pkg/secrets"
 )
 
+type AMapConfig struct {
+	Key     string `yaml:"key"`     // 高德地图 Web服务 API Key
+	Timeout int    `yaml:"timeout"` // HTTP 请求超时（秒），默认 120
+}
+
 type Config struct {
 	Server     conf.Server         `yaml:"server"`
 	HealthAddr string              `yaml:"healthAddr"`
 	Etcd       conf.Etcd           `yaml:"etcd"`
 	MySQL      mysql.Config        `yaml:"mysql"`
 	Redis      redis.Config        `yaml:"redis"`
+	AMap       AMapConfig          `yaml:"amap"`
 	Mode       string              `yaml:"mode"`
 	Vault      secrets.VaultConfig `yaml:"vault"`
 }
@@ -57,6 +63,9 @@ func (c *Config) ApplyEnv() {
 	}
 	if v := conf.Env("ETCD_ADDRS", ""); v != "" {
 		c.Etcd.Addrs = strings.Split(v, ",")
+	}
+	if v := conf.Env("AMAP_KEY", ""); v != "" {
+		c.AMap.Key = v
 	}
 }
 

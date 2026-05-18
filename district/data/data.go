@@ -2,6 +2,7 @@ package data
 
 import (
 	"database/sql"
+	"time"
 
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/mysql"
@@ -14,7 +15,7 @@ type Data struct {
 	districtDal *DistrictDal // 缓存以避免每次调用重新分配
 }
 
-func New(cfg mysql.Config, redisCfg redis.Config) (*Data, func(), error) {
+func New(cfg mysql.Config, redisCfg redis.Config, amapKey string, amapTimeout time.Duration) (*Data, func(), error) {
 	// 使用 pkg/mysql 进行数据库连接（OTEL 配置集中管理）
 	db, dbCleanup, err := mysql.New(cfg)
 	if err != nil {
@@ -44,7 +45,7 @@ func New(cfg mysql.Config, redisCfg redis.Config) (*Data, func(), error) {
 		DB:  db,
 		Rdb: rc,
 	}
-	d.districtDal = &DistrictDal{db: db}
+	d.districtDal = &DistrictDal{db: db, amapKey: amapKey, amapTimeout: amapTimeout}
 	return d, cleanup, nil
 }
 

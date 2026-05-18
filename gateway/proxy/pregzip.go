@@ -3,7 +3,6 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"sort"
@@ -12,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
@@ -164,9 +164,11 @@ func servePreGzip(c *app.RequestContext, gzipped []byte) {
 }
 
 // tryPreGzipCache 尝试将成功的 GET 响应预压缩并缓存。
+// 仅对 cacheableMethods 白名单中的方法生效。
 func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, resp interface{}) bool {
-	// 仅 GET 请求
-	if string(c.Request.Method()) != http.MethodGet {
+
+	// 仅 GET 请求且在白名单中
+	if string(c.Request.Method()) != http.MethodGet || !p.cacheableMethods[service+"/"+method] {
 		return false
 	}
 
@@ -196,7 +198,7 @@ func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, r
 
 	// 解析为 map，检查是否为包装响应
 	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(s), &m); err != nil {
+	if err := sonic.UnmarshalString(s, &m); err != nil {
 		return false
 	}
 
@@ -212,29 +214,33 @@ func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, r
 		return false
 	}
 
-	// 构建与 handleRPCResponse 一致的响应信封
+	// 构建与 handleRPCResponse 一致的响应信封（使用 sonic，与 c.JSON 一致）
 	respBody := response.R{
 		Code:    0,
 		Message: "ok",
 		Data:    m["data"],
 	}
 
-	jsonBytes, err := json.Marshal(respBody)
+	jsonBytes, err := sonic.Marshal(respBody)
 	if err != nil {
 		return false
 	}
 
-	// 小响应不值得预压缩
+	// 小响应不值得预压缩 —— 但已解析过一次，直接投递避免 handleRPCResponse 重复解析
 	if len(jsonBytes) < preGzipMinSize {
-		return false
+		response.OK(c, m["data"])
+		c.Abort()
+		return true
 	}
 
 	// BestCompression：只压一次，用最高压缩率换取最小缓存体积
 	var buf bytes.Buffer
 	w, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+
 	if err != nil {
 		return false
 	}
+
 	if _, err := w.Write(jsonBytes); err != nil {
 		return false
 	}

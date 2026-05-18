@@ -8,4 +8,5 @@ import (
 type DistrictStore interface {
 	GetProvinces(ctx context.Context) ([]*v1.DistrictNode, error)
 	GetChildrenByParent(ctx context.Context, parentAdCode string) ([]*v1.DistrictNode, error)
+	UpdateDistrict(ctx context.Context) error
 }
