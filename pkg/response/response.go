@@ -32,8 +32,8 @@ func OK(c *app.RequestContext, data interface{}) {
 }
 
 // BizErr 使用解析后的 BizError 发送下游业务错误。
-// 使用 HttpStatus() 将业务错误码映射到适当的 HTTP 状态码
-// （例如 10014 Unauthorized → 401, 10015 Forbidden → 403）。
+// HTTP 状态码优先使用 BizError.HTTPStatus（精确映射），
+// 若 HTTPStatus == 0 则 fallback 到 HttpStatus(code) 按错误码范围推断。
 // P3-14: 在生产环境中，限制消息长度以防止泄漏内部细节。
 func BizErr(c *app.RequestContext, biz *errcode.BizError) {
 	// R5-P1-03: 防御 nil BizError，避免调用方忽略 ParseBizError bool 返回值时 panic
@@ -51,7 +51,12 @@ func BizErr(c *app.RequestContext, biz *errcode.BizError) {
 		msg = "internal error"
 		truncated = true
 	}
-	httpCode := HttpStatus(int(biz.Code))
+	// 优先使用 BizError 自带的 HTTPStatus（精确映射），
+	// 0 则 fallback 到按错误码范围的推断。
+	httpCode := biz.HTTPStatus
+	if httpCode <= 0 {
+		httpCode = HttpStatus(int(biz.Code))
+	}
 	// 消息被截断为 "internal error" 时，强制使用 HTTP 500 避免语义矛盾
 	// （400 暗示客户端错误，但实际是内部错误被截断）
 	if truncated && httpCode < 500 {
@@ -92,20 +97,37 @@ func InternalError(c *app.RequestContext) {
 
 // HttpStatus 将业务错误码映射到适当的 HTTP 状态码。
 // 导出版本供 proxy.handleRPCResponse 复用，消除重复映射逻辑。
-//   - 0          → 200 OK
-//   - 10014      → 401 Unauthorized（用户服务）
-//   - 10015      → 403 Forbidden（用户服务）
-//   - 10000-49999 → 400 Bad Request（其他业务错误）
-//   - 50000+     → 500 Internal Server Error（基础设施错误）
+//
+// 精确映射（优先匹配）：
+//
+//	10009 NotFound      → 404 Not Found
+//	10010 TokenRequired  → 401 Unauthorized
+//	10011 TokenInvalid   → 401 Unauthorized
+//	10012 TokenMismatch  → 401 Unauthorized
+//	10013 Internal       → 500 Internal Server Error
+//	10014 Unauthorized   → 401 Unauthorized
+//	10015 Forbidden      → 403 Forbidden
+//	10019 AccountLocked  → 423 Locked
+//
+// 范围回退：
+//
+//	0            → 200 OK
+//	10000-49999  → 400 Bad Request（其他业务错误）
+//	50000+       → 500 Internal Server Error（基础设施错误）
 func HttpStatus(code int) int {
 	if code == 0 {
 		return consts.StatusOK
 	}
 	switch code {
-	case int(errcode.CodeUserUnauthorized):
+	case int(errcode.CodeUserNotFound):
+		return consts.StatusNotFound
+	case int(errcode.CodeUserTokenRequired), int(errcode.CodeUserTokenInvalid),
+		int(errcode.CodeUserTokenMismatch), int(errcode.CodeUserUnauthorized):
 		return consts.StatusUnauthorized
 	case int(errcode.CodeUserForbidden):
 		return consts.StatusForbidden
+	case int(errcode.CodeUserAccountLocked):
+		return http.StatusLocked
 	case int(errcode.CodeUserInternal):
 		return consts.StatusInternalServerError
 	}

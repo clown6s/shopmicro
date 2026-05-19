@@ -51,8 +51,8 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 	return &v1.LogoutResp{}, nil
 }
 
-var errRefreshTokenRequired = newBiz(errcode.CodeUserTokenRequired, "refresh token is required")
-var errRefreshTokenInvalid = newBiz(errcode.CodeUserTokenInvalid, "invalid or expired refresh token")
+var errRefreshTokenRequired = newBizHTTP(errcode.CodeUserTokenRequired, "refresh token is required", 401)
+var errRefreshTokenInvalid = newBizHTTP(errcode.CodeUserTokenInvalid, "invalid or expired refresh token", 401)
 
 // refreshTokensScript 原子性地轮换刷新令牌 + 存储新 access token。
 // KEYS[1]=rtSetKey, KEYS[2]=newRTKey, KEYS[3]=tokenKey

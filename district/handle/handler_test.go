@@ -52,7 +52,7 @@ func (m *mockStoreForTest) GetProvinces(ctx context.Context) ([]*v1.DistrictNode
 	return nil, nil
 }
 
-func (m *mockStoreForTest) GetChildrenByParent(ctx context.Context, code string) ([]*v1.DistrictNode, error) {
+func (m *mockStoreForTest) GetChildrenByParent(ctx context.Context, code uint32) ([]*v1.DistrictNode, error) {
 	return nil, nil
 }
 

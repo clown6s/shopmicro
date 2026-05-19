@@ -21,6 +21,9 @@ import (
 )
 
 func newBiz(code uint32, msg string) *errcode.BizError { return errcode.NewBizError(code, msg) }
+func newBizHTTP(code uint32, msg string, httpStatus int) *errcode.BizError {
+	return errcode.BizErrorHTTPStatus(code, msg, httpStatus)
+}
 
 var (
 	errPhoneRequired    = newBiz(errcode.CodeUserPhoneRequired, "phone is required")
@@ -29,17 +32,17 @@ var (
 	errPasswordWeak     = newBiz(errcode.CodeUserPwdWeak, "password must be 8-128 characters with at least one letter and one digit")
 	errPasswordTooLong  = newBiz(errcode.CodeUserPwdTooLong, "password must not exceed 128 characters")
 	errPhoneExists      = newBiz(errcode.CodeUserPhoneExists, "phone already exists")
-	errInternal         = newBiz(errcode.CodeUserInternal, "internal error")
+	errInternal         = newBizHTTP(errcode.CodeUserInternal, "internal error", 500)
 	errPhonePwdWrong    = newBiz(errcode.CodeUserPhonePwdWrong, "phone or password incorrect")
 	errInvalidUserID    = newBiz(errcode.CodeUserInvalidID, "invalid user id")
 	errNothingUpdate    = newBiz(errcode.CodeUserNothingUpdate, "nothing to update")
-	errUserNotFound     = newBiz(errcode.CodeUserNotFound, "user not found")
-	errUnauthorized     = newBiz(errcode.CodeUserUnauthorized, "unauthorized: missing user identity")
-	errForbidden        = newBiz(errcode.CodeUserForbidden, "forbidden: cannot operate other user's data")
+	errUserNotFound     = newBizHTTP(errcode.CodeUserNotFound, "user not found", 404)
+	errUnauthorized     = newBizHTTP(errcode.CodeUserUnauthorized, "unauthorized: missing user identity", 401)
+	errForbidden        = newBizHTTP(errcode.CodeUserForbidden, "forbidden: cannot operate other user's data", 403)
 	errEmailFormat      = newBiz(errcode.CodeUserEmailFormat, "invalid email format")
-	errAccountLocked    = newBiz(errcode.CodeUserAccountLocked, "account temporarily locked due to too many failed login attempts")
-	errRegisterTooMany  = newBiz(errcode.CodeUserParam, "too many registration attempts, please try again later")
-	errRefreshTooMany   = newBiz(errcode.CodeUserParam, "too many refresh attempts, please try again later")
+	errAccountLocked    = newBizHTTP(errcode.CodeUserAccountLocked, "account temporarily locked due to too many failed login attempts", 423)
+	errRegisterTooMany  = newBizHTTP(errcode.CodeUserParam, "too many registration attempts, please try again later", 429)
+	errRefreshTooMany   = newBizHTTP(errcode.CodeUserParam, "too many refresh attempts, please try again later", 429)
 )
 
 // P1-21：手机号正则 — 中国手机号格式

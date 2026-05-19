@@ -23,6 +23,18 @@ type DistrictDal struct {
 	httpClient  *http.Client // 独立客户端，避免共享 http.DefaultClient
 }
 
+// 编译时接口满足性检查。
+// 此处定义局部接口镜像 handle.DistrictStore 的签名，
+// 确保 DistrictDal 在编译期满足 handle 层的接口契约。
+// 不直接 import handle 包以保持 data 层对 handle 层的单向依赖（handle → data 不可行，但 data 不应感知 handle）。
+var _ districtStoreCheck = (*DistrictDal)(nil)
+
+type districtStoreCheck interface {
+	GetProvinces(ctx context.Context) ([]*v1.DistrictNode, error)
+	GetChildrenByParent(ctx context.Context, parentAdCode uint32) ([]*v1.DistrictNode, error)
+	UpdateDistrict(ctx context.Context) error
+}
+
 // GetProvinces 查询所有省级行政区
 func (d *DistrictDal) GetProvinces(ctx context.Context) ([]*v1.DistrictNode, error) {
 	const query = `
@@ -41,17 +53,10 @@ func (d *DistrictDal) GetProvinces(ctx context.Context) ([]*v1.DistrictNode, err
 	return scanNodes(rows)
 }
 
-// maxAdCodeLen 行政区划代码最大长度（中国标准 adcode 6 位，留足扩展余量）
-const maxAdCodeLen = 20
-
 // GetChildrenByParent 查询指定行政区划的直接下级子节点
-func (d *DistrictDal) GetChildrenByParent(ctx context.Context, parentAdCode string) ([]*v1.DistrictNode, error) {
-	if parentAdCode == "" {
+func (d *DistrictDal) GetChildrenByParent(ctx context.Context, parentAdCode uint32) ([]*v1.DistrictNode, error) {
+	if parentAdCode == 0 {
 		return nil, fmt.Errorf("parentAdCode is required")
-	}
-	// R7-P2-08: 超长 parentAdCode 返回错误而非静默忽略
-	if len(parentAdCode) > maxAdCodeLen {
-		return nil, fmt.Errorf("parentAdCode too long (max %d chars)", maxAdCodeLen)
 	}
 
 	const query = `

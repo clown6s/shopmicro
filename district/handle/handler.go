@@ -59,7 +59,7 @@ func (s *DistrictServiceImpl) GetChildren(ctx context.Context, req *v1.GetChildr
 
 	code := strconv.FormatUint(uint64(parentAdCode), 10)
 	result, err, _ := s.sf.Do("children:"+code, func() (interface{}, error) {
-		nodes, err := s.store.GetChildrenByParent(ctx, code)
+		nodes, err := s.store.GetChildrenByParent(ctx, parentAdCode)
 		if err != nil {
 			return nil, err
 		}

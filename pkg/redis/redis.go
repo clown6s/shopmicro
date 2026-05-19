@@ -133,6 +133,12 @@ func (c *Client) Ping(ctx context.Context) bool {
 	return c.rdb.Ping(ctx).Err() == nil
 }
 
+// PingErr 检查 Redis 连通性，返回具体错误。
+// 供 pkg/health.RedisPinger 接口使用，使健康检查能记录错误详情。
+func (c *Client) PingErr(ctx context.Context) error {
+	return c.rdb.Ping(ctx).Err()
+}
+
 // Expire 为已有 key 设置 TTL。
 func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	return c.rdb.Expire(ctx, key, ttl).Err()

@@ -7,65 +7,66 @@ import (
 	"strings"
 )
 
-// BizError 业务错误，通过 gRPC 传递给 gateway
-// Gateway 通过 ParseBizError 从错误消息字符串解析提取
+// BizError 业务错误，通过 gRPC 传递给 gateway。
+// 包含 HTTPStatus 字段，供 gateway 直接使用精确的 HTTP 状态码，
+// 避免仅依赖错误码范围的粗粒度映射。
 type BizError struct {
-	Code    uint32
-	Message string
+	Code       uint32
+	Message    string
+	HTTPStatus int // 推荐的 HTTP 状态码；0 表示由 gateway 按错误码范围推断。
 }
 
 func NewBizError(code uint32, msg string) *BizError {
 	return &BizError{Code: code, Message: msg}
 }
 
-// bizPrefix 用于 BizError.Error() 的前缀标记
-// 使用特殊前缀避免与普通错误消息冲突
+// BizErrorHTTPStatus 创建附带 HTTP 状态码的 BizError。
+// 调用方应优先使用此构造器，使 gateway 能直接映射到精确的 HTTP 状态码。
+func BizErrorHTTPStatus(code uint32, msg string, httpStatus int) *BizError {
+	return &BizError{Code: code, Message: msg, HTTPStatus: httpStatus}
+}
+
+// bizPrefix 是 Error() 的序列化前缀，用于 Kitex gRPC 跨进程传输时标识 BizError。
+// 这是框架层面的传输协议，不可去除 —— Kitex 会把 error.Error() 序列化为字符串，
+// gateway 端需要通过此前缀识别并还原 BizError。
 const bizPrefix = "BIZ/"
 
 func (e *BizError) Error() string {
 	return fmt.Sprintf("%s%d: %s", bizPrefix, e.Code, e.Message)
 }
 
-// ParseBizError 从 gRPC 错误消息中解析 BizError
-// R4-P1-02: 使用 HasPrefix 优先匹配，防止子串伪造
-// P3-05 修复：先用 errors.As 处理 wrapped BizError，再回退到字符串前缀解析
-// Kitex 远程错误格式: "remote or network error[remote]: biz error: BIZ/xxx: ..."
-// 需要同时处理精确前缀匹配和 Kitex 包装后的子串匹配。
+// ParseBizError 从 error 中提取 BizError。
+//
+// 策略：
+//  1. errors.As —— 进程内 wrapped BizError（类型安全，零误判）
+//  2. 字符串回退  —— Kitex 远程传输后 error 被序列化为普通 string，
+//     errors.As 无法穿透，只能通过 BIZ/ 前缀识别（必要的兼容层）。
 func ParseBizError(err error) (*BizError, bool) {
 	if err == nil {
 		return nil, false
 	}
-	// 先尝试 errors.As 来处理被包装的 BizError（例如 fmt.Errorf("ctx: %w", bizErr)）
 	var biz *BizError
 	if errors.As(err, &biz) {
 		return biz, true
 	}
-	msg := err.Error()
-	// 优先匹配消息起始位置的 BIZ/ 前缀（精确匹配）
-	if strings.HasPrefix(msg, bizPrefix) {
-		content := msg[len(bizPrefix):]
-		colon := strings.Index(content, ":")
-		if colon == -1 {
-			return nil, false
-		}
-		code, err2 := strconv.ParseUint(content[:colon], 10, 32)
-		if err2 != nil {
-			return nil, false
-		}
-		message := strings.TrimSpace(content[colon+1:])
-		return &BizError{Code: uint32(code), Message: message}, true
-	}
-	// 回退：Kitex 远程错误包裹格式
-	// "remote or network error[remote]: biz error: BIZ/xxx: ..."
-	// 此时 BIZ/ 不在消息开头，使用子串搜索
-	if idx := strings.Index(msg, bizPrefix); idx > 0 {
+	return parseBizErrorFromString(err.Error())
+}
+
+// parseBizErrorFromString 从错误消息字符串中解析 BizError。
+// 仅用于 Kitex 远程传输兼容 —— 不应在进程内使用。
+//
+// 匹配规则：
+//   - "BIZ/{code}: {message}" —— 精确前缀匹配
+//   - "... BIZ/{code}: {message}" —— Kitex 包裹格式子串匹配
+func parseBizErrorFromString(msg string) (*BizError, bool) {
+	if idx := strings.Index(msg, bizPrefix); idx >= 0 {
 		content := msg[idx+len(bizPrefix):]
 		colon := strings.Index(content, ":")
 		if colon == -1 {
 			return nil, false
 		}
-		code, err2 := strconv.ParseUint(content[:colon], 10, 32)
-		if err2 != nil {
+		code, err := strconv.ParseUint(content[:colon], 10, 32)
+		if err != nil {
 			return nil, false
 		}
 		message := strings.TrimSpace(content[colon+1:])

@@ -2,6 +2,7 @@ package errcode
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -15,6 +16,16 @@ func TestNewBizError(t *testing.T) {
 	}
 	if err.Message != "phone is required" {
 		t.Fatalf("expected msg 'phone is required', got %q", err.Message)
+	}
+}
+
+func TestBizErrorHTTPStatus(t *testing.T) {
+	err := BizErrorHTTPStatus(CodeUserUnauthorized, "unauthorized", 401)
+	if err.HTTPStatus != 401 {
+		t.Fatalf("expected HTTPStatus 401, got %d", err.HTTPStatus)
+	}
+	if err.Code != CodeUserUnauthorized {
+		t.Fatalf("expected code %d, got %d", CodeUserUnauthorized, err.Code)
 	}
 }
 
@@ -54,7 +65,7 @@ func TestParseBizError(t *testing.T) {
 		{
 			name:     "zero code",
 			err:      NewBizError(0, "ok"),
-			wantOK:   true, // ParseBizError parses any BIZ/ prefixed error
+			wantOK:   true,
 			wantCode: 0,
 			wantMsg:  "ok",
 		},
@@ -69,6 +80,20 @@ func TestParseBizError(t *testing.T) {
 			name:   "BIZ/ in middle not at start (false positive check)",
 			err:    errors.New("category: BUSINESS/Sales/100 - something"),
 			wantOK: false,
+		},
+		{
+			name:     "wrapped BizError via fmt.Errorf %w",
+			err:      fmt.Errorf("context: %w", NewBizError(10009, "not found")),
+			wantOK:   true,
+			wantCode: 10009,
+			wantMsg:  "not found",
+		},
+		{
+			name:     "BizError with HTTPStatus preserved through errors.As",
+			err:      BizErrorHTTPStatus(CodeUserUnauthorized, "token expired", 401),
+			wantOK:   true,
+			wantCode: CodeUserUnauthorized,
+			wantMsg:  "token expired",
 		},
 	}
 

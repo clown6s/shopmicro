@@ -2,21 +2,31 @@ package health
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net/http"
 	"sync/atomic"
 	"time"
 
 	"shopmicro/pkg/logger"
-	"shopmicro/pkg/redis"
 )
 
+// DBPinger 是数据库健康检查所需的接口。
+// database/sql.(*DB) 隐式满足此接口。
+type DBPinger interface {
+	PingContext(ctx context.Context) error
+}
+
+// RedisPinger 是 Redis 健康检查所需的接口。
+// shopmicro/pkg/redis.(*Client) 满足此接口。
+type RedisPinger interface {
+	PingErr(ctx context.Context) error
+}
+
 // Dependencies 定义健康检查所需的依赖接口。
-// 各服务的 data.Data 都可隐式满足此接口。
+// 各服务的 data.Data 都可适配此接口。
 type Dependencies struct {
-	DB  *sql.DB
-	Rdb *redis.Client
+	DB  DBPinger
+	Rdb RedisPinger
 }
 
 // BuildHealthMux 构建健康检查 HTTP 路由。
@@ -53,8 +63,7 @@ func BuildHealthMux(deps Dependencies, healthy *atomic.Bool) *http.ServeMux {
 		if deps.Rdb == nil {
 			logger.Warn("healthz: rdb is nil")
 			unhealthy = true
-		} else if err := deps.Rdb.RawClient().Ping(ctx).Err(); err != nil {
-			// R6-P2-03: 记录 Redis 实际错误信息，而非仅 "redis"
+		} else if err := deps.Rdb.PingErr(ctx); err != nil {
 			logger.Warnf("healthz: redis ping failed: %v", err)
 			unhealthy = true
 		}
