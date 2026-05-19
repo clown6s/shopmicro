@@ -41,11 +41,14 @@ func init() {
 	dummyPwd := make([]byte, 32)
 	if _, err := rand.Read(dummyPwd); err != nil {
 		// crypto/rand 失败是致命错误（意味着 OS CSPRNG 不可用）
-		panic("crypto/rand read failed: " + err.Error())
+		// 不暴露 err.Error() 到 panic 信息，防止泄露内部实现路径
+		logger.Errorf("crypto/rand init failed: %v", err)
+		panic("security: crypto/rand init failed, see server logs")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(base64.StdEncoding.EncodeToString(dummyPwd)), 12)
 	if err != nil {
-		panic("bcrypt generate timing dummy failed: " + err.Error())
+		logger.Errorf("bcrypt timing dummy generation failed: %v", err)
+		panic("security: init failed, see server logs")
 	}
 	timingDummyHash = hash
 }
