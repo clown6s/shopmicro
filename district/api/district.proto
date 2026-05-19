@@ -19,7 +19,7 @@ message GetProvincesResp {
 
 // GetChildren —— 返回指定行政区划的直接下级子节点
 message GetChildrenReq {
-  string parentAdCode = 1;
+  uint32 parentAdCode = 1;
 }
 
 message GetChildrenResp {
@@ -33,7 +33,7 @@ message UpdateDistrictResp {}
 // DistrictNode —— 扁平节点，无 children 字段，用于懒加载接口
 message DistrictNode {
   int64 id = 1;
-  string adCode = 2;
+  uint32 adCode = 2;
   string name = 3;
   string level = 4;
   string center = 5;

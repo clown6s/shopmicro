@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	v1 "shopmicro/district/kitex_gen/api/district/v1"
@@ -24,10 +25,10 @@ type DistrictDal struct {
 // GetProvinces 查询所有省级行政区
 func (d *DistrictDal) GetProvinces(ctx context.Context) ([]*v1.DistrictNode, error) {
 	const query = `
-		SELECT id, adcode, name, level, center
+		SELECT id, ad_code, name, level, center
 		FROM district
 		WHERE level = 'province'
-		ORDER BY adcode
+		ORDER BY ad_code
 	`
 
 	rows, err := d.db.QueryContext(ctx, query)
@@ -49,10 +50,10 @@ func (d *DistrictDal) GetChildrenByParent(ctx context.Context, parentAdCode stri
 	}
 
 	const query = `
-		SELECT id, adcode, name, level, center
+		SELECT id, ad_code, name, level, center
 		FROM district
 		WHERE parent_adcode = ?
-		ORDER BY adcode
+		ORDER BY ad_code
 	`
 
 	rows, err := d.db.QueryContext(ctx, query, parentAdCode)
@@ -195,61 +196,96 @@ func flattenDistricts(districts []amapDistrict, parentAdCode int) []districtReco
 
 // ==================== 全量替换 ====================
 
-const batchSize = 500
+const batchSize = 1000
 
-// fullReplace 事务内 DELETE 全表 + 分批 INSERT。
 func (d *DistrictDal) fullReplace(ctx context.Context, records []districtRecord) error {
+
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
+		return err
 	}
 
-	// 确保出错时回滚
 	defer func() {
 		if err != nil {
-			if rbErr := tx.Rollback(); rbErr != nil {
-				logger.Errorf("district update rollback failed: %v", rbErr)
-			}
+			_ = tx.Rollback()
 		}
 	}()
 
-	// 清空全表
-	if _, err = tx.ExecContext(ctx, "DELETE FROM district"); err != nil {
-		return fmt.Errorf("delete all districts: %w", err)
-	}
-
-	// 分批插入
-	const insertSQL = `INSERT INTO district (ad_code, name, level, center, parent_adcode, created_at) VALUES (?,?,?,?,?,NOW())`
-	stmt, err := tx.PrepareContext(ctx, insertSQL)
+	_, err = tx.ExecContext(
+		ctx,
+		"DELETE FROM district",
+	)
 	if err != nil {
-		return fmt.Errorf("prepare insert: %w", err)
+		return err
 	}
-	defer stmt.Close()
 
 	for i := 0; i < len(records); i += batchSize {
+
 		end := i + batchSize
 		if end > len(records) {
 			end = len(records)
 		}
+
 		batch := records[i:end]
 
+		var (
+			values []string
+			args   []any
+		)
+
+		values =
+			make([]string, 0, len(batch))
+
+		args =
+			make([]any, 0, len(batch)*5)
+
 		for _, r := range batch {
-			if _, err = stmt.ExecContext(ctx, r.AdCode, r.Name, r.Level, r.Center, r.ParentAdCode); err != nil {
-				return fmt.Errorf("insert district %d (%s): %w", r.AdCode, r.Name, err)
-			}
+
+			values = append(
+				values,
+				"(?,?,?,?,?,NOW())",
+			)
+
+			args = append(
+				args,
+				r.AdCode,
+				r.Name,
+				r.Level,
+				r.Center,
+				r.ParentAdCode,
+			)
 		}
 
-		logger.Infof("district update: inserted batch %d-%d/%d", i, end, len(records))
+		query := fmt.Sprintf(
+			`
+				INSERT INTO district
+				(
+					ad_code,
+					name,
+					level,
+					center,
+					parent_adcode,
+					created_at
+				)
+				VALUES %s
+`,
+			strings.Join(values, ","),
+		)
+
+		_, err =
+			tx.ExecContext(
+				ctx,
+				query,
+				args...,
+			)
+
+		if err != nil {
+			return err
+		}
 	}
 
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
-	}
-
-	return nil
+	return tx.Commit()
 }
-
-// ==================== 扫描工具 ====================
 
 func scanNodes(rows *sql.Rows) ([]*v1.DistrictNode, error) {
 	var nodes []*v1.DistrictNode

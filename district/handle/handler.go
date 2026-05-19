@@ -2,6 +2,7 @@ package handle
 
 import (
 	"context"
+	"strconv"
 
 	"golang.org/x/sync/singleflight"
 
@@ -42,12 +43,13 @@ func (s *DistrictServiceImpl) GetProvinces(ctx context.Context, req *v1.GetProvi
 func (s *DistrictServiceImpl) GetChildren(ctx context.Context, req *v1.GetChildrenReq) (*v1.GetChildrenResp, error) {
 
 	parentAdCode := req.GetParentAdCode()
-	if parentAdCode == "" {
+	if parentAdCode == 0 {
 		return &v1.GetChildrenResp{List: []*v1.DistrictNode{}}, nil
 	}
 
-	result, err, _ := s.sf.Do("children:"+parentAdCode, func() (interface{}, error) {
-		nodes, err := s.districtDal.GetChildrenByParent(ctx, parentAdCode)
+	code := strconv.FormatUint(uint64(parentAdCode), 10)
+	result, err, _ := s.sf.Do("children:"+code, func() (interface{}, error) {
+		nodes, err := s.districtDal.GetChildrenByParent(ctx, code)
 		if err != nil {
 			return nil, err
 		}
