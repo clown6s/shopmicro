@@ -46,8 +46,12 @@ const maxAdCodeLen = 20
 
 // GetChildrenByParent 查询指定行政区划的直接下级子节点
 func (d *DistrictDal) GetChildrenByParent(ctx context.Context, parentAdCode string) ([]*v1.DistrictNode, error) {
-	if len(parentAdCode) > maxAdCodeLen || parentAdCode == "" {
-		return []*v1.DistrictNode{}, nil
+	if parentAdCode == "" {
+		return nil, fmt.Errorf("parentAdCode is required")
+	}
+	// R7-P2-08: 超长 parentAdCode 返回错误而非静默忽略
+	if len(parentAdCode) > maxAdCodeLen {
+		return nil, fmt.Errorf("parentAdCode too long (max %d chars)", maxAdCodeLen)
 	}
 
 	const query = `
@@ -137,7 +141,8 @@ func (d *DistrictDal) fetchAMapData(ctx context.Context) (*amapResponse, error) 
 		return nil, fmt.Errorf("amap api returned status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// R4-P2-13: 限制最大读取 10MB，防止 API 端异常返回大量数据导致 OOM
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
@@ -206,7 +211,12 @@ func flattenDistricts(districts []amapDistrict, parentAdCode int) []districtReco
 // 且 batch 过大会导致锁表时间过长。
 const batchSize = 1000
 
-func (d *DistrictDal) fullReplace(ctx context.Context, records []districtRecord) error {
+// R4-P1-06: 使用命名返回值，确保 tx.Commit() 失败时 defer 能看到错误并 rollback
+func (d *DistrictDal) fullReplace(ctx context.Context, records []districtRecord) (err error) {
+	// R7-P2-09: 前置条件检查，防止 nil/空 records 导致删全表不插入
+	if len(records) == 0 {
+		return fmt.Errorf("fullReplace: records must not be empty")
+	}
 
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {

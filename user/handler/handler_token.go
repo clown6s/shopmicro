@@ -78,17 +78,28 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 	// 这是标准的 token rotation 安全设计（RFC 6749 §6）。
 	rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, rt)
 	userIDStr, err := s.rdb.GetDel(ctx, rtKey)
-	if err != nil || userIDStr == "" {
+	if err != nil {
+		// R5-P1-02: Redis 故障时记录日志，区分网络错误和 token 不存在
+		logger.Warnf("refresh token: redis GetDel failed: %v", err)
+		return nil, errRefreshTokenInvalid
+	}
+	if userIDStr == "" {
 		return nil, errRefreshTokenInvalid
 	}
 
 	userID, err := parseInt64(userIDStr)
 	if err != nil || userID <= 0 {
+		// R4-P1-04: 记录异常 userIDStr，便于排查数据一致性问题
+		if userIDStr != "" {
+			logger.Warnf("refresh token: invalid userID from Redis (raw=%q, err=%v)", userIDStr, err)
+		}
 		return nil, errRefreshTokenInvalid
 	}
 
 	// P2-07：按用户 ID 限制刷新令牌频率（每分钟 10 次）
-	refreshRateKey := refreshRateLimitKey + userIDStr
+	// R7-P2-04: 使用 fmt.Sprintf("%d", userID) 而非原始 userIDStr，
+	// 确保 key 一致性（避免 Redis 中存储非规范化值如前导零）
+	refreshRateKey := refreshRateLimitKey + fmt.Sprintf("%d", userID)
 	limited, rlErr := s.rdb.RunScript(ctx, rateLimitScript, []string{refreshRateKey}, refreshRateLimitMax, refreshRateLimitWindowSec)
 	if rlErr != nil {
 		logger.Warnf("refresh token: rate limit check failed (user_id=%d): %v", userID, rlErr)
@@ -128,7 +139,7 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 	// 原子性：AT 写入 + RT 轮换 在同一个 Lua 脚本中完成
 	if _, err := s.rdb.RunScript(ctx, refreshTokensScript,
 		[]string{rtSetKey, newRTKey, tokenKey},
-		rt, newRT, userIDStr, int(rtTTL.Seconds()), int(rtTTL.Seconds()), token, int(atTTL.Seconds()),
+		rt, newRT, fmt.Sprintf("%d", userID), int(rtTTL.Seconds()), int(rtTTL.Seconds()), token, int(atTTL.Seconds()),
 	); err != nil {
 		logger.Errorf("refresh token: atomic token rotation failed (user_id=%d): %v", userID, err)
 		return nil, errInternal

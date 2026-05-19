@@ -56,7 +56,7 @@ func Run(configPath string) error {
 	if err := logger.Init(cfg.Mode); err != nil {
 		return fmt.Errorf("logger init failed: %w", err)
 	}
-	defer logger.L.Sync()
+	defer logger.C().Sync()
 
 	// =========================
 	// otel 追踪器
@@ -107,8 +107,13 @@ func Run(configPath string) error {
 	// kitex 服务端
 	// =========================
 
+	districtHandler, err := handle.NewDistrictHandler(dataProvider.District())
+	if err != nil {
+		return fmt.Errorf("create district handler: %w", err)
+	}
+
 	svr := v1.NewServer(
-		handle.NewDistrictHandler(dataProvider),
+		districtHandler,
 
 		server.WithServerBasicInfo(&rpcinfo.EndpointBasicInfo{
 			ServiceName: "district",

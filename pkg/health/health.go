@@ -26,6 +26,7 @@ func BuildHealthMux(deps Dependencies, healthy *atomic.Bool) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		if !healthy.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprintf(w, `{"status":"degraded"}`)
@@ -52,17 +53,20 @@ func BuildHealthMux(deps Dependencies, healthy *atomic.Bool) *http.ServeMux {
 		if deps.Rdb == nil {
 			logger.Warn("healthz: rdb is nil")
 			unhealthy = true
-		} else if !deps.Rdb.Ping(ctx) {
-			logger.Warn("healthz: dependency check failed: redis")
+		} else if err := deps.Rdb.RawClient().Ping(ctx).Err(); err != nil {
+			// R6-P2-03: 记录 Redis 实际错误信息，而非仅 "redis"
+			logger.Warnf("healthz: redis ping failed: %v", err)
 			unhealthy = true
 		}
 
 		if unhealthy {
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprintf(w, `{"status":"unhealthy"}`)
 			return
 		}
 
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ok"}`)
 	})

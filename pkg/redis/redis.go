@@ -27,12 +27,8 @@ func (c *Config) Validate() error {
 	if c.Addr == "" {
 		return fmt.Errorf("redis addr is required")
 	}
-	if c.PoolSize < 0 {
-		return fmt.Errorf("redis poolSize must be non-negative, got %d", c.PoolSize)
-	}
-	if c.MinIdleConns < 0 {
-		return fmt.Errorf("redis minIdleConns must be non-negative, got %d", c.MinIdleConns)
-	}
+	// R5-P2-13: 移除负数检查 — setDefaults() 将负数转为默认值，
+	// New() 先调 Validate 再调 setDefaults，此处只检查必填字段
 	return nil
 }
 
@@ -59,6 +55,10 @@ type Client struct {
 }
 
 func New(cfg Config) (*Client, func(), error) {
+	// R5-P2-10: 先校验再设默认值，提供清晰的错误信息（如 "redis addr is required"）
+	if err := cfg.Validate(); err != nil {
+		return nil, nil, err
+	}
 	cfg.setDefaults()
 	opt := &redis.Options{
 		Addr:            cfg.Addr,

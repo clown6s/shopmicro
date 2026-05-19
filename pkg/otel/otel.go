@@ -71,12 +71,11 @@ func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(cont
 			logger.Infof("otel: exporter unavailable in dev mode (endpoint=%s), tracing disabled: %v", endpoint, err)
 			return func(ctx context.Context) error { return nil }
 		}
-		// 生产/预发环境：OTLP 不可达是一个严重问题。
-		// 返回一个 noop shutdown func，使调用方的 defer 安全执行。
-		// 调用方应检查返回值是否为 nil 来判断初始化是否成功。
+		// R4-P1-07: 生产/预发环境：返回 noop shutdown func，使调用方的 defer 安全执行。
+		// 之前返回 nil 会导致调用方 defer shutdown(ctx) 时 panic。
 		logger.Errorf("otel: failed to create exporter (endpoint=%s), tracing DISABLED. "+
 			"Verify OTEL_EXPORTER_OTLP_ENDPOINT is reachable: %v", endpoint, err)
-		return nil
+		return func(ctx context.Context) error { return nil }
 	}
 
 	// 可配置的采样率

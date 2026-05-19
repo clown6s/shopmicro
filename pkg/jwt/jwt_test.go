@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -136,7 +137,7 @@ func TestParse_WrongSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = wrongParser.Parse(token)
-	if err != ErrTokenInvalid {
+	if !errors.Is(err, ErrTokenInvalid) {
 		t.Fatalf("expected ErrTokenInvalid, got %v", err)
 	}
 }
@@ -147,7 +148,7 @@ func TestParse_MalformedToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = parser.Parse("not.a.valid.jwt")
-	if err != ErrTokenInvalid {
+	if !errors.Is(err, ErrTokenInvalid) {
 		t.Fatalf("expected ErrTokenInvalid, got %v", err)
 	}
 }
@@ -160,7 +161,7 @@ func TestParse_AlgorithmConfusion(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = parser.Parse(malformedToken)
-	if err != ErrTokenInvalid {
+	if !errors.Is(err, ErrTokenInvalid) {
 		t.Fatalf("expected ErrTokenInvalid (algorithm confusion blocked), got %v", err)
 	}
 }
@@ -197,5 +198,103 @@ func TestClaims_UserIDOnly(t *testing.T) {
 	}
 	if claims.UserID != 99 {
 		t.Fatalf("expected user_id 99, got %d", claims.UserID)
+	}
+}
+
+// R4-P2-18: WithAudience 功能测试
+
+func TestGenerateWithAudience(t *testing.T) {
+	gen, _ := NewGenerator(testSecret, time.Hour, testIssuer)
+	gen.WithAudience("app-web", "app-mobile")
+
+	token, err := gen.Generate(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parser, _ := NewParser(testSecret, testIssuer)
+	claims, err := parser.Parse(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims.Audience) != 2 {
+		t.Fatalf("expected 2 audiences, got %d: %v", len(claims.Audience), claims.Audience)
+	}
+}
+
+func TestParse_AudienceMatch(t *testing.T) {
+	gen, _ := NewGenerator(testSecret, time.Hour, testIssuer)
+	gen.WithAudience("app-web")
+
+	token, _ := gen.Generate(1)
+
+	parser, _ := NewParser(testSecret, testIssuer)
+	parser.WithAudience("app-web")
+	claims, err := parser.Parse(token)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if claims.UserID != 1 {
+		t.Fatalf("expected user_id 1, got %d", claims.UserID)
+	}
+}
+
+func TestParse_AudienceMismatch(t *testing.T) {
+	gen, _ := NewGenerator(testSecret, time.Hour, testIssuer)
+	gen.WithAudience("app-web")
+
+	token, _ := gen.Generate(1)
+
+	parser, _ := NewParser(testSecret, testIssuer)
+	parser.WithAudience("app-admin")
+	_, err := parser.Parse(token)
+	if err != ErrTokenAudience {
+		t.Fatalf("expected ErrTokenAudience, got %v", err)
+	}
+}
+
+func TestParse_AudienceMultipleAllowed(t *testing.T) {
+	gen, _ := NewGenerator(testSecret, time.Hour, testIssuer)
+	gen.WithAudience("app-web")
+
+	token, _ := gen.Generate(1)
+
+	parser, _ := NewParser(testSecret, testIssuer)
+	parser.WithAudience("app-admin", "app-web")
+	claims, err := parser.Parse(token)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if claims.UserID != 1 {
+		t.Fatalf("expected user_id 1, got %d", claims.UserID)
+	}
+}
+
+func TestParse_NoAudienceConfigured(t *testing.T) {
+	gen, _ := NewGenerator(testSecret, time.Hour, testIssuer)
+	gen.WithAudience("app-web")
+
+	token, _ := gen.Generate(1)
+
+	parser, _ := NewParser(testSecret, testIssuer)
+	claims, err := parser.Parse(token)
+	if err != nil {
+		t.Fatalf("expected no error when parser has no audience configured, got %v", err)
+	}
+	if claims.UserID != 1 {
+		t.Fatalf("expected user_id 1, got %d", claims.UserID)
+	}
+}
+
+func TestParse_AudienceInTokenButParserExpects(t *testing.T) {
+	gen, _ := NewGenerator(testSecret, time.Hour, testIssuer)
+
+	token, _ := gen.Generate(1)
+
+	parser, _ := NewParser(testSecret, testIssuer)
+	parser.WithAudience("app-web")
+	_, err := parser.Parse(token)
+	if err != ErrTokenAudience {
+		t.Fatalf("expected ErrTokenAudience, got %v", err)
 	}
 }

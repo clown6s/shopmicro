@@ -60,7 +60,7 @@ func Run(configPath string) error {
 	// =========================
 
 	logger.Init(cfg.Mode)
-	defer logger.L.Sync()
+	defer logger.C().Sync()
 
 	// =========================
 	// otel 链路追踪

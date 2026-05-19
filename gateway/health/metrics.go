@@ -15,21 +15,39 @@ import (
 // 每 10 秒在后台 goroutine 中更新一次，Prometheus 15s 抓取间隔下数据足够新鲜。
 var cachedMemStats atomic.Pointer[runtime.MemStats]
 
+// metricsStop 用于优雅停止 metrics 更新 goroutine
+var metricsStop chan struct{}
+
 func init() {
 	// 立即填充一次，避免首次请求返回零值
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	cachedMemStats.Store(&m)
 
+	// R4-P1-02: 通过 metricsStop channel 支持优雅停止
+	metricsStop = make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			var m runtime.MemStats
-			runtime.ReadMemStats(&m)
-			cachedMemStats.Store(&m)
+		for {
+			select {
+			case <-ticker.C:
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				cachedMemStats.Store(&m)
+			case <-metricsStop:
+				return
+			}
 		}
 	}()
+}
+
+// StopMetricsUpdater 停止 metrics 缓存更新的后台 goroutine。
+// 应在服务优雅关闭时调用。
+func StopMetricsUpdater() {
+	if metricsStop != nil {
+		close(metricsStop)
+	}
 }
 
 // MetricsHandler 暴露 Prometheus 格式的运行时指标端点，供 Prometheus 抓取。

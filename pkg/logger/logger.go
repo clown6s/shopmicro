@@ -1,7 +1,6 @@
 package logger
 
 import (
-	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,12 +10,19 @@ import (
 )
 
 var (
-	L    *zap.SugaredLogger
-	once sync.Once
+	// R6-P2-07: 使用 atomic.Pointer 替代裸指针，消除 C() 的数据竞争。
+	// Init() 中通过 Store 设置，C() 通过 Load 读取，atomic 保证 happens-before。
+	logPtr atomic.Pointer[zap.SugaredLogger]
+	once   sync.Once
 
 	// P1-09: 使用 atomic.Bool 替代裸 bool，消除 Init() 的数据竞争。
 	// initialized 在 once.Do 内部设置，保证只写一次。
 	initialized atomic.Bool
+
+	// R6-P1-01: 使用 atomic.Pointer[error] 替代裸 error，
+	// 消除 Init() 中 once.Do 之前的竞态读取。
+	// atomic.Pointer.Store happens-before Load，保证并发安全。
+	initErr atomic.Pointer[error]
 )
 
 // P3-11: 用于检测日志数据中敏感信息的模式。
@@ -75,12 +81,16 @@ func wordMatch(s, pattern string) bool {
 
 func Init(mode string) error {
 	if initialized.Load() {
-		// P1-09: 使用 atomic.Bool 的 Load 替代裸 bool 读取，消除数据竞争。
-		// 此警告帮助开发者发现意外多次初始化的问题。
-		fmt.Fprintf(zap.NewStdLog(zap.NewNop()).Writer(), "[WARN] logger.Init called more than once (mode=%s), ignoring\n", mode)
+		// R7-P2-01: 此时 logger 已成功初始化，直接用 C() 输出警告。
+		// 之前写入 zap.NewNop() 导致警告被静默丢弃。
+		C().Warnf("logger.Init called more than once (mode=%s), ignoring", mode)
 		return nil
 	}
-	var initErr error
+	// R6-P1-01: 先通过 atomic.Pointer 读取首次初始化的错误。
+	if errPtr := initErr.Load(); errPtr != nil {
+		return *errPtr
+	}
+	var firstErr error
 	once.Do(func() {
 		var cfg zap.Config
 		if strings.ToLower(mode) == "dev" {
@@ -93,20 +103,33 @@ func Init(mode string) error {
 		// P1-07: 为 Error 及更高级别添加堆栈跟踪
 		log, err := cfg.Build(zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.ErrorLevel))
 		if err != nil {
-			initErr = err
+			firstErr = err
+			// R7-P2-02: 在 once.Do 内部原子存储错误，
+			// 确保并发的 goroutine 在 once.Do 返回后能读到错误。
+			initErr.Store(&firstErr)
 			return
 		}
-		L = log.Sugar()
+		sugared := log.Sugar()
+		logPtr.Store(sugared)
 		initialized.Store(true)
 	})
-	return initErr
+	if firstErr != nil {
+		return firstErr
+	}
+	// R7-P2-02: once.Do 成功但 firstErr 为 nil 的并发 goroutine，
+	// 检查是否有其他 goroutine 已在 once.Do 内存储了错误。
+	if errPtr := initErr.Load(); errPtr != nil {
+		return *errPtr
+	}
+	return nil
 }
 
+// R6-P2-07: 使用 atomic.Pointer.Load 替代裸指针读取，并发安全
 func C() *zap.SugaredLogger {
-	if L == nil {
-		return zap.NewNop().Sugar()
+	if l := logPtr.Load(); l != nil {
+		return l
 	}
-	return L
+	return zap.NewNop().Sugar()
 }
 
 func Info(args ...interface{})                    { C().Info(args...) }

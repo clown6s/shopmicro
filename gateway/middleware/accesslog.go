@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
@@ -56,10 +57,14 @@ func AccessLogMiddleware() app.HandlerFunc {
 			traceID = span.SpanContext().TraceID().String()
 		}
 
-		// R4-SEC-03: IP 脱敏以满足隐私合规要求 (GDPR)
+		// R5-P2-02: 按字节截断可能切断多字节 UTF-8 序列，
+		// 使用 utf8.Valid 找到安全边界
 		userAgent := string(c.Request.Header.Peek("User-Agent"))
 		if len(userAgent) > 128 {
 			userAgent = userAgent[:128]
+			if !utf8.ValidString(userAgent) {
+				userAgent = string([]rune(userAgent))
+			}
 		}
 		logger.C().Desugar().Info("[ACCESS]",
 			zap.String("method", string(c.Method())),

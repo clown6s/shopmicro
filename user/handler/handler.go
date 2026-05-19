@@ -80,7 +80,7 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer s
 	if err != nil {
 		return nil, fmt.Errorf("init jwt generator failed: %w", err)
 	}
-	// 刷新令牌：默认 7 天（必须大于等于访问令牌）
+	// 刷新令牌：默认访问令牌过期时间的 7 倍，最少 24 小时
 	rtExpHrs := jwtExpHours * 7
 	if rtExpHrs < 24 {
 		rtExpHrs = 168 // 至少 7 天
@@ -212,7 +212,8 @@ func (s *UserServiceImpl) checkOwnership(ctx context.Context, targetID int64) er
 		return errUnauthorized
 	}
 	callerID, err := parseInt64(userIDStr)
-	if err != nil || callerID == 0 {
+	// R7-P1-02: 拒绝负数 ID — parseInt64 允许负数通过，负数 ID 会导致 Redis key 异常
+	if err != nil || callerID <= 0 {
 		return errUnauthorized
 	}
 	if callerID != targetID {

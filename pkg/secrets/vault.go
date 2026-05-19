@@ -24,6 +24,16 @@ type VaultConfig struct {
 	Namespace string `yaml:"namespace"`
 }
 
+// R5-P2-11: String() 脱敏 Token，防止 %+v 格式化泄漏凭证
+func (c VaultConfig) String() string {
+	masked := "***"
+	if c.Token == "" {
+		masked = "(empty)"
+	}
+	return fmt.Sprintf("VaultConfig{Address:%s MountPath:%s Namespace:%s Token:%s}",
+		c.Address, c.MountPath, c.Namespace, masked)
+}
+
 // Validate 检查 Vault key 的合法性，防止路径穿越攻击。
 func validateVaultKey(key string) error {
 	if key == "" {
@@ -88,9 +98,21 @@ func NewVaultProvider(cfg VaultConfig) (*VaultProvider, error) {
 		return nil, fmt.Errorf("vault: server is sealed")
 	}
 
+	// R6-P1-02: 验证 token 有效性。Health 只检查服务器状态，不验证 token。
+	// LookupSelf 使用 token 自身查询其元信息，失败则说明 token 无效或过期。
+	authResp, err := client.Auth().Token().LookupSelf()
+	if err != nil {
+		return nil, fmt.Errorf("vault: token validation failed (address=%s): %w", cfg.Address, err)
+	}
+	_ = authResp // 确认 token 有效即可
+
 	mountPath := cfg.MountPath
 	if mountPath == "" {
 		mountPath = "secret"
+	}
+	// R6-P2-06: 校验 mountPath 防止路径穿越
+	if strings.Contains(mountPath, "..") || strings.Contains(mountPath, "\x00") {
+		return nil, fmt.Errorf("vault: mountPath contains invalid characters: %q", mountPath)
 	}
 
 	logger.Infof("secrets: vault provider initialised (address=%s, mount=%s, namespace=%s)",

@@ -102,7 +102,8 @@ func (p *Parser) Parse(tokenStr string) (*Claims, error) {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return nil, ErrTokenExpired
 		}
-		return nil, ErrTokenInvalid
+		// R4-P2-15 / R6-P2-04: 使用 %w 包装原始错误，保留 errors.Is 链
+		return nil, fmt.Errorf("%w: %w", ErrTokenInvalid, err)
 	}
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {

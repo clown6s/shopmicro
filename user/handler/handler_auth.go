@@ -24,6 +24,18 @@ import (
 // 防止攻击者通过固定哈希的确定性计时签名推断手机号是否存在。
 var timingDummyHash []byte
 
+// R4-P1-05: loginTokensScript 原子性地写入 access token、refresh token 和反向集合。
+// KEYS[1]=tokenKey, KEYS[2]=rtKey, KEYS[3]=rtSetKey
+// ARGV[1]=token, ARGV[2]=refreshToken, ARGV[3]=userID, ARGV[4]=atTTL(sec), ARGV[5]=rtTTL(sec)
+const loginTokensScript = `
+redis.call('SADD', KEYS[1], ARGV[1])
+redis.call('EXPIRE', KEYS[1], ARGV[4])
+redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[5])
+redis.call('SADD', KEYS[3], ARGV[2])
+redis.call('EXPIRE', KEYS[3], ARGV[5])
+return 1
+`
+
 func init() {
 	// 生成随机 32 字节作为 dummy 密码，使 bcrypt 比较时间与真实哈希一致
 	dummyPwd := make([]byte, 32)
@@ -77,6 +89,14 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 		return nil, newBiz(errcode.CodeUserParam, "email too long (max 128)")
 	}
 
+	// R4-P2-09: Gender/Age 校验在 bcrypt 之前，避免对无效请求执行昂贵的 bcrypt 计算
+	if req.GetGender() < 0 || req.GetGender() > 3 {
+		return nil, newBiz(errcode.CodeUserParam, "gender must be 0-3")
+	}
+	if req.GetAge() < 0 || req.GetAge() > 150 {
+		return nil, newBiz(errcode.CodeUserParam, "age must be 0-150")
+	}
+
 	// 在 bcrypt 之前先用 SHA-256 预哈希，避免 72 字节截断限制。
 	// bcrypt 只使用密码的前 72 个字节，因此超过 72 字节的密码
 	// 如果前缀相同会产生相同的哈希值。
@@ -85,13 +105,6 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 	if err != nil {
 		logger.Errorf("bcrypt hash failed: %v", err)
 		return nil, errInternal
-	}
-
-	if req.GetGender() < 0 || req.GetGender() > 3 {
-		return nil, newBiz(errcode.CodeUserParam, "gender must be 0-3")
-	}
-	if req.GetAge() < 0 || req.GetAge() > 150 {
-		return nil, newBiz(errcode.CodeUserParam, "age must be 0-150")
 	}
 
 	user := &module.User{
@@ -171,28 +184,17 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 	}
 
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, user.ID)
-	ttl := time.Duration(s.jwtExpHrs) * time.Hour
-	if err := s.rdb.SAddExpire(ctx, tokenKey, ttl, token); err != nil {
-		logger.Errorf("login: store token to redis failed: %v", err)
-		return nil, errInternal
-	}
-
+	atTTL := time.Duration(s.jwtExpHrs) * time.Hour
 	rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, refreshToken)
 	rtTTL := time.Duration(s.rtExpHrs) * time.Hour
-	if err := s.rdb.Set(ctx, rtKey, user.ID, rtTTL); err != nil {
-		// RT 写入失败，回滚已写入的 access token SET 成员
-		_ = s.rdb.Del(ctx, tokenKey)
-		logger.Errorf("login: store refresh token to redis failed, rolling back: %v", err)
-		return nil, errInternal
-	}
-
 	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", user.ID)
-	if err := s.rdb.SAddExpire(ctx, rtSetKey, rtTTL, refreshToken); err != nil {
-		// RT 反向集合写入失败意味着 revokeTokensLua 无法找到此令牌。
-		// 回滚已写入的 RT 键值对，防止产生孤立令牌。
-		_ = s.rdb.Del(ctx, rtKey)
-		_ = s.rdb.Del(ctx, tokenKey)
-		logger.Errorf("login: store refresh token to reverse set failed, rolling back: %v", err)
+
+	// R4-P1-05: 原子化写入 access token + refresh token + 反向集合，避免中间状态
+	if _, err := s.rdb.RunScript(ctx, loginTokensScript,
+		[]string{tokenKey, rtKey, rtSetKey},
+		token, refreshToken, user.ID, int(atTTL.Seconds()), int(rtTTL.Seconds()),
+	); err != nil {
+		logger.Errorf("login: atomic token write failed (user_id=%d): %v", user.ID, err)
 		return nil, errInternal
 	}
 

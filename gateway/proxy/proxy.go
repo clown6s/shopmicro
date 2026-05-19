@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bytedance/gopkg/cloud/metainfo"
@@ -60,6 +59,9 @@ const (
 // 避免依赖字符串匹配做错误检测。
 var ErrServiceNotFound = errors.New("service not found")
 
+// R7-P2-06: 哨兵错误，标识 watch 正常运行后断开（稳定期），用于退避重置判断
+var errWatchClosed = errors.New("watch channel closed")
+
 // ServiceClient 将 kitex 泛化客户端与其描述符绑定。
 type ServiceClient struct {
 	Client  genericclient.Client
@@ -79,8 +81,10 @@ type Proxy struct {
 
 	clients map[string]*ServiceClient
 
-	jwtParser    *pkgjwt.Parser
-	rdb          *redis.Client
+	jwtParser *pkgjwt.Parser
+	rdb       *redis.Client
+	// R4-P2-02: 以下 map 仅在 New() 构造阶段由 Option 闭包写入，
+	// 运行时只读。happens-before 由 New() 返回 → h.Run() 保证，无需加锁。
 	publicMethod map[string]bool
 	// P1-12: 每个服务的允许方法列表（nil = 允许所有方法）
 	allowedMethods map[string]map[string]bool
@@ -103,9 +107,6 @@ type Proxy struct {
 	// 键格式为 "service/method"，值覆盖 Kitex 默认 RPC 超时。
 	// 未注册的方法使用客户端级默认超时（5s）。
 	methodTimeout map[string]time.Duration
-
-	// R5-P2-10: 标记 etcd watch 协程是否健康，供 /ready 端点查询
-	watchHealthy atomic.Bool
 }
 
 // Option 在构建时配置 Proxy。
@@ -463,30 +464,31 @@ func (p *Proxy) WatchServices(
 				return // 父上下文已取消
 			}
 
-			// R5-P2-10: 标记 watch 健康
-			p.watchHealthy.Store(true)
 			err := p.watchOnce(ctx, resolver, etcdAddrs, protoBase)
 
 			if ctx.Err() != nil {
 				return
 			}
 
-			// 退避: 1s -> 2s -> 4s -> ... -> 30s 上限。
-			if err == nil {
-				backoff = time.Second
-			} else {
-				// R5-P2-10: watch 异常时标记不健康
-				p.watchHealthy.Store(false)
-				// Watch 通道关闭（etcd 连接丢失或其他错误）
-				logger.Warnf("WatchServices: watch channel closed, reconnecting in %v: %v", backoff, err)
+			// R5-P2-01: 退避逻辑 —
+			// watchOnce 始终返回非 nil error（watch 关闭或连接错误）。
+			// "watch channel closed" 表示 watch 正常运行了一段时间后断开（稳定期），
+			// 重置退避；连接级错误（"connect to etcd:"）说明从未建立连接，继续退避。
+			if err != nil {
+				logger.Warnf("WatchServices: watch closed, reconnecting in %v: %v", backoff, err)
 				select {
 				case <-ctx.Done():
 					return
 				case <-time.After(backoff):
 				}
-				backoff *= 2
-				if backoff > maxBackoff {
-					backoff = maxBackoff
+				// R7-P2-06: 使用 sentinel error 替代字符串精确匹配
+				if errors.Is(err, errWatchClosed) {
+					backoff = time.Second
+				} else {
+					backoff *= 2
+					if backoff > maxBackoff {
+						backoff = maxBackoff
+					}
 				}
 			}
 		}
@@ -551,7 +553,7 @@ func (p *Proxy) watchOnce(
 		}
 	}
 
-	return fmt.Errorf("watch channel closed")
+	return errWatchClosed
 }
 
 // =========================
@@ -699,7 +701,13 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		// 使用 callopt.WithRPCTimeout 覆盖 Kitex 客户端级 RPC 超时
 		var callOpts []callopt.Option
 		if timeout, ok := p.methodTimeout[service+"/"+method]; ok {
-			callOpts = append(callOpts, callopt.WithRPCTimeout(timeout))
+			// R5-P2-03: 按重试次数分摊总超时预算，避免 3 次重试各用满 120s = 360s+
+			// maxRetries=2 → 每次最多 timeout/3
+			perAttempt := timeout / 3
+			if perAttempt < 5*time.Second {
+				perAttempt = 5 * time.Second // 最低 5s 保底
+			}
+			callOpts = append(callOpts, callopt.WithRPCTimeout(perAttempt))
 		}
 
 		resp, err := p.Call(ctx, service, method, body, callOpts...)

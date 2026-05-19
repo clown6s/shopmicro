@@ -30,7 +30,9 @@ type UserUpdate struct {
 
 // SetRealName 是一个便捷方法，如果值非空则设置 RealName。
 func (u *UserUpdate) SetRealName(v string) *UserUpdate {
-	u.RealName = &v
+	if v != "" {
+		u.RealName = &v
+	}
 	return u
 }
 
@@ -110,11 +112,11 @@ func (d *UserDal) Create(ctx context.Context, user *module.User) error {
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
-		logger.Warnf("create user: LastInsertId failed: %v", err)
-		user.ID = 0
-	} else {
-		user.ID = id
+		// R5-P2-07: LastInsertId 失败时返回 error 而非静默置 ID=0，
+		// 调用方依赖 user.ID 做后续操作时拿到脏数据
+		return fmt.Errorf("create user: LastInsertId failed: %w", err)
 	}
+	user.ID = id
 	return nil
 }
 
@@ -164,6 +166,9 @@ func (d *UserDal) Update(ctx context.Context, id int64, updates map[string]inter
 			continue
 		}
 		if !allowedCols[k] {
+			// R5-P2-06: 未知列静默跳过可能是调用方拼写错误（如 "emial"），
+			// 记录 Warnf 帮助排查
+			logger.Warnf("update: unknown column %q ignored (user_id from caller context)", k)
 			continue
 		}
 		setParts = append(setParts, fmt.Sprintf("`%s` = ?", k))
@@ -238,9 +243,18 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone st
 	}
 	where := strings.Join(conditions, " AND ")
 
+	// R4-P1-03: COUNT 和 SELECT 在同一个只读事务中执行，
+	// 保证 total 与实际返回数据的一致性。
+	txOpts := &sql.TxOptions{ReadOnly: true}
+	tx, err := d.db.BeginTx(ctx, txOpts)
+	if err != nil {
+		return nil, 0, fmt.Errorf("begin read-only tx: %w", err)
+	}
+	defer tx.Rollback()
+
 	var total int64
 	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM user WHERE %s", where)
-	if err := d.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
@@ -253,7 +267,7 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone st
 	queryArgs := make([]interface{}, len(args), len(args)+2)
 	copy(queryArgs, args)
 	queryArgs = append(queryArgs, pageSize, offset)
-	rows, err := d.db.QueryContext(ctx, querySQL, queryArgs...)
+	rows, err := tx.QueryContext(ctx, querySQL, queryArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -268,7 +282,14 @@ func (d *UserDal) List(ctx context.Context, page, pageSize int32, name, phone st
 		}
 		users = append(users, u)
 	}
-	return users, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	// 只读事务：Rollback 在 defer 中执行，Commit 成功后自动释放
+	if err := tx.Commit(); err != nil {
+		return nil, 0, fmt.Errorf("commit read-only tx: %w", err)
+	}
+	return users, total, nil
 }
 
 // scanUser 扫描一行用户记录

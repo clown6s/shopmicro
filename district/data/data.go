@@ -32,14 +32,27 @@ func New(cfg mysql.Config, redisCfg redis.Config, amapKey string, amapTimeout ti
 	}
 
 	cleanup := func() {
-		// panic-safe：确保 DB 和 Redis 都能被清理
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Errorf("db cleanup panic during shutdown (recovered): %v", r)
-			}
+		// R7-P1-01: 每个 cleanup 包装为独立函数，确保即使 dbCleanup panic，
+		// redisCleanup 仍然会被执行。Go defer 是 LIFO，
+		// 如果 dbCleanup 在同一个函数内 panic，后续代码不会执行。
+		safeDB := func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Errorf("db cleanup panic during shutdown (recovered): %v", r)
+				}
+			}()
+			dbCleanup()
+		}
+		safeRedis := func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Errorf("redis cleanup panic during shutdown (recovered): %v", r)
+				}
+			}()
 			redisCleanup()
-		}()
-		dbCleanup()
+		}
+		safeDB()
+		safeRedis()
 	}
 
 	d := &Data{

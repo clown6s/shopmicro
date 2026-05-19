@@ -91,18 +91,25 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 			if upd.Phone != nil {
 				return nil, errPhoneExists
 			}
-			return nil, errNothingUpdate
+			if upd.Email != nil {
+				return nil, newBiz(errcode.CodeUserParam, "email already exists")
+			}
+			// 其他唯一约束冲突（如 future columns），记录原始错误便于排查
+			logger.Warnf("update user: unexpected duplicate key (user_id=%d): %v", req.GetId(), err)
+			return nil, newBiz(errcode.CodeUserParam, "duplicate key violation")
 		}
 		logger.Errorf("update user failed: %v", err)
 		return nil, errInternal
 	}
 
 	// P2-12 修复：手机号变更时撤销所有会话。
+	// R4-P2-05: 撤销失败返回错误，避免客户端以为 token 已失效但实际仍有效
 	if upd.Phone != nil {
 		tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
 		rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
 		if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}); err != nil {
-			logger.Warnf("update user: failed to revoke tokens atomically (user_id=%d): %v", req.GetId(), err)
+			logger.Warnf("update user: failed to revoke tokens (user_id=%d): %v", req.GetId(), err)
+			return nil, errInternal
 		}
 	}
 
@@ -138,8 +145,12 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
 	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
+	// R5-P2-04: 与 UpdateUser 保持一致，撤销失败返回错误。
+	// 虽然软删除已提交 DB，但旧 token 仍可通过 Redis 验证，
+	// 不返回错误会让客户端以为操作完全成功。
 	if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}); err != nil {
-		logger.Errorf("delete user: failed to revoke tokens atomically (user_id=%d): %v", req.GetId(), err)
+		logger.Warnf("delete user: failed to revoke tokens (user_id=%d): %v", req.GetId(), err)
+		return nil, errInternal
 	}
 
 	logger.Infof("user deleted: user_id=%d", req.GetId())

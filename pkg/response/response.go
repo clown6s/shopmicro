@@ -41,6 +41,11 @@ func OK(c *app.RequestContext, data interface{}) {
 // （例如 10014 Unauthorized → 401, 10015 Forbidden → 403）。
 // P3-14: 在生产环境中，限制消息长度以防止泄漏内部细节。
 func BizErr(c *app.RequestContext, biz *errcode.BizError) {
+	// R5-P1-03: 防御 nil BizError，避免调用方忽略 ParseBizError bool 返回值时 panic
+	if biz == nil {
+		InternalError(c)
+		return
+	}
 	msg := biz.Message
 	truncated := false
 	// P3-14: 截断过长的消息 — 内部错误通常包含

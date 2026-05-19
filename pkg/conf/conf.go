@@ -46,6 +46,7 @@ func Load(path string, cfg interface{}) error {
 
 	// P1-10: .env 加载是可选的。区分 "文件不存在"（info）和 "解析失败"（warn），
 	// 避免隐藏 .env 文件语法错误。
+	// R4-P2-16: 此处使用标准库 log 而非项目 logger，因为 Load() 通常在 logger.Init() 之前调用。
 	if err := godotenv.Load(); err != nil {
 		if os.IsNotExist(err) {
 			log.Printf("[conf] .env not found in working directory (non-fatal)")

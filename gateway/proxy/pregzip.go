@@ -15,6 +15,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
+	"shopmicro/pkg/logger"
 	"shopmicro/pkg/response"
 )
 
@@ -143,7 +144,12 @@ func getPreGzip(key string) ([]byte, bool) {
 	if !ok {
 		return nil, false
 	}
-	entry := val.(*preGzipEntry)
+	// R4-P2-01: 类型断言加 comma-ok，防止意外类型导致 panic
+	entry, ok := val.(*preGzipEntry)
+	if !ok {
+		preGzipCache.Delete(key)
+		return nil, false
+	}
 	if time.Now().After(entry.expiry) {
 		if _, deleted := preGzipCache.LoadAndDelete(key); deleted {
 			preGzipCount.Add(-1)
@@ -155,20 +161,21 @@ func getPreGzip(key string) ([]byte, bool) {
 
 // setPreGzip 写入预压缩缓存。
 // 超过 preGzipMaxEntries 时不写入新条目，防止内存耗尽。
+// R5-P1-01: 使用 LoadOrStore 原子检查，仅在新 key 时递增计数器，
+// 防止并发写入相同 key 时计数器永久膨胀导致缓存失效。
 func setPreGzip(key string, data []byte) {
-	for {
-		current := preGzipCount.Load()
-		if current >= preGzipMaxEntries {
-			return
-		}
-		if preGzipCount.CompareAndSwap(current, current+1) {
-			break
-		}
-	}
-	preGzipCache.Store(key, &preGzipEntry{
+	entry := &preGzipEntry{
 		data:   data,
 		expiry: time.Now().Add(preGzipTTL),
-	})
+	}
+	if _, loaded := preGzipCache.LoadOrStore(key, entry); loaded {
+		return // 已存在，不重复写入也不递增计数器
+	}
+	newCount := preGzipCount.Add(1)
+	// 并发 LoadOrStore 可能短暂超过上限，触发一次清理
+	if newCount > int64(preGzipMaxEntries+16) {
+		cleanPreGzipCache()
+	}
 }
 
 // servePreGzip 直接将预压缩字节写入 HTTP 响应。
@@ -268,6 +275,8 @@ func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, r
 	}
 
 	if _, err := w.Write(jsonBytes); err != nil {
+		// R7-P2-07: 记录 gzip 写入失败，之前此错误被静默吞掉
+		logger.Warnf("pregzip: gzip write failed: %v", err)
 		return false
 	}
 	w.Close()

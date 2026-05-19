@@ -24,6 +24,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"shopmicro/gateway/conf"
+	"shopmicro/gateway/health"
 	"shopmicro/gateway/middleware"
 	"shopmicro/gateway/proxy"
 	"shopmicro/gateway/routes"
@@ -61,7 +62,7 @@ func Run(configPath string) error {
 	// =========================
 
 	logger.Init(cfg.Mode)
-	defer logger.L.Sync()
+	defer logger.C().Sync()
 
 	// =========================
 	// 可信代理 (XFF)
@@ -218,6 +219,11 @@ func Run(configPath string) error {
 
 		// P2-05: 取消 watchCtx 以便 WatchServices 协程及时退出。
 		watchCancel()
+
+		// R4-P1-01: 停止 pregzip 清理 goroutine，避免泄漏
+		proxy.StopPreGzipCleaner()
+		// R4-P1-02: 停止 metrics 更新 goroutine，避免泄漏
+		health.StopMetricsUpdater()
 
 		// 关闭 Vault provider（清理 HTTP 空闲连接）
 		secrets.CloseProvider()

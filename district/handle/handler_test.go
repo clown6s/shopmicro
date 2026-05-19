@@ -9,78 +9,53 @@ import (
 	v1 "shopmicro/district/kitex_gen/api/district/v1"
 )
 
-// TestGetChildren_EmptyParentAdCode tests that GetChildren returns an empty list
-// when the request has no parentAdCode, without hitting the database.
+// R5-P2-08: parentAdCode=0 现在返回错误（必填参数）
 func TestGetChildren_EmptyParentAdCode(t *testing.T) {
 	svc := &DistrictServiceImpl{
-		districtDal: nil, // not used in this path
+		store: nil, // not used in this path
 	}
 
-	resp, err := svc.GetChildren(context.Background(), &v1.GetChildrenReq{
-		ParentAdCode: "",
-	})
-	assert.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.Empty(t, resp.GetList())
+	_, err := svc.GetChildren(context.Background(), &v1.GetChildrenReq{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parentAdCode is required")
 }
 
-// TestGetChildren_NilRequest tests that GetChildren handles a nil request
-// gracefully by returning an empty list (GetParentAdCode on nil returns "").
+// R5-P2-08: nil request (GetParentAdCode returns 0) 也返回错误
 func TestGetChildren_NilRequest(t *testing.T) {
 	svc := &DistrictServiceImpl{
-		districtDal: nil,
+		store: nil,
 	}
 
-	resp, err := svc.GetChildren(context.Background(), nil)
+	_, err := svc.GetChildren(context.Background(), nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parentAdCode is required")
+}
+
+// R7-P2-10: NewDistrictHandler 拒绝 nil store
+func TestNewDistrictHandler_NilStore(t *testing.T) {
+	_, err := NewDistrictHandler(nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "store must not be nil")
+}
+
+// R7-P2-10: NewDistrictHandler 正常创建
+func TestNewDistrictHandler_ValidStore(t *testing.T) {
+	// mockStore 满足 DistrictStore 接口即可，这里不需要功能测试
+	_, err := NewDistrictHandler(&mockStoreForTest{})
 	assert.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.Empty(t, resp.GetList())
 }
 
-// TestGetChildren_WithParentAdCode_NilDal tests that calling GetChildren with
-// a non-empty parentAdCode panics when districtDal is nil, confirming the
-// handler depends on the data layer.
-func TestGetChildren_WithParentAdCode_NilDal(t *testing.T) {
-	defer func() {
-		r := recover()
-		assert.NotNil(t, r, "expected panic when districtDal is nil and parentAdCode is provided")
-	}()
+// mockStoreForTest 是一个最小的 DistrictStore mock，仅用于编译验证
+type mockStoreForTest struct{}
 
-	svc := &DistrictServiceImpl{
-		districtDal: nil,
-	}
-
-	_, _ = svc.GetChildren(context.Background(), &v1.GetChildrenReq{
-		ParentAdCode: "110000",
-	})
+func (m *mockStoreForTest) GetProvinces(ctx context.Context) ([]*v1.DistrictNode, error) {
+	return nil, nil
 }
 
-// TestGetProvinces_NilDal tests that GetProvinces panics when districtDal is
-// nil, confirming the handler depends on the data layer.
-func TestGetProvinces_NilDal(t *testing.T) {
-	defer func() {
-		r := recover()
-		assert.NotNil(t, r, "expected panic when districtDal is nil")
-	}()
-
-	svc := &DistrictServiceImpl{
-		districtDal: nil,
-	}
-
-	_, _ = svc.GetProvinces(context.Background(), &v1.GetProvincesReq{})
+func (m *mockStoreForTest) GetChildrenByParent(ctx context.Context, code string) ([]*v1.DistrictNode, error) {
+	return nil, nil
 }
 
-// TestGetProvinces_NilRequest tests that GetProvinces handles a nil request
-// gracefully by panicking due to nil districtDal (consistent behavior).
-func TestGetProvinces_NilRequest(t *testing.T) {
-	defer func() {
-		r := recover()
-		assert.NotNil(t, r, "expected panic when districtDal is nil")
-	}()
-
-	svc := &DistrictServiceImpl{
-		districtDal: nil,
-	}
-
-	_, _ = svc.GetProvinces(context.Background(), nil)
+func (m *mockStoreForTest) UpdateDistrict(ctx context.Context) error {
+	return nil
 }
