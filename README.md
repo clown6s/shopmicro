@@ -13,13 +13,14 @@ shopmicro/
 ├── user/                    # User 微服务（独立 go.mod）
 │   ├── main.go              # Kitex gRPC 服务入口 :8888
 │   ├── handler/
-│   │   ├── handler.go       # RPC 业务逻辑实现
+│   │   ├── handler.go       # RPC 业务逻辑实现 + 接口定义
+│   │   ├── handler_auth.go  # 注册/登录逻辑
+│   │   ├── handler_crud.go  # 用户 CRUD 逻辑
+│   │   ├── handler_token.go # Token 刷新逻辑
 │   │   └── handler_test.go  # 单元测试
 │   ├── data/
 │   │   ├── data.go          # 数据访问层初始化（MySQL + Redis）
 │   │   └── user.go          # 用户 CRUD 操作（参数化查询）
-│   ├── model/
-│   │   └── user.go          # 用户数据模型
 │   ├── kitex_gen/           # Kitex 自动生成（勿手动修改）
 │   ├── api/
 │   │   └── user.proto       # Protobuf IDL 定义
@@ -33,18 +34,26 @@ shopmicro/
 ├── gateway/                 # HTTP 网关（独立 go.mod）
 │   ├── main.go              # Hertz HTTP 入口 :8080
 │   ├── proxy/
-│   │   ├── proxy.go         # 通用 HTTP→gRPC 代理（所有服务共用）
-│   │   └── proxy_test.go    # 单元测试
+│   │   ├── proxy_core.go    # 代理核心：类型定义、Option、New()、服务注册
+│   │   ├── proxy_handler.go # HTTP handler、JWT 认证、RPC 响应处理
+│   │   ├── proxy_rpc.go     # gRPC 调用（含重试）
+│   │   ├── proxy_discovery.go # etcd 服务发现与监听
+│   │   ├── proxy_merge.go   # query→JSON 合并（类型感知）
+│   │   ├── circuitbreaker.go # 熔断器（gobreaker）
+│   │   └── proxy_handler_test.go
 │   ├── middleware/
 │   │   ├── cors.go          # CORS 跨域配置
 │   │   ├── ratelimit.go     # Redis 滑动窗口分布式限流
-│   │   ├── ratelimit_test.go
+│   │   ├── realip.go        # 客户端 IP 提取（X-Forwarded-For）
 │   │   ├── security.go      # 安全响应头（CSP/HSTS/X-Frame-Options 等）
 │   │   ├── accesslog.go     # 结构化访问日志（防日志注入）
 │   │   ├── trace.go         # X-Trace-Id 响应头注入
 │   │   └── recovery.go      # Panic 恢复（堆栈记录）
+│   ├── routes/
+│   │   └── routes.go        # 路由注册 + proxy Option 配置
 │   ├── health/
-│   │   └── health.go        # /health（存活）+ /ready（就绪）探针
+│   │   ├── health.go        # /health（存活）+ /healthz（就绪）探针
+│   │   └── metrics.go       # Prometheus 指标端点
 │   ├── conf/
 │   │   ├── conf.go          # 配置结构体 + 环境变量覆盖
 │   │   └── config.yaml      # 配置文件
@@ -54,16 +63,17 @@ shopmicro/
 │
 └── pkg/                     # 共享模块（被 gateway 和 user 共同依赖）
     ├── conf/
-    │   └── conf.go          # 通用配置加载（YAML + .env + Vault）
+    │   └── conf.go          # 通用配置加载（YAML + 环境变量覆盖）
     ├── logger/
     │   └── logger.go        # zap 日志封装
     ├── errcode/
     │   ├── code.go          # 统一错误码常量（user: 1xxxx, gw: 5xxxx）
-    │   ├── errcode.go       # 网关错误码定义
-    │   ├── biz_error.go     # 业务错误码结构体
+    │   ├── biz_error.go     # BizError 业务错误结构体（含 HTTPStatus）
     │   └── errcode_test.go
     ├── response/
     │   └── response.go      # 统一 HTTP 响应封装
+    ├── health/
+    │   └── health.go        # 健康检查接口（DBPinger + RedisPinger）
     ├── jwt/
     │   ├── jwt.go           # JWT 生成器 + 解析器
     │   └── jwt_test.go
@@ -72,8 +82,7 @@ shopmicro/
     │   ├── config.go        # 连接池配置
     │   └── config_test.go
     ├── redis/
-    │   ├── redis.go         # Redis 客户端封装
-    │   └── redis_test.go
+    │   └── redis.go         # Redis 客户端封装
     ├── otel/
     │   └── otel.go          # OpenTelemetry 初始化
     └── secrets/
@@ -128,9 +137,11 @@ p := proxy.New(
     ),
     // 熔断器（per-service）
     proxy.WithCircuitBreaker(
-        cfg.CircuitBreaker.MaxRequests,
-        cbInterval, cbTimeout,
-        uint32(cfg.CircuitBreaker.ConsecutiveFailures),
+        proxy.NewCircuitBreaker(
+            uint32(cfg.CircuitBreaker.ConsecutiveFailures),
+            cbInterval, cbTimeout,
+            uint32(cfg.CircuitBreaker.MaxRequests),
+        ),
     ),
     // 端点级限流（在 proxy handler 内执行，不区分 HTTP 方法）
     proxy.WithEndpointRateLimit(rl.NewEndpointCheckFn()),
@@ -169,9 +180,8 @@ Authorization: Bearer {token}
 
 | 端点 | 用途 | 说明 |
 |------|------|------|
-| `GET /health` | 存活探针 | 始终返回 200 `{"status":"ok"}` |
-| `GET /ready` | 就绪探针 | 检查 Redis + Etcd 连通性，异常返回 503 |
-| `GET /health`（user:8899） | 存活探针 | 检查 MySQL + Redis 连通性 |
+| `GET /health` | 存活探针 | `healthy` 标记为 false 时返回 503 `{"status":"degraded"}`，否则 200 `{"status":"ok"}` |
+| `GET /healthz` | 就绪探针 | 检查 MySQL + Redis 连通性，异常返回 503 |
 
 ### 1.6 统一响应格式
 
@@ -270,7 +280,7 @@ service UserService {
 
 ```bash
 cd user
-kitex -module shopmicro/user -service user -type protobuf api/district.proto
+kitex -module shopmicro/user -service user -type protobuf api/user.proto
 ```
 
 **注意**：此命令会覆盖 `handler.go` 和 `main.go`，建议执行前备份。
@@ -325,7 +335,7 @@ curl -X POST http://localhost:8080/api/v1/user/SearchUser \
 
 ```bash
 cd shopmicro
-mkdir -p district/api district/handle district/data district/module district/conf
+mkdir -p district/api district/handle district/data district/conf
 ```
 
 创建后的目录结构：
@@ -335,19 +345,18 @@ district/
 ├── api/                    # Protobuf IDL 定义
 │   └── district.proto      # ★ 第 4.2 步编写
 ├── handle/                 # RPC 业务逻辑实现
-│   └── handler.go          # ★ 第 4.6 步编写
+│   ├── handler.go          # ★ 第 4.6 步编写
+│   └── interfaces.go       # DistrictStore 接口定义
 ├── data/                   # 数据访问层
 │   ├── data.go             # MySQL + Redis 初始化（★ 第 4.5 步）
 │   └── district.go         # CRUD 操作（★ 第 4.5 步）
-├── module/                 # 领域模型（可选，纯数据结构）
-│   └── district.go         # 领域模型定义
 ├── conf/
 │   ├── conf.go             # 配置结构体 + 校验（★ 第 4.4 步）
 │   └── config.yaml         # 配置文件（★ 第 4.3 步）
+├── Dockerfile              # 多阶段构建
 ├── main.go                 # 服务入口（★ 第 4.7 步）
 ├── go.mod                  # Go 模块文件
-├── kitex_gen/              # Kitex 自动生成（勿手动修改）
-└── kitex_info.yaml         # Kitex 项目信息
+└── kitex_gen/              # Kitex 自动生成（勿手动修改）
 ```
 
 ---
@@ -365,28 +374,35 @@ package api.district.v1;
 option go_package = "shopmicro/district/kitex_gen/api/district/v1";
 
 service DistrictService {
-    // 每个 rpc 方法对应一个接口，按需添加
-    rpc GetProvinceTree (GetProvinceTreeReq) returns (GetProvinceTreeResp);
+    rpc GetProvinces (GetProvincesReq) returns (GetProvincesResp);
+    rpc GetChildren (GetChildrenReq) returns (GetChildrenResp);
+    rpc UpdateDistrict (UpdateDistrictReq) returns (UpdateDistrictResp);
 }
 
-message GetProvinceTreeReq {
-  string adCode = 1;
+message GetProvincesReq {}
+
+message GetProvincesResp {
+  repeated DistrictNode list = 1;
 }
 
-message GetProvinceTreeResp {
-  uint32 code = 1;
-  string message = 2;
-  repeated DistrictTree data = 3;
+message GetChildrenReq {
+  uint32 parentAdCode = 1;
 }
 
-message DistrictTree {
+message GetChildrenResp {
+  repeated DistrictNode list = 1;
+}
+
+message UpdateDistrictReq {}
+
+message UpdateDistrictResp {}
+
+message DistrictNode {
   int64 id = 1;
-  string parentAdCode = 2;
-  string adCode = 3;
-  string name = 4;
-  string level = 5;
-  string center = 6;
-  repeated DistrictTree children = 7;
+  uint32 adCode = 2;
+  string name = 3;
+  string level = 4;
+  string center = 5;
 }
 ```
 
@@ -449,7 +465,6 @@ district/
 ├── kitex_gen/                    # 自动生成（勿手动修改）
 │   └── api/district/v1/
 │       ├── district.pb.go        # Protobuf 序列化代码
-│       ├── district_grpc.pb.go   # gRPC stub
 │       └── districtservice/      # Kitex server/client 骨架
 │           ├── server.go         # NewServer() / RegisterService()
 │           ├── client.go         # 客户端工厂方法
@@ -501,10 +516,10 @@ type Config struct {
 	Vault      secrets.VaultConfig `yaml:"vault"`
 }
 
-// GetHealthAddr 返回健康检查端口，默认 :8899
+// GetHealthAddr 返回健康检查端口，默认 :8898
 func (c *Config) GetHealthAddr() string {
 	if c.HealthAddr == "" {
-		return ":8899"
+		return ":8898"
 	}
 	return c.HealthAddr
 }
@@ -679,30 +694,21 @@ import (
 
 // DistrictServiceImpl 实现 IDL 定义的 DistrictService 接口
 type DistrictServiceImpl struct {
-	districtDal *data.DistrictDal
-	rdb         *redis.Client
+	store DistrictStore
 }
 
 // NewDistrictHandler 创建 handler 实例（由 main.go 调用）
-func NewDistrictHandler(d *data.Data) *DistrictServiceImpl {
-	return &DistrictServiceImpl{
-		rdb:         d.Rdb,
-		districtDal: d.District(),
-	}
+func NewDistrictHandler(store DistrictStore) (*DistrictServiceImpl, error) {
+	return &DistrictServiceImpl{store: store}, nil
 }
 
-// GetProvinceTree 获取省市区树形数据
-func (s *DistrictServiceImpl) GetProvinceTree(ctx context.Context, req *v1.GetProvinceTreeReq) (resp *v1.GetProvinceTreeResp, err error) {
-	// ★ 从 req 读参数，不要从 ctx.Value 读！（ctx.Value 取不到会 panic）
-	logger.Info("GetProvinceTree called", logger.String("adCode", req.AdCode))
-
-	resp = &v1.GetProvinceTreeResp{
-		Code:    0,
-		Message: "ok",
-		Data:    []*v1.DistrictTree{},
+// GetProvinces 获取省级行政区列表
+func (s *DistrictServiceImpl) GetProvinces(ctx context.Context, req *v1.GetProvincesReq) (resp *v1.GetProvincesResp, err error) {
+	nodes, err := s.store.GetProvinces(ctx)
+	if err != nil {
+		return nil, err
 	}
-	// TODO: 实现具体的树形查询逻辑
-	return
+	return &v1.GetProvincesResp{List: nodes}, nil
 }
 ```
 
@@ -848,8 +854,9 @@ p := proxy.New(
 
     // ★ district 服务方法白名单
     proxy.WithAllowedMethods("district",
-        "GetProvinceTree",
-        // 后续新增方法在这里追加
+        "GetProvinces",
+        "GetChildren",
+        "UpdateDistrict",
     ),
 )
 ```
@@ -863,15 +870,18 @@ p := proxy.New(
 如果某个方法允许未登录用户访问，加到 `WithPublicMethods` 中：
 
 ```go
-proxy.WithPublicMethods(
+proxy.WithPublicMethods("user",
     "RegisterUser",
     "Login",
     "RefreshToken",
-    "GetProvinceTree",     // ★ 新增：district 不需要登录
+),
+proxy.WithPublicMethods("district",
+    "GetProvinces",     // ★ 新增：district 不需要登录
+    "GetChildren",
 ),
 ```
 
-> ⚠️ **注意**：`WithPublicMethods` 是全局的（跨服务），只需写方法名，不带服务名前缀。
+> ⚠️ **注意**：`WithPublicMethods` 是 **per-service** 的，需要指定服务名和方法名。
 
 #### ③ Gateway Dockerfile 拷贝 proto 文件
 
@@ -936,10 +946,10 @@ cd gateway && go run main.go
 
 ```bash
 # 公开接口，无需 token
-curl http://localhost:8080/api/v1/district/getProvinceTree \
+curl http://localhost:8080/api/v1/district/GetProvinces \
   -H "Content-Type: application/json" \
-  -d '{"adCode":""}'
-# → {"code":0,"message":"ok","data":[]}
+  -d '{}'
+# → {"code":0,"message":"ok","data":[...]}
 ```
 
 #### ⑤ 检查日志
@@ -985,7 +995,7 @@ curl http://localhost:8080/api/v1/district/getProvinceTree \
 
 ```bash
 cd user
-kitex -module shopmicro/user -service user -type protobuf api/district.proto
+kitex -module shopmicro/user -service user -type protobuf api/user.proto
 ```
 
 | 参数 | 说明 |
@@ -1113,7 +1123,7 @@ span.SetAttributes(attribute.Int64("user.query.page", int64(req.Page)))
 
 | 安全特性 | 实现位置 | 说明 |
 |---------|-----------|------|
-| **密码哈希** | `user/handler/handler.go` | bcrypt，cost=12 |
+| **密码哈希** | `user/handler/handler.go` + `user/conf/conf.go` | bcrypt，cost 可配置（默认 12，范围 4-31） |
 | **JWT 安全** | `pkg/jwt/jwt.go` | HS256 签名，算法白名单防混淆，密钥 prod≥64字符 / dev≥32字符，支持 audience/issuer 校验 |
 | **双令牌认证** | `user/handler/handler.go` | Access Token（默认24h）+ Refresh Token（7d），独立 secret，一次性轮换（GETDEL 防重放） |
 | **参数化查询** | `user/data/user.go` | 所有 SQL 使用 `?` 占位符；Update 使用白名单 `colMap` + `blockedCols` 双重防护 |
@@ -1123,14 +1133,14 @@ span.SetAttributes(attribute.Int64("user.query.page", int64(req.Page)))
 | **Fail-Closed 策略** | gateway + user | Redis 宕机时所有限流拒绝请求（登录/注册/刷新/全局），不降级放行 |
 | **PII 脱敏** | `user/handler/handler.go` | 手机号保留后3位（`****123`）、邮箱脱敏（`a***@example.com`）、Login 不返回自增 userId |
 | **日志脱敏** | `pkg/logger/logger.go` | `Safe()` 函数自动遮蔽 password/secret/token/api_key/access_key/private_key 等 19 种敏感字段 |
-| **错误信息脱敏** | `gateway/proxy/proxy.go` + `pkg/response/response.go` | 内部错误统一返回 `"internal server error"`，BizErr 消息超128字符截断，手机冲突返回模糊错误 |
+| **错误信息脱敏** | `gateway/proxy/proxy_handler.go` + `pkg/response/response.go` | 内部错误统一返回 `"internal server error"`，BizErr 消息超128字符截断，手机冲突返回模糊错误 |
 | **Token 多设备** | `user/handler/handler.go` | Redis SET 存储（TxPipeline 原子 SAdd+Expire），支持多设备登录，Logout 只注销当前设备 |
 | **原子 Token 轮换** | `user/handler/handler.go` | RefreshToken 使用 Lua 脚本原子更新（SREM旧RT + SADD新RT + SET映射 + EXPIRE），防崩溃导致 token 丢失或重放 |
 | **原子 Token 吊销** | `user/handler/handler.go` | DeleteUser + UpdateUser(手机变更) 使用同一 Lua 脚本原子吊销所有 access token + refresh token |
 | **所有权校验** | `user/handler/handler.go` | UpdateUser/DeleteUser 通过 metainfo user_id 校验，禁止越权操作 |
 | **分布式限流** | `gateway/middleware/ratelimit.go` | Redis 滑动窗口（Lua 原子脚本），per-IP + 端点级可配 |
-| **熔断器** | `gateway/proxy/proxy.go` | gobreaker per-service 熔断，仅对已注册服务创建（防 OOM），可配连续失败次数/超时/半开探测 |
-| **服务名注入防护** | `gateway/proxy/proxy.go` | service 名称正则 `^[a-z][a-z0-9]*$`，method 名称正则 `^[A-Za-z][a-zA-Z0-9]*$` |
+| **熔断器** | `gateway/proxy/circuitbreaker.go` | gobreaker per-service 熔断，仅对已注册服务创建（防 OOM），可配连续失败次数/超时/半开探测 |
+| **服务名注入防护** | `gateway/proxy/proxy_core.go` | service 名称正则 `^[a-z][a-z0-9]*$`，method 名称正则 `^[A-Za-z][a-zA-Z0-9]*$` |
 | **安全响应头** | `gateway/middleware/security.go` | CSP（`default-src 'self'; frame-ancestors 'none'`）、X-Frame-Options: DENY、X-Content-Type-Options: nosniff、HSTS（仅 prod）、Referrer-Policy |
 | **CORS** | `gateway/middleware/cors.go` | 精确匹配 Origin（无通配符子域名），credentials + wildcard 由浏览器规范拒绝（fail-closed） |
 | **IP 伪造防护** | `gateway/middleware/accesslog.go` | `safeClientIP()` 验证 X-Forwarded-For 中的 IP 格式，伪造 IP 不参与限流；限流使用 TCP 层 `ClientIP()` |
