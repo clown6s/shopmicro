@@ -13,6 +13,7 @@ require (
 	github.com/kitex-contrib/obs-opentelemetry v0.3.0
 	github.com/kitex-contrib/registry-etcd v0.3.0
 	github.com/redis/go-redis/v9 v9.19.0
+	github.com/sony/gobreaker v1.0.0
 	go.etcd.io/etcd/client/v3 v3.6.11
 	go.opentelemetry.io/otel/trace v1.43.0
 	go.uber.org/zap v1.28.0

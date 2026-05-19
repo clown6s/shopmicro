@@ -177,6 +177,9 @@ func Run(configPath string) error {
 		// 按端点限流在代理处理器中执行（与方法无关）。
 		// 防止通过 GET 请求绕过 Login 的严格限流。
 		proxy.WithEndpointRateLimit(rl.NewEndpointCheckFn()),
+
+		// 熔断器：下游服务连续 5 次失败后自动打开，30s 后进入半开状态探测恢复
+		proxy.WithCircuitBreaker(proxy.NewCircuitBreaker()),
 	}
 	// 追加路由相关配置：公开方法、白名单、HTTP 方法映射
 	opts = append(opts, routes.ProxyOptions()...)

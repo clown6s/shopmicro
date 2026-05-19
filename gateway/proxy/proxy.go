@@ -25,6 +25,7 @@ import (
 	"github.com/cloudwego/kitex/pkg/generic"
 	"github.com/cloudwego/kitex/pkg/transmeta"
 	kotelkitex "github.com/kitex-contrib/obs-opentelemetry/tracing"
+	"github.com/sony/gobreaker"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -107,6 +108,10 @@ type Proxy struct {
 	// 键格式为 "service/method"，值覆盖 Kitex 默认 RPC 超时。
 	// 未注册的方法使用客户端级默认超时（5s）。
 	methodTimeout map[string]time.Duration
+
+	// cb 熔断器，为每个 service/method 维护独立的熔断状态。
+	// nil = 不启用熔断。
+	cb *CircuitBreaker
 }
 
 // Option 在构建时配置 Proxy。
@@ -172,6 +177,16 @@ func WithMethodTimeout(service, method string, timeout time.Duration) Option {
 	}
 	return func(p *Proxy) {
 		p.methodTimeout[service+"/"+method] = timeout
+	}
+}
+
+// WithCircuitBreaker 注入熔断器。
+// 当下游服务持续故障时（连续 5 次失败），熔断器自动打开，
+// 后续请求快速失败返回 503 而非等待 RPC 超时。
+// nil = 不启用熔断。
+func WithCircuitBreaker(cb *CircuitBreaker) Option {
+	return func(p *Proxy) {
+		p.cb = cb
 	}
 }
 
@@ -338,6 +353,7 @@ func (p *Proxy) getClient(service string) (*ServiceClient, bool) {
 // gRPC 全路径 "api.user.v1.UserService/ListUser"）。
 //
 // 对可重试的瞬态错误（连接重置、超时）最多重试 2 次，使用指数退避。
+// 如果配置了熔断器，在熔断打开时快速失败返回 503。
 func (p *Proxy) Call(
 	ctx context.Context,
 	service string,
@@ -350,36 +366,44 @@ func (p *Proxy) Call(
 		return nil, fmt.Errorf("%w: %s", ErrServiceNotFound, service)
 	}
 
-	const maxRetries = 2
-	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, err := cli.Client.GenericCall(ctx, method, req, callOpts...)
-		if err == nil {
-			return resp, nil
+	rpcFn := func() (interface{}, error) {
+		const maxRetries = 2
+		var lastErr error
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			resp, err := cli.Client.GenericCall(ctx, method, req, callOpts...)
+			if err == nil {
+				return resp, nil
+			}
+			lastErr = err
+			// P2-01: 仅对明确的瞬态错误重试。
+			// 使用精确子串匹配避免误匹配非瞬态错误（如 "statement timeout"）。
+			errMsg := err.Error()
+			isTransient := strings.Contains(errMsg, "connection reset by peer") ||
+				strings.Contains(errMsg, "connection refused") ||
+				strings.Contains(errMsg, "connection shutdown") ||
+				strings.Contains(errMsg, "i/o timeout") ||
+				strings.Contains(errMsg, "deadline exceeded") ||
+				errors.Is(err, context.DeadlineExceeded)
+			if !isTransient || attempt == maxRetries {
+				return nil, err
+			}
+			// 指数退避：100ms, 200ms。P1-04: 使用 select 监听 ctx 取消，避免 goroutine 泄漏。
+			backoff := time.Duration(1<<(attempt+1)) * 50 * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+			logger.Warnf("rpc transient error, retrying %d/%d: service=%s method=%s err=%v", attempt+1, maxRetries, service, method, err)
 		}
-		lastErr = err
-		// P2-01: 仅对明确的瞬态错误重试。
-		// 使用精确子串匹配避免误匹配非瞬态错误（如 "statement timeout"）。
-		errMsg := err.Error()
-		isTransient := strings.Contains(errMsg, "connection reset by peer") ||
-			strings.Contains(errMsg, "connection refused") ||
-			strings.Contains(errMsg, "connection shutdown") ||
-			strings.Contains(errMsg, "i/o timeout") ||
-			strings.Contains(errMsg, "deadline exceeded") ||
-			errors.Is(err, context.DeadlineExceeded)
-		if !isTransient || attempt == maxRetries {
-			return nil, err
-		}
-		// 指数退避：100ms, 200ms。P1-04: 使用 select 监听 ctx 取消，避免 goroutine 泄漏。
-		backoff := time.Duration(1<<(attempt+1)) * 50 * time.Millisecond
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(backoff):
-		}
-		logger.Warnf("rpc transient error, retrying %d/%d: service=%s method=%s err=%v", attempt+1, maxRetries, service, method, err)
+		return nil, lastErr
 	}
-	return nil, lastErr
+
+	cbKey := service + "/" + method
+	if p.cb != nil {
+		return p.cb.Execute(cbKey, rpcFn)
+	}
+	return rpcFn()
 }
 
 // =========================
@@ -440,7 +464,7 @@ func (p *Proxy) DiscoverAndRegister(
 		}
 	}
 	if len(regFailures) > 0 {
-		logger.Errorf("services failed to register at startup: %v", regFailures)
+		return fmt.Errorf("failed to register services at startup: %v", regFailures)
 	}
 	return nil
 }
@@ -785,6 +809,21 @@ func (p *Proxy) authenticate(ctx context.Context, c *app.RequestContext, service
 // 处理熔断器错误、下游业务错误和包装的 JSON 响应。
 func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string, resp interface{}, err error) {
 	if err != nil {
+		// P0-04: 熔断器打开 → 快速失败，不等待 RPC 超时
+		if errors.Is(err, gobreaker.ErrOpenState) {
+			logger.Warnf("circuit breaker open: service=%s method=%s", service, method)
+			response.Fail(c, http.StatusServiceUnavailable, int(errcode.CodeGwSrvUnavailable), "下游服务暂时不可用（熔断）")
+			c.Abort()
+			return
+		}
+		// 熔断器半开状态请求过多
+		if errors.Is(err, gobreaker.ErrTooManyRequests) {
+			logger.Warnf("circuit breaker half-open too many requests: service=%s method=%s", service, method)
+			response.Fail(c, http.StatusServiceUnavailable, int(errcode.CodeGwSrvUnavailable), "下游服务正在恢复中")
+			c.Abort()
+			return
+		}
+
 		// 尝试解析下游 BizError（支持 Kitex 远程错误包装格式）。
 		// 优先检查原始 err，再检查 unwrap 后的 err。
 		if biz, ok := errcode.ParseBizError(err); ok {
