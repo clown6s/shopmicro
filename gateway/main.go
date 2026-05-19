@@ -150,6 +150,7 @@ func Run(configPath string) error {
 	// =========================
 
 	h.Use(hertztracing.ServerMiddleware(traceCfg)) // otel 根 span + 链路上下文
+	h.Use(middleware.PrometheusMiddleware())       // P2: Prometheus 指标采集（QPS/延迟/并发）
 	h.Use(middleware.RecoveryMiddleware(cfg.Mode)) // panic 恢复
 	h.Use(middleware.CORS(&middleware.CORSConfig{  // 跨域
 		AllowOrigins:     cfg.CORS.AllowOrigins,

@@ -9,6 +9,8 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+
+	"shopmicro/gateway/middleware"
 )
 
 // R5-P3-06: 缓存 runtime.MemStats，避免每次 /metrics 请求触发 STW 暂停。
@@ -85,5 +87,8 @@ func MetricsHandler() app.HandlerFunc {
 		fmt.Fprintf(c, "# HELP go_gc_num Total number of GC cycles completed\n")
 		fmt.Fprintf(c, "# TYPE go_gc_num counter\n")
 		fmt.Fprintf(c, "go_gc_num %d\n", m.NumGC)
+
+		// P2: HTTP 请求指标（QPS、延迟分布、错误率、并发数）
+		middleware.DefaultMetricsCollector().WritePrometheus(c)
 	}
 }

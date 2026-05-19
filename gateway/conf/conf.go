@@ -3,6 +3,8 @@ package conf
 import (
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"strings"
 
 	"shopmicro/pkg/conf"
@@ -269,5 +271,35 @@ func (c *Config) Validate() error {
 	if c.JWT.Issuer == "" && c.Mode == "prod" {
 		return fmt.Errorf("jwt issuer is required in production mode to prevent accepting tokens from any issuer")
 	}
+
+	// CORS 校验：AllowOrigins 必须为合法 HTTP(S) origin
+	for i, origin := range c.CORS.AllowOrigins {
+		if origin == "*" {
+			if c.CORS.AllowCredentials {
+				return fmt.Errorf("cors: AllowOrigins contains '*' with AllowCredentials=true — browsers will reject responses")
+			}
+			continue
+		}
+		u, err := url.Parse(origin)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("cors: AllowOrigins[%d] %q is not a valid HTTP(S) origin (expected http:// or https://host)", i, origin)
+		}
+	}
+
+	// TrustedProxies 校验：每条必须是合法 CIDR 或 IP
+	for i, p := range c.TrustedProxies {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(p); err == nil {
+			continue
+		}
+		if ip := net.ParseIP(p); ip != nil {
+			continue
+		}
+		return fmt.Errorf("trustedProxies[%d] %q is not a valid CIDR or IP address", i, p)
+	}
+
 	return nil
 }
