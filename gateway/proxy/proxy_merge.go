@@ -40,6 +40,9 @@ func mergeQueryToJSON(body string, params url.Values) (string, error) {
 // mergeQueryToJSONTyped 使用 proto 服务描述符做类型感知的 query→JSON 合并。
 // 根据 proto 字段类型决定是否将 query value 转为数字/布尔。
 func (p *Proxy) mergeQueryToJSONTyped(body string, params url.Values, svcDesc *dproto.ServiceDescriptor, method string) (string, error) {
+	if svcDesc == nil {
+		return mergeQueryToJSON(body, params)
+	}
 	mtdDesc := svcDesc.LookupMethodByName(method)
 	if mtdDesc == nil {
 		return mergeQueryToJSON(body, params)
