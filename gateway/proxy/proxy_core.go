@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -60,6 +60,7 @@ type Proxy struct {
 	rpcTimeout       time.Duration
 	connectTimeout   time.Duration
 	maxRetries       int
+	registerRetries  int
 }
 
 type Option func(*Proxy)
@@ -164,6 +165,15 @@ func WithMaxRetries(n int) Option {
 	}
 }
 
+func WithRegisterRetries(n int) Option {
+	if n < 1 {
+		n = 3
+	}
+	return func(p *Proxy) {
+		p.registerRetries = n
+	}
+}
+
 func New(opts ...Option) *Proxy {
 	p := &Proxy{
 		clients:          make(map[string]*ServiceClient),
@@ -176,6 +186,7 @@ func New(opts ...Option) *Proxy {
 		rpcTimeout:       5 * time.Second,
 		connectTimeout:   3 * time.Second,
 		maxRetries:       2,
+		registerRetries:  3,
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -217,7 +228,8 @@ func bearerToken(authHeader string) (string, bool) {
 }
 
 func buildProtoPath(protoBase, service string) string {
-	return filepath.Join(protoBase, service, "api", service+".proto")
+	// 使用 path.Join（始终正斜杠），确保 Windows 本地开发也能正确加载 proto 文件
+	return path.Join(protoBase, service, "api", service+".proto")
 }
 
 func extractServiceName(key, prefix string) string {
@@ -253,13 +265,12 @@ func (p *Proxy) registerService(
 		protoPath,
 		ctx,
 		dproto.Options{},
-		filepath.Dir(protoPath),
-	)
+		path.Dir(protoPath))
 	if err != nil {
 		return fmt.Errorf("create pb provider for %s (%s): %w", serviceName, protoPath, err)
 	}
 
-	svcDesc, err := dproto.Options{}.NewDescriptorFromPath(ctx, protoPath, filepath.Dir(protoPath))
+	svcDesc, err := dproto.Options{}.NewDescriptorFromPath(ctx, protoPath, path.Dir(protoPath))
 	if err != nil {
 		logger.Warnf("parse descriptor for %s: %v (query param type conversion disabled)", serviceName, err)
 	}

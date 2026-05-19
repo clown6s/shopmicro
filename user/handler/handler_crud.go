@@ -90,7 +90,7 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 	// 仅导致用户需要重新登录（安全优先），数据保持不变。
 	if upd.Phone != nil {
 		tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
-		rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
+		rtSetKey := fmt.Sprintf("%s%d", tokenSetKeyPrefix, req.GetId())
 		if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}); err != nil {
 			logger.Warnf("update user: failed to revoke tokens before DB update (user_id=%d): %v", req.GetId(), err)
 			return nil, errInternal
@@ -147,7 +147,7 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 	}
 
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
-	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
+	rtSetKey := fmt.Sprintf("%s%d", tokenSetKeyPrefix, req.GetId())
 	// 软删除已提交 DB，Redis 撤销失败不返回错误（降级为 warning）。
 	// 原因：返回错误会让客户端重试，但 GetByID 因 deleted_at!=nil 返回 "用户不存在"，
 	// 造成更严重的困惑。旧 token 短暂有效远比 "用户不存在" 好处理。
@@ -157,14 +157,21 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 
 	logger.Infof("user deleted: user_id=%d", req.GetId())
 
-	failKey := fmt.Sprintf("shopmicro:login:fail:%s", user.Phone)
+	failKey := fmt.Sprintf("%s%s", loginFailKeyPrefix, user.Phone)
 	_ = s.rdb.Del(ctx, failKey)
 
 	return &v1.DeleteUserResp{}, nil
 }
 
 // ListUser 分页列出所有用户并支持搜索。
+// 仅通过 gateway 认证的管理员可调用。
+// TODO: 等待 role 字段加入 JWT Claims 后，改为检查 claims.Role == "admin"。
 func (s *UserServiceImpl) ListUser(ctx context.Context, req *v1.ListUserReq) (*v1.ListUserResp, error) {
+	// 权限校验：ListUser 为管理员接口，至少要求通过 gateway 认证
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+
 	// 校正分页参数，确保响应中返回实际使用的值
 	page := req.GetPage()
 	pageSize := req.GetPageSize()
@@ -173,6 +180,13 @@ func (s *UserServiceImpl) ListUser(ctx context.Context, req *v1.ListUserReq) (*v
 	}
 	if pageSize <= 0 || pageSize > 20 {
 		pageSize = 20
+	}
+
+	if name := req.GetName(); len(name) > 64 {
+		return nil, newBizHTTP(errcode.CodeUserParam, "name too long (max 64)", 400)
+	}
+	if phone := req.GetPhone(); len(phone) > 20 {
+		return nil, newBizHTTP(errcode.CodeUserParam, "phone too long (max 20)", 400)
 	}
 
 	users, total, err := s.userDal.List(ctx, page, pageSize, req.GetName(), req.GetPhone())

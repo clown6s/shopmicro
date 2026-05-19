@@ -41,8 +41,8 @@ var (
 	errForbidden        = newBizHTTP(errcode.CodeUserForbidden, "forbidden: cannot operate other user's data", 403)
 	errEmailFormat      = newBiz(errcode.CodeUserEmailFormat, "invalid email format")
 	errAccountLocked    = newBizHTTP(errcode.CodeUserAccountLocked, "account temporarily locked due to too many failed login attempts", 423)
-	errRegisterTooMany  = newBizHTTP(errcode.CodeUserParam, "too many registration attempts, please try again later", 429)
-	errRefreshTooMany   = newBizHTTP(errcode.CodeUserParam, "too many refresh attempts, please try again later", 429)
+	errRegisterTooMany  = newBizHTTP(errcode.CodeUserParam, "too many registration attempts, please try again later", 429) // CodeUserParam 保持向后兼容，消息已区分
+	errRefreshTooMany   = newBizHTTP(errcode.CodeUserParam, "too many refresh attempts, please try again later", 429)      // CodeUserParam 保持向后兼容，消息已区分
 )
 
 // P1-21：手机号正则 — 中国手机号格式
@@ -120,6 +120,8 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer s
 
 const tokenPrefix = "shopmicro:user:token:"
 const refreshTokenPrefix = "shopmicro:user:refresh:"
+const tokenSetKeyPrefix = "shopmicro:user:rtset:"
+const loginFailKeyPrefix = "shopmicro:login:fail:"
 
 // P2-06/P2-07：共享的频率限制 Lua 脚本（原子性 INCR + 条件 EXPIRE）
 const rateLimitScript = `
@@ -164,7 +166,7 @@ return 1
 
 // checkLoginAttempts 检查手机号是否有过多的近期登录失败记录。
 func (s *UserServiceImpl) checkLoginAttempts(ctx context.Context, phone string) error {
-	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
+	key := fmt.Sprintf("%s%s", loginFailKeyPrefix, phone)
 	count, err := s.rdb.Get(ctx, key)
 	if err != nil {
 		if errors.Is(err, goredis.Nil) {
@@ -189,7 +191,7 @@ func (s *UserServiceImpl) checkLoginAttempts(ctx context.Context, phone string) 
 
 // recordLoginFailure 递增手机号的登录失败计数器。
 func (s *UserServiceImpl) recordLoginFailure(ctx context.Context, phone string) {
-	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
+	key := fmt.Sprintf("%s%s", loginFailKeyPrefix, phone)
 	if _, err := s.rdb.RunScript(ctx, loginFailIncrScript, []string{key}, s.sec.LoginLockoutSec); err != nil {
 		logger.Warnf("login: failed to record login failure for phone %s: %v", maskPhone(phone), err)
 	}
@@ -197,7 +199,7 @@ func (s *UserServiceImpl) recordLoginFailure(ctx context.Context, phone string) 
 
 // clearLoginFailures 在成功登录后清除登录失败计数器。
 func (s *UserServiceImpl) clearLoginFailures(ctx context.Context, phone string) {
-	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
+	key := fmt.Sprintf("%s%s", loginFailKeyPrefix, phone)
 	_ = s.rdb.Del(ctx, key)
 }
 
@@ -213,6 +215,19 @@ func (s *UserServiceImpl) checkOwnership(ctx context.Context, targetID int64) er
 		return errUnauthorized
 	}
 	if callerID != targetID {
+		return errForbidden
+	}
+	return nil
+}
+
+// requireAdmin 验证调用者已通过 gateway 认证（user_id 存在）。
+// TODO: 等待 JWT Claims 加入 role 字段后，改为检查 role == "admin"。
+func requireAdmin(ctx context.Context) error {
+	userIDStr, ok := metainfo.GetPersistentValue(ctx, "user_id")
+	if !ok || userIDStr == "" {
+		return errForbidden
+	}
+	if _, err := parseInt64(userIDStr); err != nil {
 		return errForbidden
 	}
 	return nil

@@ -81,6 +81,7 @@ func (d *DistrictDal) UpdateDistrict(ctx context.Context) error {
 	if d.amapKey == "" {
 		return fmt.Errorf("amap key is not configured, set AMAP_KEY env or config.yaml")
 	}
+	start := time.Now()
 	amapResp, err := d.fetchAMapData(ctx)
 	if err != nil {
 		return fmt.Errorf("fetch amap data: %w", err)
@@ -91,13 +92,14 @@ func (d *DistrictDal) UpdateDistrict(ctx context.Context) error {
 		return fmt.Errorf("no district data fetched from amap")
 	}
 
-	logger.Infof("district update: fetched %d records from amap, starting full replace", len(records))
+	logger.Infof("district update: amap fetch took %v, %d records", time.Since(start), len(records))
 
+	start2 := time.Now()
 	if err := d.fullReplace(ctx, records); err != nil {
 		return fmt.Errorf("full replace: %w", err)
 	}
 
-	logger.Infof("district update: full replace done, total %d records", len(records))
+	logger.Infof("district update: full replace took %v", time.Since(start2))
 	return nil
 }
 
@@ -178,6 +180,7 @@ type districtRecord struct {
 // parentAdCode=0 时表示顶级（country），跳过不存。
 func flattenDistricts(districts []amapDistrict, parentAdCode int) []districtRecord {
 	var records []districtRecord
+	seen := make(map[int]bool)
 
 	for _, d := range districts {
 		// 跳过国家级（高德返回的根节点）
@@ -191,6 +194,12 @@ func flattenDistricts(districts []amapDistrict, parentAdCode int) []districtReco
 			logger.Warnf("skip invalid adcode: %s (%s)", d.AdCode, d.Name)
 			continue
 		}
+
+		if seen[adCode] {
+			logger.Warnf("skip duplicate adcode: %d (%s)", adCode, d.Name)
+			continue
+		}
+		seen[adCode] = true
 
 		records = append(records, districtRecord{
 			AdCode:       adCode,
@@ -242,6 +251,9 @@ func (d *DistrictDal) fullReplace(ctx context.Context, records []districtRecord)
 		return err
 	}
 
+	// 累计实际写入行数，防止所有记录被过滤后数据库变空
+	var totalAffected int64
+
 	for i := 0; i < len(records); i += batchSize {
 
 		end := i + batchSize
@@ -264,9 +276,18 @@ func (d *DistrictDal) fullReplace(ctx context.Context, records []districtRecord)
 			strings.Join(values, ","),
 		)
 
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		var result sql.Result
+		result, err = tx.ExecContext(ctx, query, args...)
+		if err != nil {
 			return err
 		}
+
+		n, _ := result.RowsAffected()
+		totalAffected += n
+	}
+
+	if totalAffected == 0 {
+		return fmt.Errorf("fullReplace: all %d records were filtered (no valid data inserted), aborting to prevent empty table", len(records))
 	}
 
 	return tx.Commit()

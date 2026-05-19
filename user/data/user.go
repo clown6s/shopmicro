@@ -72,6 +72,24 @@ func (u *UserUpdate) SetRemark(v string) *UserUpdate {
 	return u
 }
 
+// updateAllowedCols 是 Update 方法允许更新的列白名单。
+var updateAllowedCols = map[string]bool{
+	"real_name": true,
+	"avatar":    true,
+	"gender":    true,
+	"age":       true,
+	"phone":     true,
+	"email":     true,
+	"remark":    true,
+}
+
+// updateBlockedCols 是 Update 方法禁止更新的列黑名单。
+var updateBlockedCols = map[string]bool{
+	"id":         true,
+	"password":   true,
+	"deleted_at": true,
+}
+
 // Fields 返回非 nil 的更新条目作为 map，用于向后兼容。
 // 这允许渐进式迁移，无需一次性修改所有调用点。
 func (u *UserUpdate) Fields() map[string]interface{} {
@@ -145,27 +163,12 @@ func (d *UserDal) Update(ctx context.Context, id int64, updates map[string]inter
 
 	setParts := make([]string, 0, len(updates))
 	args := make([]interface{}, 0, len(updates)+1)
-	allowedCols := map[string]bool{
-		"real_name": true,
-		"avatar":    true,
-		"gender":    true,
-		"age":       true,
-		"phone":     true,
-		"email":     true,
-		"remark":    true,
-	}
-	// P2-02：显式黑名单 — 这些列永远不能通过此方法更新
-	blockedCols := map[string]bool{
-		"id":         true,
-		"password":   true,
-		"deleted_at": true,
-	}
 	for k, v := range updates {
-		if blockedCols[k] {
+		if updateBlockedCols[k] {
 			logger.Warnf("update: blocked column %s ignored (user_id in request)", k)
 			continue
 		}
-		if !allowedCols[k] {
+		if !updateAllowedCols[k] {
 			// R5-P2-06: 未知列静默跳过可能是调用方拼写错误（如 "emial"），
 			// 记录 Warnf 帮助排查
 			logger.Warnf("update: unknown column %q ignored (user_id from caller context)", k)

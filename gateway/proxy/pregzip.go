@@ -31,6 +31,10 @@ var preGzipCache sync.Map
 // 缓存条目计数，用于限制总缓存数量防止内存耗尽
 var preGzipCount atomic.Int64
 
+// preGzipOrder 记录缓存 key 的插入顺序，用于 FIFO 淘汰
+var preGzipOrder []string
+var preGzipOrderMu sync.Mutex
+
 // preGzipStop 用于优雅停止清理 goroutine
 var preGzipStop chan struct{}
 
@@ -101,6 +105,22 @@ func cleanPreGzipCache() {
 			preGzipCount.Add(-1)
 		}
 	}
+	// 从 FIFO 顺序列表中移除过期 key
+	if len(expiredKeys) > 0 {
+		expiredSet := make(map[string]struct{}, len(expiredKeys))
+		for _, k := range expiredKeys {
+			expiredSet[k] = struct{}{}
+		}
+		preGzipOrderMu.Lock()
+		filtered := preGzipOrder[:0]
+		for _, k := range preGzipOrder {
+			if _, ok := expiredSet[k]; !ok {
+				filtered = append(filtered, k)
+			}
+		}
+		preGzipOrder = filtered
+		preGzipOrderMu.Unlock()
+	}
 }
 
 // preGzipCacheKey 构建缓存键：service/method?queryString（参数排序确保一致性）。
@@ -170,9 +190,29 @@ func setPreGzip(key string, data []byte) {
 		return // 已存在，不重复写入也不递增计数器
 	}
 	newCount := preGzipCount.Add(1)
-	// 并发 LoadOrStore 可能短暂超过上限，触发一次清理
-	if newCount > preGzipCfg.maxEntries+16 {
+	preGzipOrderMu.Lock()
+	preGzipOrder = append(preGzipOrder, key)
+	preGzipOrderMu.Unlock()
+
+	// 并发写入可能短暂超过上限，触发清理和 FIFO 淘汰
+	if newCount > preGzipCfg.maxEntries {
 		cleanPreGzipCache()
+		// 清理过期条目后仍超过上限，FIFO 淘汰最旧的条目
+		for preGzipCount.Load() > preGzipCfg.maxEntries {
+			preGzipOrderMu.Lock()
+			var oldest string
+			if len(preGzipOrder) > 0 {
+				oldest = preGzipOrder[0]
+				preGzipOrder = preGzipOrder[1:]
+			}
+			preGzipOrderMu.Unlock()
+			if oldest == "" {
+				break
+			}
+			if _, deleted := preGzipCache.LoadAndDelete(oldest); deleted {
+				preGzipCount.Add(-1)
+			}
+		}
 	}
 }
 

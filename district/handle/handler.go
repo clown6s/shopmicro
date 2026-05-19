@@ -96,5 +96,8 @@ func (s *DistrictServiceImpl) UpdateDistrict(ctx context.Context, req *v1.Update
 	if err != nil {
 		return nil, err
 	}
+	// 数据已更新，清除查询缓存，下次请求重新从数据库加载
+	s.sf.Forget("provinces")
+	logger.Info("district: singleflight query cache cleared after UpdateDistrict")
 	return &v1.UpdateDistrictResp{}, nil
 }

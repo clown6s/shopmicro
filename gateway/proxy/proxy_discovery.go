@@ -172,7 +172,7 @@ func (p *Proxy) watchOnce(
 					continue
 				}
 
-				regErr := p.retryRegister(ctx, svcName, protoPath, resolver, 3)
+				regErr := p.retryRegister(ctx, svcName, protoPath, resolver, p.registerRetries)
 				if regErr != nil {
 					logger.Warnf("WatchServices: failed to register %s after retries: %v", svcName, regErr)
 				}
@@ -188,13 +188,19 @@ func (p *Proxy) watchOnce(
 					if sc, ok := p.clients[svcName]; ok {
 						delete(p.clients, svcName)
 						delete(p.instanceCount, svcName)
-						_ = sc.Generic.Close()
-						sc.Client.Close()
+						p.mu.Unlock()
+						if err := sc.Generic.Close(); err != nil {
+							logger.Warnf("WatchServices: close generic for %s: %v", svcName, err)
+						}
+						if err := sc.Client.Close(); err != nil {
+							logger.Warnf("WatchServices: close client for %s: %v", svcName, err)
+						}
 						logger.Infof("WatchServices: removed client for %s (all instances deregistered)", svcName)
 					} else {
+						p.mu.Lock()
 						delete(p.instanceCount, svcName)
+						p.mu.Unlock()
 					}
-					p.mu.Unlock()
 				} else {
 					logger.Infof("WatchServices: instance deregistered for %s (remaining: %d)", svcName, count)
 				}

@@ -190,7 +190,7 @@ func (s *UserServiceImpl) Login(ctx context.Context, req *v1.LoginReq) (*v1.Logi
 	atTTL := time.Duration(s.jwtExpHrs) * time.Hour
 	rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, refreshToken)
 	rtTTL := time.Duration(s.rtExpHrs) * time.Hour
-	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", user.ID)
+	rtSetKey := fmt.Sprintf("%s%d", tokenSetKeyPrefix, user.ID)
 
 	// R4-P1-05: 原子化写入 access token + refresh token + 反向集合，避免中间状态
 	if _, err := s.rdb.RunScript(ctx, loginTokensScript,

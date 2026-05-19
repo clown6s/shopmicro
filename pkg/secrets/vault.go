@@ -69,6 +69,15 @@ func NewVaultProvider(cfg VaultConfig) (*VaultProvider, error) {
 		return nil, fmt.Errorf("vault: token is required")
 	}
 
+	// mountPath 处理和校验提前，防止在校验前被使用
+	mountPath := cfg.MountPath
+	if mountPath == "" {
+		mountPath = "secret"
+	}
+	if strings.Contains(mountPath, "..") || strings.Contains(mountPath, "\x00") || strings.Contains(mountPath, "%") {
+		return nil, fmt.Errorf("vault: mountPath contains invalid characters: %q", mountPath)
+	}
+
 	vaultCfg := api.DefaultConfig()
 	vaultCfg.Address = cfg.Address
 
@@ -105,15 +114,6 @@ func NewVaultProvider(cfg VaultConfig) (*VaultProvider, error) {
 		return nil, fmt.Errorf("vault: token validation failed (address=%s): %w", cfg.Address, err)
 	}
 	_ = authResp // 确认 token 有效即可
-
-	mountPath := cfg.MountPath
-	if mountPath == "" {
-		mountPath = "secret"
-	}
-	// R6-P2-06: 校验 mountPath 防止路径穿越
-	if strings.Contains(mountPath, "..") || strings.Contains(mountPath, "\x00") {
-		return nil, fmt.Errorf("vault: mountPath contains invalid characters: %q", mountPath)
-	}
 
 	logger.Infof("secrets: vault provider initialised (address=%s, mount=%s, namespace=%s)",
 		cfg.Address, mountPath, cfg.Namespace)

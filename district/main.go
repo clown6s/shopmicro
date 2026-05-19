@@ -28,9 +28,11 @@ import (
 	"shopmicro/district/conf"
 	"shopmicro/district/data"
 	"shopmicro/district/handle"
+	districtMiddleware "shopmicro/district/middleware"
 
 	pkgconf "shopmicro/pkg/conf"
 	pkghealth "shopmicro/pkg/health"
+	"shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/otel"
 )
@@ -112,6 +114,45 @@ func Run(configPath string) error {
 		return fmt.Errorf("create district handler: %w", err)
 	}
 
+	// =========================
+	// 鉴权拦截器
+	// =========================
+
+	var authMws []endpoint.Middleware
+	{
+		// JWT 拦截器：校验从 gateway 转发的客户端 token
+		if cfg.Auth.JWTSecret != "" {
+			jwtParser, err := jwt.NewParser(cfg.Auth.JWTSecret, "")
+			if err != nil {
+				return fmt.Errorf("init jwt parser: %w", err)
+			}
+			authMws = append(authMws, districtMiddleware.UnaryJWTInterceptor(jwtParser))
+			logger.Info("district auth: JWT interceptor enabled")
+		} else if cfg.Mode == "prod" {
+			return fmt.Errorf("auth.jwtSecret is required in production mode")
+		}
+		// Internal token 拦截器：校验服务间 API Key
+		if cfg.Auth.InternalToken != "" {
+			authMws = append(authMws, districtMiddleware.UnaryServiceAuthInterceptor(cfg.Auth.InternalToken))
+			logger.Info("district auth: internal token interceptor enabled")
+		}
+	}
+
+	// 构建中间件链：鉴权 → panicRecovery
+	var mws []endpoint.Middleware
+	if len(authMws) > 0 {
+		mws = append(mws, authMws...)
+	}
+	mws = append(mws, panicRecoveryMiddleware)
+
+	// 将中间件链合并为单个 Middleware 传入 WithMiddleware
+	chainMiddleware := func(next endpoint.Endpoint) endpoint.Endpoint {
+		for i := len(mws) - 1; i >= 0; i-- {
+			next = mws[i](next)
+		}
+		return next
+	}
+
 	svr := v1.NewServer(
 		districtHandler,
 
@@ -132,8 +173,8 @@ func Run(configPath string) error {
 			),
 		),
 
-		// Panic 恢复 —— 防止 handler panic 导致进程崩溃
-		server.WithMiddleware(panicRecoveryMiddleware),
+		// 鉴权 + panicRecovery
+		server.WithMiddleware(chainMiddleware),
 	)
 
 	// =========================

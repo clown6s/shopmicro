@@ -147,6 +147,9 @@ func (c *Config) SetDefaults() {
 	if rpc.MaxRetries <= 0 {
 		rpc.MaxRetries = 2
 	}
+	if rpc.MaxRetries > 10 {
+		rpc.MaxRetries = 10
+	}
 
 	// 熔断器
 	cb := &c.CircuitBreaker
@@ -266,7 +269,7 @@ func (c *Config) Validate() error {
 		if epCfg.Limit < 1 {
 			return fmt.Errorf("rate limit endpoint %q: limit must be >= 1, got %d", epKey, epCfg.Limit)
 		}
-		if epCfg.WindowSec < 1 {
+		if epCfg.WindowSec < 0 {
 			return fmt.Errorf("rate limit endpoint %q: windowSec must be >= 1, got %d", epKey, epCfg.WindowSec)
 		}
 	}

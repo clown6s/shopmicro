@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"path/filepath"
 	"testing"
 )
 
@@ -109,8 +108,8 @@ func TestExtractServiceName(t *testing.T) {
 
 func TestBuildProtoPath(t *testing.T) {
 	got := buildProtoPath("../", "user")
-	// filepath.Join uses OS-specific separator
-	want := filepath.Join("..", "user", "api", "user.proto")
+	// path.Join always uses forward slash (OS-independent)
+	want := "../user/api/user.proto"
 	if got != want {
 		t.Fatalf("buildProtoPath = %q, want %q", got, want)
 	}
