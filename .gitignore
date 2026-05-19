@@ -16,8 +16,6 @@ Thumbs.db
 vendor/
 
 # Generated code (should be regenerated, not committed)
-*/kitex_gen/
-
 # Logs
 *.log
 
@@ -26,7 +24,3 @@ vendor/
 # Config (contains passwords - use .env.example instead)
 # Uncomment if you don't want config.yaml in repo:
 # */conf/config.yaml
-
-# Go workspace (local dev only)
-go.work
-go.work.sum
