@@ -32,7 +32,7 @@ func (p *Proxy) Call(
 	}
 
 	rpcFn := func() (interface{}, error) {
-		const maxRetries = 2
+		maxRetries := p.maxRetries
 		var lastErr error
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			resp, err := cli.Client.GenericCall(ctx, method, req, callOpts...)

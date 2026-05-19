@@ -20,6 +20,7 @@ import (
 
 	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/jwt"
+	"shopmicro/user/conf"
 )
 
 // ===========================
@@ -44,6 +45,12 @@ func newTestHandler(store UserStore, rdb RedisOps) *UserServiceImpl {
 		rtGen:     rtGen,
 		rtExpHrs:  rtExpHrs,
 		rdb:       rdb,
+		sec: conf.Security{
+			PasswordMinLen: 8, PasswordMaxLen: 128, PasswordBcryptCost: 12,
+			RegisterLimitMax: 5, RegisterLimitWindow: 3600,
+			RefreshLimitMax: 10, RefreshLimitWindow: 60,
+			LoginMaxFailures: 10, LoginLockoutSec: 900,
+		},
 	}
 }
 

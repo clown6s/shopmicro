@@ -2,7 +2,15 @@ package handler
 
 import (
 	"testing"
+
+	"shopmicro/user/conf"
 )
+
+func testHandler() *UserServiceImpl {
+	return &UserServiceImpl{sec: conf.Security{
+		PasswordMinLen: 8, PasswordMaxLen: 128,
+	}}
+}
 
 func TestEmailRegex(t *testing.T) {
 	tests := []struct {
@@ -43,7 +51,8 @@ func TestPasswordValid(t *testing.T) {
 		{"", false},           // empty
 	}
 	for _, tt := range tests {
-		got := passwordValid(tt.pwd)
+		s := testHandler()
+		got := s.passwordValid(tt.pwd)
 		if got != tt.valid {
 			t.Fatalf("passwordValid(%q) = %v, want %v", tt.pwd, got, tt.valid)
 		}

@@ -127,12 +127,12 @@ func Run(configPath string) error {
 
 		server.WithHostPorts(cfg.Server.Addr),
 
-		server.WithMaxRequestBodySize(1<<20), // 1MB
+		server.WithMaxRequestBodySize(cfg.HTTPServer.MaxBodySize*1024),
 
-		// P2-SEC-03 修复：添加服务器超时配置防止慢客户端攻击
-		server.WithReadTimeout(10*time.Second),
-		server.WithWriteTimeout(30*time.Second),
-		server.WithIdleTimeout(60*time.Second),
+		// P2-SEC-03 修复：服务器超时配置（从 yaml 读取）
+		server.WithReadTimeout(time.Duration(cfg.HTTPServer.ReadTimeout)*time.Second),
+		server.WithWriteTimeout(time.Duration(cfg.HTTPServer.WriteTimeout)*time.Second),
+		server.WithIdleTimeout(time.Duration(cfg.HTTPServer.IdleTimeout)*time.Second),
 	)
 
 	// =========================
@@ -169,6 +169,16 @@ func Run(configPath string) error {
 	// 代理
 	// =========================
 
+	// 初始化预压缩缓存
+	proxy.InitPreGzip(
+		time.Duration(cfg.PreGzip.TTLSec)*time.Second,
+		time.Duration(cfg.PreGzip.CleanupInterval)*time.Second,
+		cfg.PreGzip.MinSizeKB,
+		cfg.PreGzip.MaxEntries,
+		cfg.PreGzip.MaxQueryLen,
+		cfg.PreGzip.MaxKeyLen,
+	)
+
 	// 构建代理选项
 	opts := []proxy.Option{
 		proxy.WithJWT(cfg.JWT.Secret, cfg.JWT.Issuer),
@@ -178,8 +188,18 @@ func Run(configPath string) error {
 		// 防止通过 GET 请求绕过 Login 的严格限流。
 		proxy.WithEndpointRateLimit(rl.NewEndpointCheckFn()),
 
-		// 熔断器：下游服务连续 5 次失败后自动打开，30s 后进入半开状态探测恢复
-		proxy.WithCircuitBreaker(proxy.NewCircuitBreaker()),
+		// 熔断器：下游服务连续失败后自动打开，间隔后进入半开状态探测恢复
+		proxy.WithCircuitBreaker(proxy.NewCircuitBreaker(
+			uint32(cfg.CircuitBreaker.ConsecutiveFailures),
+			time.Duration(cfg.CircuitBreaker.IntervalSec)*time.Second,
+			time.Duration(cfg.CircuitBreaker.TimeoutSec)*time.Second,
+			uint32(cfg.CircuitBreaker.MaxRequests),
+		)),
+
+		// RPC 超时与重试配置
+		proxy.WithRPCTimeout(time.Duration(cfg.RPC.RPCTimeout) * time.Second),
+		proxy.WithConnectTimeout(time.Duration(cfg.RPC.ConnectTimeout) * time.Second),
+		proxy.WithMaxRetries(cfg.RPC.MaxRetries),
 	}
 	// 追加路由相关配置：公开方法、白名单、HTTP 方法映射
 	opts = append(opts, routes.ProxyOptions()...)

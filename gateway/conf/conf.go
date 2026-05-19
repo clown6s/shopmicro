@@ -24,6 +24,43 @@ type Config struct {
 	// TrustedProxies 列出可信反向代理的 CIDR 或 IP 列表。
 	// X-Forwarded-For 从右往左解析；第一个不可信 IP 即为真实客户端。
 	TrustedProxies []string `yaml:"trustedProxies"`
+	// HTTPServer 服务器超时与限制配置
+	HTTPServer HTTPServer `yaml:"httpServer"`
+	// RPC 代理 RPC 客户端超时与重试配置
+	RPC RPCConfig `yaml:"rpc"`
+	// CircuitBreaker 熔断器配置
+	CircuitBreaker CircuitBreakerConfig `yaml:"circuitBreaker"`
+	// PreGzip 预压缩缓存配置
+	PreGzip PreGzipConfig `yaml:"preGzip"`
+}
+
+type HTTPServer struct {
+	ReadTimeout  int `yaml:"readTimeoutSec"`  // 读超时秒 (default: 10)
+	WriteTimeout int `yaml:"writeTimeoutSec"` // 写超时秒 (default: 30)
+	IdleTimeout  int `yaml:"idleTimeoutSec"`  // 空闲超时秒 (default: 60)
+	MaxBodySize  int `yaml:"maxBodySizeKB"`   // 最大请求体 KB (default: 1024, 即 1MB)
+}
+
+type RPCConfig struct {
+	RPCTimeout     int `yaml:"rpcTimeoutSec"`     // RPC 调用超时秒 (default: 5)
+	ConnectTimeout int `yaml:"connectTimeoutSec"` // 连接建立超时秒 (default: 3)
+	MaxRetries     int `yaml:"maxRetries"`        // 瞬态错误最大重试次数 (default: 2)
+}
+
+type CircuitBreakerConfig struct {
+	ConsecutiveFailures int `yaml:"consecutiveFailures"` // 连续失败触发熔断 (default: 5)
+	IntervalSec         int `yaml:"intervalSec"`         // Open→HalfOpen 间隔秒 (default: 30)
+	TimeoutSec          int `yaml:"timeoutSec"`          // HalfOpen 状态超时秒 (default: 5)
+	MaxRequests         int `yaml:"maxRequests"`         // HalfOpen 状态最大探测请求数 (default: 3)
+}
+
+type PreGzipConfig struct {
+	TTLSec          int `yaml:"ttlSec"`             // 缓存有效期秒 (default: 3600)
+	CleanupInterval int `yaml:"cleanupIntervalSec"` // 清理间隔秒 (default: 1800)
+	MinSizeKB       int `yaml:"minSizeKB"`          // 最小缓存响应 KB (default: 100)
+	MaxEntries      int `yaml:"maxEntries"`         // 最大缓存条目数 (default: 1000)
+	MaxQueryLen     int `yaml:"maxQueryLen"`        // 最大 query string 长度 (default: 2048)
+	MaxKeyLen       int `yaml:"maxKeyLen"`          // 最大缓存键长度 (default: 4096)
 }
 
 type OTEL struct {
@@ -78,6 +115,69 @@ func (c *Config) SetDefaults() {
 		} else {
 			c.OTEL.SampleRate = 0.1
 		}
+	}
+
+	// HTTP 服务器超时
+	hs := &c.HTTPServer
+	if hs.ReadTimeout <= 0 {
+		hs.ReadTimeout = 10
+	}
+	if hs.WriteTimeout <= 0 {
+		hs.WriteTimeout = 30
+	}
+	if hs.IdleTimeout <= 0 {
+		hs.IdleTimeout = 60
+	}
+	if hs.MaxBodySize <= 0 {
+		hs.MaxBodySize = 1024
+	}
+
+	// RPC 配置
+	rpc := &c.RPC
+	if rpc.RPCTimeout <= 0 {
+		rpc.RPCTimeout = 5
+	}
+	if rpc.ConnectTimeout <= 0 {
+		rpc.ConnectTimeout = 3
+	}
+	if rpc.MaxRetries <= 0 {
+		rpc.MaxRetries = 2
+	}
+
+	// 熔断器
+	cb := &c.CircuitBreaker
+	if cb.ConsecutiveFailures <= 0 {
+		cb.ConsecutiveFailures = 5
+	}
+	if cb.IntervalSec <= 0 {
+		cb.IntervalSec = 30
+	}
+	if cb.TimeoutSec <= 0 {
+		cb.TimeoutSec = 5
+	}
+	if cb.MaxRequests <= 0 {
+		cb.MaxRequests = 3
+	}
+
+	// PreGzip
+	pg := &c.PreGzip
+	if pg.TTLSec <= 0 {
+		pg.TTLSec = 3600
+	}
+	if pg.CleanupInterval <= 0 {
+		pg.CleanupInterval = 1800
+	}
+	if pg.MinSizeKB <= 0 {
+		pg.MinSizeKB = 100
+	}
+	if pg.MaxEntries <= 0 {
+		pg.MaxEntries = 1000
+	}
+	if pg.MaxQueryLen <= 0 {
+		pg.MaxQueryLen = 2048
+	}
+	if pg.MaxKeyLen <= 0 {
+		pg.MaxKeyLen = 4096
 	}
 }
 

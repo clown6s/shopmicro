@@ -68,7 +68,7 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 
 	// P2-06：按手机号限制注册频率
 	rateKey := registerRateLimitKey + req.GetPhone()
-	limited, err := s.rdb.RunScript(ctx, rateLimitScript, []string{rateKey}, registerRateLimitMax, registerRateLimitWindowSec)
+	limited, err := s.rdb.RunScript(ctx, rateLimitScript, []string{rateKey}, s.sec.RegisterLimitMax, s.sec.RegisterLimitWindow)
 	if err != nil {
 		logger.Warnf("register: rate limit check failed (phone=%s): %v", maskPhone(req.GetPhone()), err)
 		return nil, errRegisterTooMany
@@ -78,7 +78,7 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 		}
 	}
 
-	if !passwordValid(req.GetPassword()) {
+	if !s.passwordValid(req.GetPassword()) {
 		return nil, errPasswordWeak
 	}
 
@@ -104,7 +104,7 @@ func (s *UserServiceImpl) RegisterUser(ctx context.Context, req *v1.RegisterUser
 	// bcrypt 只使用密码的前 72 个字节，因此超过 72 字节的密码
 	// 如果前缀相同会产生相同的哈希值。
 	preHash := sha256.Sum256([]byte(req.GetPassword()))
-	hashed, err := bcrypt.GenerateFromPassword(preHash[:], 12)
+	hashed, err := bcrypt.GenerateFromPassword(preHash[:], s.sec.PasswordBcryptCost)
 	if err != nil {
 		logger.Errorf("bcrypt hash failed: %v", err)
 		return nil, errInternal

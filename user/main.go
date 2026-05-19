@@ -50,6 +50,7 @@ func Run(configPath string) error {
 	}
 
 	cfg.ApplyEnv()
+	cfg.SetDefaults()
 
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -131,6 +132,7 @@ func Run(configPath string) error {
 		cfg.JWT.Expiration,
 		cfg.JWT.Issuer,
 		cfg.JWT.RefreshSecret,
+		cfg.Security,
 	)
 	if err != nil {
 		return fmt.Errorf("create user handler failed: %w", err)

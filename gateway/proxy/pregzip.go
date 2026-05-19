@@ -34,12 +34,27 @@ var preGzipCount atomic.Int64
 // preGzipStop 用于优雅停止清理 goroutine
 var preGzipStop chan struct{}
 
-// init 启动定期清理 goroutine，每 30 分钟清理一次过期缓存条目。
-// P2-04: 通过 preGzipStop channel 支持优雅停止，避免 goroutine 泄漏。
-func init() {
+// preGzipConfig 缓存参数（由 InitPreGzip 设置）
+var preGzipCfg struct {
+	ttl         time.Duration
+	minSize     int
+	maxEntries  int64
+	maxQueryLen int
+	maxKeyLen   int
+}
+
+// InitPreGzip 初始化预压缩缓存参数并启动清理 goroutine。
+// 必须在服务启动时调用，且只能调用一次。
+func InitPreGzip(ttl, cleanupInterval time.Duration, minSizeKB, maxEntries, maxQueryLen, maxKeyLen int) {
+	preGzipCfg.ttl = ttl
+	preGzipCfg.minSize = minSizeKB * 1024
+	preGzipCfg.maxEntries = int64(maxEntries)
+	preGzipCfg.maxQueryLen = maxQueryLen
+	preGzipCfg.maxKeyLen = maxKeyLen
+
 	preGzipStop = make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(30 * time.Minute)
+		ticker := time.NewTicker(cleanupInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -88,23 +103,6 @@ func cleanPreGzipCache() {
 	}
 }
 
-const (
-	// preGzipTTL 缓存有效期
-	preGzipTTL = 3600 * time.Second
-
-	// preGzipMinSize 最小缓存阈值：小于此大小的响应不值得预压缩
-	preGzipMinSize = 100 * 1024
-
-	// preGzipMaxEntries 最大缓存条目数，防止攻击者构造大量唯一 URL 撑爆内存
-	preGzipMaxEntries = 1000
-
-	// P1-04: query string 最大长度，超过此值的请求不缓存
-	preGzipMaxQueryLen = 2048
-
-	// R5-P0-02: 缓存键最大长度，防止构造超长 key 消耗内存
-	preGzipMaxKeyLen = 4096
-)
-
 // preGzipCacheKey 构建缓存键：service/method?queryString（参数排序确保一致性）。
 func preGzipCacheKey(service, method string, queryString []byte) string {
 	key := "pregzip:" + service + "/" + method
@@ -132,7 +130,7 @@ func preGzipCacheKey(service, method string, queryString []byte) string {
 		key += buf.String()
 	}
 	// R5-P0-02: 超长缓存键不缓存，防止内存消耗
-	if len(key) > preGzipMaxKeyLen {
+	if len(key) > preGzipCfg.maxKeyLen {
 		return ""
 	}
 	return key
@@ -166,14 +164,14 @@ func getPreGzip(key string) ([]byte, bool) {
 func setPreGzip(key string, data []byte) {
 	entry := &preGzipEntry{
 		data:   data,
-		expiry: time.Now().Add(preGzipTTL),
+		expiry: time.Now().Add(preGzipCfg.ttl),
 	}
 	if _, loaded := preGzipCache.LoadOrStore(key, entry); loaded {
 		return // 已存在，不重复写入也不递增计数器
 	}
 	newCount := preGzipCount.Add(1)
 	// 并发 LoadOrStore 可能短暂超过上限，触发一次清理
-	if newCount > int64(preGzipMaxEntries+16) {
+	if newCount > preGzipCfg.maxEntries+16 {
 		cleanPreGzipCache()
 	}
 }
@@ -213,7 +211,7 @@ func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, r
 
 	// P1-04: query string 过长不缓存，防止缓存 key 膨胀
 	queryString := c.Request.QueryString()
-	if len(queryString) > preGzipMaxQueryLen {
+	if len(queryString) > preGzipCfg.maxQueryLen {
 		return false
 	}
 
@@ -260,7 +258,7 @@ func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, r
 	}
 
 	// 小响应不值得预压缩 —— 但已解析过一次，直接投递避免 handleRPCResponse 重复解析
-	if len(jsonBytes) < preGzipMinSize {
+	if len(jsonBytes) < preGzipCfg.minSize {
 		response.OK(c, m["data"])
 		c.Abort()
 		return true

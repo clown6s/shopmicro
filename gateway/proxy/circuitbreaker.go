@@ -18,30 +18,36 @@ type CircuitBreaker struct {
 }
 
 // NewCircuitBreaker 创建一个 CircuitBreaker。
-//
-// 熔断策略:
-//   - 连续 5 次 RPC 失败 → Open（熔断）
-//   - Open 状态持续 30 秒后 → Half-Open（放行 3 个探测请求）
-//   - Half-Open 中探测成功 → Closed；探测失败 → Open
-func NewCircuitBreaker() *CircuitBreaker {
+// consecutiveFailures: 连续失败次数触发熔断（default 5）
+// interval: Open→HalfOpen 间隔（default 30s）
+// timeout: HalfOpen 状态超时（default 5s）
+// maxRequests: HalfOpen 状态最大探测请求数（default 3）
+func NewCircuitBreaker(consecutiveFailures uint32, interval, timeout time.Duration, maxRequests uint32) *CircuitBreaker {
+	if consecutiveFailures == 0 {
+		consecutiveFailures = 5
+	}
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if maxRequests == 0 {
+		maxRequests = 3
+	}
+	cf := consecutiveFailures
 	cb := &CircuitBreaker{
 		cbs: make(map[string]*gobreaker.CircuitBreaker),
 		cfg: gobreaker.Settings{
-			MaxRequests:   3,                // 半开状态最大探测请求数
-			Interval:      30 * time.Second, // 闭合→半开的间隔
-			Timeout:       5 * time.Second,  // 半开→开的超时
-			ReadyToTrip:   readyToTrip,      // 连续失败判定
-			OnStateChange: onStateChange,    // 状态变更日志
-			IsSuccessful:  isSuccessful,     // 成功判定：err 为 nil 视为成功
+			MaxRequests:   maxRequests,
+			Interval:      interval,
+			Timeout:       timeout,
+			ReadyToTrip:   func(counts gobreaker.Counts) bool { return counts.ConsecutiveFailures >= cf },
+			OnStateChange: onStateChange,
+			IsSuccessful:  isSuccessful,
 		},
 	}
 	return cb
-}
-
-// readyToTrip 连续 5 次失败触发熔断。
-// gobreaker.Counts 包含 ConsecutiveFailures 字段。
-func readyToTrip(counts gobreaker.Counts) bool {
-	return counts.ConsecutiveFailures >= 5
 }
 
 // isSuccessful 判定 RPC 调用是否成功。

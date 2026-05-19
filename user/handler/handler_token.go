@@ -100,7 +100,7 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 	// R7-P2-04: 使用 fmt.Sprintf("%d", userID) 而非原始 userIDStr，
 	// 确保 key 一致性（避免 Redis 中存储非规范化值如前导零）
 	refreshRateKey := refreshRateLimitKey + fmt.Sprintf("%d", userID)
-	limited, rlErr := s.rdb.RunScript(ctx, rateLimitScript, []string{refreshRateKey}, refreshRateLimitMax, refreshRateLimitWindowSec)
+	limited, rlErr := s.rdb.RunScript(ctx, rateLimitScript, []string{refreshRateKey}, s.sec.RefreshLimitMax, s.sec.RefreshLimitWindow)
 	if rlErr != nil {
 		logger.Warnf("refresh token: rate limit check failed (user_id=%d): %v", userID, rlErr)
 		return nil, errRefreshTooMany

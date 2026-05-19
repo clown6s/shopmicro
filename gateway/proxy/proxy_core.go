@@ -56,6 +56,9 @@ type Proxy struct {
 	cacheableMethods map[string]bool
 	methodTimeout    map[string]time.Duration
 	cb               *CircuitBreaker
+	rpcTimeout       time.Duration
+	connectTimeout   time.Duration
+	maxRetries       int
 }
 
 type Option func(*Proxy)
@@ -133,6 +136,33 @@ func WithHTTPMethod(service, method string, httpMethods ...string) Option {
 	}
 }
 
+func WithRPCTimeout(d time.Duration) Option {
+	if d <= 0 {
+		d = 5 * time.Second
+	}
+	return func(p *Proxy) {
+		p.rpcTimeout = d
+	}
+}
+
+func WithConnectTimeout(d time.Duration) Option {
+	if d <= 0 {
+		d = 3 * time.Second
+	}
+	return func(p *Proxy) {
+		p.connectTimeout = d
+	}
+}
+
+func WithMaxRetries(n int) Option {
+	if n < 0 {
+		n = 0
+	}
+	return func(p *Proxy) {
+		p.maxRetries = n
+	}
+}
+
 func New(opts ...Option) *Proxy {
 	p := &Proxy{
 		clients:          make(map[string]*ServiceClient),
@@ -141,6 +171,9 @@ func New(opts ...Option) *Proxy {
 		httpMethodMap:    make(map[string]map[string]bool),
 		cacheableMethods: make(map[string]bool),
 		methodTimeout:    make(map[string]time.Duration),
+		rpcTimeout:       5 * time.Second,
+		connectTimeout:   3 * time.Second,
+		maxRetries:       2,
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -239,8 +272,8 @@ func (p *Proxy) registerService(
 		serviceName,
 		g,
 		client.WithResolver(resolver),
-		client.WithRPCTimeout(5*time.Second),
-		client.WithConnectTimeout(3*time.Second),
+		client.WithRPCTimeout(p.rpcTimeout),
+		client.WithConnectTimeout(p.connectTimeout),
 		client.WithMetaHandler(transmeta.MetainfoClientHandler),
 		client.WithSuite(kotelkitex.NewClientSuite(
 			kotelkitex.WithEnableGRPCMetadata(),

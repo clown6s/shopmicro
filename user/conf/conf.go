@@ -18,6 +18,23 @@ type JWT struct {
 	Issuer        string `yaml:"issuer"`
 }
 
+// Security 限流与安全策略配置
+type Security struct {
+	// 注册限流：按手机号
+	RegisterLimitMax    int `yaml:"registerLimitMax"`    // 窗口内最大注册次数 (default: 5)
+	RegisterLimitWindow int `yaml:"registerLimitWindow"` // 窗口时长秒 (default: 3600)
+	// RefreshToken 限流：按用户 ID
+	RefreshLimitMax    int `yaml:"refreshLimitMax"`    // 窗口内最大刷新次数 (default: 10)
+	RefreshLimitWindow int `yaml:"refreshLimitWindow"` // 窗口时长秒 (default: 60)
+	// 暴力破解保护
+	LoginMaxFailures int `yaml:"loginMaxFailures"` // 锁定前最大失败次数 (default: 10)
+	LoginLockoutSec  int `yaml:"loginLockoutSec"`  // 锁定时长秒 (default: 900)
+	// 密码策略
+	PasswordMinLen     int `yaml:"passwordMinLen"`     // 最短密码长度 (default: 8)
+	PasswordMaxLen     int `yaml:"passwordMaxLen"`     // 最长密码长度 (default: 128)
+	PasswordBcryptCost int `yaml:"passwordBcryptCost"` // bcrypt cost (default: 12)
+}
+
 type Config struct {
 	Server     conf.Server         `yaml:"server"`
 	HealthAddr string              `yaml:"healthAddr"`
@@ -27,6 +44,7 @@ type Config struct {
 	JWT        JWT                 `yaml:"jwt"`
 	Mode       string              `yaml:"mode"`
 	Vault      secrets.VaultConfig `yaml:"vault"`
+	Security   Security            `yaml:"security"`
 }
 
 // GetHealthAddr 返回健康检查监听地址，默认为 :8899。
@@ -35,6 +53,38 @@ func (c *Config) GetHealthAddr() string {
 		return ":8899"
 	}
 	return c.HealthAddr
+}
+
+// SetDefaults 为零值安全配置字段填充默认值。
+func (c *Config) SetDefaults() {
+	s := &c.Security
+	if s.RegisterLimitMax <= 0 {
+		s.RegisterLimitMax = 5
+	}
+	if s.RegisterLimitWindow <= 0 {
+		s.RegisterLimitWindow = 3600
+	}
+	if s.RefreshLimitMax <= 0 {
+		s.RefreshLimitMax = 10
+	}
+	if s.RefreshLimitWindow <= 0 {
+		s.RefreshLimitWindow = 60
+	}
+	if s.LoginMaxFailures <= 0 {
+		s.LoginMaxFailures = 10
+	}
+	if s.LoginLockoutSec <= 0 {
+		s.LoginLockoutSec = 900
+	}
+	if s.PasswordMinLen <= 0 {
+		s.PasswordMinLen = 8
+	}
+	if s.PasswordMaxLen <= 0 {
+		s.PasswordMaxLen = 128
+	}
+	if s.PasswordBcryptCost <= 0 {
+		s.PasswordBcryptCost = 12
+	}
 }
 
 // ApplyEnv 从环境变量覆盖敏感配置
@@ -100,6 +150,14 @@ func (c *Config) Validate() error {
 	// P2-08：生产环境要求 Redis 密码
 	if mode == "prod" && c.Redis.Password == "" {
 		return fmt.Errorf("redis password is required in production mode, set REDIS_PASSWORD env")
+	}
+	// Security 参数校验
+	s := c.Security
+	if s.PasswordBcryptCost < 4 || s.PasswordBcryptCost > 31 {
+		return fmt.Errorf("security.passwordBcryptCost must be between 4 and 31, got %d", s.PasswordBcryptCost)
+	}
+	if s.PasswordMinLen > s.PasswordMaxLen {
+		return fmt.Errorf("security.passwordMinLen (%d) must not exceed passwordMaxLen (%d)", s.PasswordMinLen, s.PasswordMaxLen)
 	}
 	return nil
 }

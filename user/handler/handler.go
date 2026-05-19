@@ -16,6 +16,7 @@ import (
 	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
+	"shopmicro/user/conf"
 	"shopmicro/user/data"
 )
 
@@ -54,9 +55,9 @@ var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-
 var passwordLetterRe = regexp.MustCompile(`[a-zA-Z]`)
 var passwordDigitRe = regexp.MustCompile(`\d`)
 
-// passwordValid 检查密码长度为 8-128 个字符，且至少包含一个字母和一个数字。
-func passwordValid(pwd string) bool {
-	return len(pwd) >= 8 && len(pwd) <= 128 &&
+// passwordValid 检查密码长度和复杂度（参数由 conf.Security 驱动）。
+func (s *UserServiceImpl) passwordValid(pwd string) bool {
+	return len(pwd) >= s.sec.PasswordMinLen && len(pwd) <= s.sec.PasswordMaxLen &&
 		passwordLetterRe.MatchString(pwd) &&
 		passwordDigitRe.MatchString(pwd)
 }
@@ -69,9 +70,10 @@ type UserServiceImpl struct {
 	rtGen     *jwt.Generator // 刷新令牌生成器
 	rtExpHrs  int            // 刷新令牌过期时间（小时）
 	rdb       RedisOps
+	sec       conf.Security
 }
 
-func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer string, jwtRefreshSecret string) (*UserServiceImpl, error) {
+func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer string, jwtRefreshSecret string, sec conf.Security) (*UserServiceImpl, error) {
 	// P2-16 修复：防止 jwtExpHours 为零导致 rtExpHrs 异常
 	if jwtExpHours <= 0 {
 		jwtExpHours = 24
@@ -104,6 +106,7 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer s
 		rtGen:     rtGen,
 		rtExpHrs:  rtExpHrs,
 		rdb:       d.Rdb,
+		sec:       sec,
 	}, nil
 }
 
@@ -127,18 +130,13 @@ end
 return 0
 `
 
-// P2-06：注册频率限制 — 按手机号，每小时最多 5 次
+// P2-06：注册频率限制 — 按手机号，每小时最多 N 次（配置驱动）
 const registerRateLimitKey = "shopmicro:register:rate:"
-const registerRateLimitMax = 5
-const registerRateLimitWindowSec = 3600 // 1 小时
 
-// P2-07：RefreshToken 频率限制 — 按用户 ID，每分钟最多 10 次
+// P2-07：RefreshToken 频率限制 — 按用户 ID，每分钟最多 N 次（配置驱动）
 const refreshRateLimitKey = "shopmicro:refresh:rate:"
-const refreshRateLimitMax = 10
-const refreshRateLimitWindowSec = 60
 
-// P1-05：账号级别暴力破解保护常量
-// R4-P1-03：原子性 INCR + 条件 EXPIRE 的 Lua 脚本。
+// P1-05：账号级别暴力破解保护（参数由 conf.Security 驱动）
 const loginFailIncrScript = `
 local count = redis.call('INCR', KEYS[1])
 if count == 1 then
@@ -146,11 +144,6 @@ if count == 1 then
 end
 return count
 `
-
-const (
-	loginMaxFailures = 10               // 锁定前最大失败尝试次数
-	loginLockoutTTL  = 15 * time.Minute // 锁定持续时间
-)
 
 // R2-P2-04：用于撤销用户所有令牌（访问令牌 + 刷新令牌）的原子性 Lua 脚本。
 const revokeTokensScript = `
@@ -185,7 +178,7 @@ func (s *UserServiceImpl) checkLoginAttempts(ctx context.Context, phone string) 
 		// 按失败关闭处理，防止绕过暴力破解保护。
 		logger.Warnf("login: invalid redis counter value for phone %s: %q (err=%v)", maskPhone(phone), count, err)
 		return errAccountLocked
-	} else if n >= loginMaxFailures {
+	} else if n >= s.sec.LoginMaxFailures {
 		return errAccountLocked
 	}
 	return nil
@@ -194,7 +187,7 @@ func (s *UserServiceImpl) checkLoginAttempts(ctx context.Context, phone string) 
 // recordLoginFailure 递增手机号的登录失败计数器。
 func (s *UserServiceImpl) recordLoginFailure(ctx context.Context, phone string) {
 	key := fmt.Sprintf("shopmicro:login:fail:%s", phone)
-	if _, err := s.rdb.RunScript(ctx, loginFailIncrScript, []string{key}, int(loginLockoutTTL.Seconds())); err != nil {
+	if _, err := s.rdb.RunScript(ctx, loginFailIncrScript, []string{key}, s.sec.LoginLockoutSec); err != nil {
 		logger.Warnf("login: failed to record login failure for phone %s: %v", maskPhone(phone), err)
 	}
 }
