@@ -44,12 +44,21 @@ func Load(path string, cfg interface{}) error {
 		return err
 	}
 
-	// .env 加载是可选的：文件不存在不报错，但解析失败记 warn
+	// P1-10: .env 加载是可选的。区分 "文件不存在"（info）和 "解析失败"（warn），
+	// 避免隐藏 .env 文件语法错误。
 	if err := godotenv.Load(); err != nil {
-		log.Printf("[conf] .env not found in working directory (non-fatal)")
+		if os.IsNotExist(err) {
+			log.Printf("[conf] .env not found in working directory (non-fatal)")
+		} else {
+			log.Printf("[conf] .env parse error in working directory: %v", err)
+		}
 	}
 	if err := godotenv.Load(filepath.Join(filepath.Dir(path), ".env")); err != nil {
-		log.Printf("[conf] .env not found in config directory (non-fatal)")
+		if os.IsNotExist(err) {
+			log.Printf("[conf] .env not found in config directory (non-fatal)")
+		} else {
+			log.Printf("[conf] .env parse error in config directory: %v", err)
+		}
 	}
 	return nil
 }

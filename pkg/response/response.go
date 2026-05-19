@@ -10,6 +10,12 @@ import (
 	"shopmicro/pkg/logger"
 )
 
+const (
+	// maxBizErrMsgLen 业务错误消息最大长度，超过则截断为 "internal error"。
+	// P2-14: 提取为命名常量，避免魔法数字。
+	maxBizErrMsgLen = 128
+)
+
 // R 是所有 gateway 端点统一的 JSON 响应结构。
 //   - code 0:     成功
 //   - code 1xxxx: 业务错误（例如用户服务 BizError）
@@ -39,8 +45,9 @@ func BizErr(c *app.RequestContext, biz *errcode.BizError) {
 	truncated := false
 	// P3-14: 截断过长的消息 — 内部错误通常包含
 	// 不应传递给客户端的堆栈跟踪或 SQL 详情
-	if len(msg) > 128 {
-		logger.Warnf("biz error message truncated (code=%d, len=%d): %s", biz.Code, len(msg), msg)
+	if len(msg) > maxBizErrMsgLen {
+		// P2-15: 不在日志中记录被截断的完整消息，防止敏感信息泄漏到日志文件。
+		logger.Warnf("biz error message truncated (code=%d, len=%d)", biz.Code, len(msg))
 		msg = "internal error"
 		truncated = true
 	}

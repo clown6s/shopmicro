@@ -30,15 +30,33 @@ var preGzipCache sync.Map
 // 缓存条目计数，用于限制总缓存数量防止内存耗尽
 var preGzipCount atomic.Int64
 
+// preGzipStop 用于优雅停止清理 goroutine
+var preGzipStop chan struct{}
+
 // init 启动定期清理 goroutine，每 30 分钟清理一次过期缓存条目。
+// P2-04: 通过 preGzipStop channel 支持优雅停止，避免 goroutine 泄漏。
 func init() {
+	preGzipStop = make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			cleanPreGzipCache()
+		for {
+			select {
+			case <-ticker.C:
+				cleanPreGzipCache()
+			case <-preGzipStop:
+				return
+			}
 		}
 	}()
+}
+
+// StopPreGzipCleaner 停止预压缩缓存的定期清理 goroutine。
+// 应在服务优雅关闭时调用。
+func StopPreGzipCleaner() {
+	if preGzipStop != nil {
+		close(preGzipStop)
+	}
 }
 
 // cleanPreGzipCache 遍历缓存并删除过期条目。
@@ -48,9 +66,17 @@ func cleanPreGzipCache() {
 	now := time.Now()
 	var expiredKeys []string
 	preGzipCache.Range(func(key, value interface{}) bool {
-		entry := value.(*preGzipEntry)
+		// P2-02: 类型断言加 comma-ok，防止意外类型导致 panic
+		entry, ok := value.(*preGzipEntry)
+		if !ok {
+			preGzipCache.Delete(key) // 清除非法条目
+			return true
+		}
 		if now.After(entry.expiry) {
-			expiredKeys = append(expiredKeys, key.(string))
+			keyStr, ok := key.(string)
+			if ok {
+				expiredKeys = append(expiredKeys, keyStr)
+			}
 		}
 		return true
 	})

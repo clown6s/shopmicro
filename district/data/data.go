@@ -2,6 +2,7 @@ package data
 
 import (
 	"database/sql"
+	"net/http"
 	"time"
 
 	"shopmicro/pkg/logger"
@@ -45,7 +46,14 @@ func New(cfg mysql.Config, redisCfg redis.Config, amapKey string, amapTimeout ti
 		DB:  db,
 		Rdb: rc,
 	}
-	d.districtDal = &DistrictDal{db: db, amapKey: amapKey, amapTimeout: amapTimeout}
+	d.districtDal = &DistrictDal{
+		db:          db,
+		amapKey:     amapKey,
+		amapTimeout: amapTimeout,
+		// P1-02: 独立 HTTP 客户端，避免共享 http.DefaultClient（无超时、可被全局修改）。
+		// 不设置 Client.Timeout —— 由请求级 context.WithTimeout 控制。
+		httpClient: &http.Client{},
+	}
 	return d, cleanup, nil
 }
 

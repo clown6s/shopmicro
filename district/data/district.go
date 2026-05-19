@@ -20,6 +20,7 @@ type DistrictDal struct {
 	db          *sql.DB
 	amapKey     string
 	amapTimeout time.Duration
+	httpClient  *http.Client // 独立客户端，避免共享 http.DefaultClient
 }
 
 // GetProvinces 查询所有省级行政区
@@ -67,6 +68,10 @@ func (d *DistrictDal) GetChildrenByParent(ctx context.Context, parentAdCode stri
 
 // UpdateDistrict 从高德地图拉取行政区划数据，全量替换 district 表。
 func (d *DistrictDal) UpdateDistrict(ctx context.Context) error {
+
+	if d.amapKey == "" {
+		return fmt.Errorf("amap key is not configured, set AMAP_KEY env or config.yaml")
+	}
 	amapResp, err := d.fetchAMapData(ctx)
 	if err != nil {
 		return fmt.Errorf("fetch amap data: %w", err)
@@ -122,7 +127,7 @@ func (d *DistrictDal) fetchAMapData(ctx context.Context) (*amapResponse, error) 
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := d.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}
@@ -196,6 +201,9 @@ func flattenDistricts(districts []amapDistrict, parentAdCode int) []districtReco
 
 // ==================== 全量替换 ====================
 
+// batchSize 全量替换时每批 INSERT 的记录数。
+// 1000 条在 MySQL max_allowed_packet 默认 64MB 下安全，
+// 且 batch 过大会导致锁表时间过长。
 const batchSize = 1000
 
 func (d *DistrictDal) fullReplace(ctx context.Context, records []districtRecord) error {

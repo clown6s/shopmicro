@@ -159,8 +159,17 @@ var fallbackCounter atomic.Uint64
 func uniqueMember(now time.Time) string {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		logger.Warnf("ratelimit: crypto/rand read failed: %v — using fallback counter", err)
-		return fmt.Sprintf("%d:%016x", now.UnixNano(), uint64(now.UnixNano()<<32)|fallbackCounter.Add(1))
+		// P1-06: crypto/rand 失败会影响限流器唯一性（安全相关），
+		// 使用时间戳+计数器作为 fallback，记录 ERROR 以便运维介入。
+		logger.Errorf("ratelimit: crypto/rand unavailable — rate limiter uniqueness degraded")
+		nano := now.UnixNano()
+		b[0] = byte(nano)
+		b[1] = byte(nano >> 8)
+		b[2] = byte(nano >> 16)
+		b[3] = byte(nano >> 24)
+		cnt := fallbackCounter.Add(1)
+		b[4] = byte(cnt)
+		b[5] = byte(cnt >> 8)
 	}
 	return fmt.Sprintf("%d:%08x", now.UnixNano(), binary.BigEndian.Uint64(b[:]))
 }

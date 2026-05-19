@@ -188,8 +188,14 @@ func (sc *Script) Run(ctx context.Context, c *Client, keys []string, args ...int
 // 注意：此缓存仅用于硬编码的常量 Lua 脚本（如限流、令牌轮换等），
 // 不应用于动态用户输入。缓存永不清理，因为脚本数量是固定的。
 func (c *Client) RunScript(ctx context.Context, src string, keys []string, args ...interface{}) (interface{}, error) {
+	// P2-16: 类型断言加 comma-ok，防止 sync.Map 中存储非法类型导致 panic
 	scriptI, _ := scriptCache.LoadOrStore(src, redis.NewScript(src))
-	script := scriptI.(*redis.Script)
+	script, ok := scriptI.(*redis.Script)
+	if !ok {
+		scriptCache.Delete(src) // 清除非法条目
+		script = redis.NewScript(src)
+		scriptCache.Store(src, script)
+	}
 	return script.Run(ctx, c.rdb, keys, args...).Result()
 }
 

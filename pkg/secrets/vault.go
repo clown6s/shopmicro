@@ -144,6 +144,10 @@ func (v *VaultProvider) Get(key string) (string, bool) {
 		if s, ok := val.(string); ok {
 			return s, true
 		}
+		// P1-11: 非字符串值（number、bool、map）被 fmt.Sprintf 强制转换，
+		// 记录警告以便发现 Vault 中的数据类型异常。
+		logger.Warnf("secrets: vault value for key=%q field=%q is %T (expected string), coercing with %%v",
+			key, fieldName, val)
 		return fmt.Sprintf("%v", val), true
 	}
 
@@ -152,6 +156,8 @@ func (v *VaultProvider) Get(key string) (string, bool) {
 		if s, ok := val.(string); ok {
 			return s, true
 		}
+		logger.Warnf("secrets: vault value for key=%q field='value' is %T (expected string), coercing with %%v",
+			key, val)
 		return fmt.Sprintf("%v", val), true
 	}
 

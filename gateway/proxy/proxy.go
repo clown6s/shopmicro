@@ -68,6 +68,12 @@ type ServiceClient struct {
 }
 
 // Proxy 是核心的 HTTP→gRPC 泛化代理。
+// TODO(P2-05): 当前文件超过 1000 行，后续应拆分为：
+//   - proxy_core.go    (Proxy 结构体、Option、New)
+//   - proxy_handler.go (Handler、authenticate、handleRPCResponse)
+//   - proxy_rpc.go     (Call、重试逻辑)
+//   - proxy_discovery.go (DiscoverAndRegister、WatchServices)
+//   - proxy_merge.go   (mergeQueryToJSON 系列)
 type Proxy struct {
 	mu sync.RWMutex
 
@@ -157,7 +163,12 @@ func WithCacheableMethods(service string, methods ...string) Option {
 // 适用于耗时较长的管理操作，如全量数据同步。
 //
 //	proxy.WithMethodTimeout("district", "UpdateDistrict", 120*time.Second)
+//
+// P2-03: timeout 必须 > 0，否则 panic（配置错误应在启动时暴露）。
 func WithMethodTimeout(service, method string, timeout time.Duration) Option {
+	if timeout <= 0 {
+		logger.Fatalf("WithMethodTimeout: timeout must be positive, got %v (service=%s method=%s)", timeout, service, method)
+	}
 	return func(p *Proxy) {
 		p.methodTimeout[service+"/"+method] = timeout
 	}
@@ -346,19 +357,25 @@ func (p *Proxy) Call(
 			return resp, nil
 		}
 		lastErr = err
-		// 仅对瞬态错误重试：超时、连接重置、context deadline
+		// P2-01: 仅对明确的瞬态错误重试。
+		// 使用精确子串匹配避免误匹配非瞬态错误（如 "statement timeout"）。
 		errMsg := err.Error()
-		isTransient := strings.Contains(errMsg, "connection reset") ||
+		isTransient := strings.Contains(errMsg, "connection reset by peer") ||
 			strings.Contains(errMsg, "connection refused") ||
-			strings.Contains(errMsg, "timeout") ||
-			strings.Contains(errMsg, "deadline") ||
+			strings.Contains(errMsg, "connection shutdown") ||
+			strings.Contains(errMsg, "i/o timeout") ||
+			strings.Contains(errMsg, "deadline exceeded") ||
 			errors.Is(err, context.DeadlineExceeded)
 		if !isTransient || attempt == maxRetries {
 			return nil, err
 		}
-		// 指数退避：100ms, 200ms
+		// 指数退避：100ms, 200ms。P1-04: 使用 select 监听 ctx 取消，避免 goroutine 泄漏。
 		backoff := time.Duration(1<<(attempt+1)) * 50 * time.Millisecond
-		time.Sleep(backoff)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
 		logger.Warnf("rpc transient error, retrying %d/%d: service=%s method=%s err=%v", attempt+1, maxRetries, service, method, err)
 	}
 	return nil, lastErr
@@ -526,13 +543,10 @@ func (p *Proxy) watchOnce(
 					logger.Warnf("WatchServices: failed to register %s after retries: %v", svcName, regErr)
 				}
 			case clientv3.EventTypeDelete:
-				// 服务实例下线时清理客户端缓存，防止内存泄漏
-				p.mu.Lock()
-				if _, exists := p.clients[svcName]; exists {
-					delete(p.clients, svcName)
-					logger.Infof("WatchServices: removed stale client for %s (instance deregistered)", svcName)
-				}
-				p.mu.Unlock()
+				// P1-05: 不删除客户端 —— Kitex resolver 内部跟踪服务实例，
+				// 删除客户端会导致该服务所有请求失败直到下次 EventTypePut 重新注册。
+				// 仅当所有实例下线时，Kitex 会返回 connection refused 由重试机制处理。
+				logger.Infof("WatchServices: instance deregistered for %s (Kitex resolver tracks instances)", svcName)
 			}
 		}
 	}

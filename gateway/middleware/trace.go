@@ -61,7 +61,13 @@ func generateRequestID() string {
 	// 从 crypto/rand 读取 8 字节（64 位密码学熵）
 	var rngBytes [8]byte
 	if _, err := rand.Read(rngBytes[:]); err != nil {
-		logger.Warnf("trace: crypto/rand read failed: %v — using zero entropy", err)
+		// P1-06: crypto/rand 失败说明系统熵源不可用，使用时间戳填充 fallback。
+		// 请求 ID 非安全关键路径（有 timestamp + counter 兜底），不 panic。
+		logger.Errorf("trace: crypto/rand unavailable (system entropy source issue): %v — using timestamp fallback", err)
+		rngBytes[0] = byte(now)
+		rngBytes[1] = byte(now >> 8)
+		rngBytes[2] = byte(now >> 16)
+		rngBytes[3] = byte(now >> 24)
 	}
 	r1 := binary.BigEndian.Uint64(rngBytes[:])
 

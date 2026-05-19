@@ -2,6 +2,7 @@ package handle
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"golang.org/x/sync/singleflight"
@@ -36,7 +37,11 @@ func (s *DistrictServiceImpl) GetProvinces(ctx context.Context, req *v1.GetProvi
 		return nil, err
 	}
 
-	return result.(*v1.GetProvincesResp), nil
+	resp, ok := result.(*v1.GetProvincesResp)
+	if !ok {
+		return nil, fmt.Errorf("singleflight: unexpected type %T for GetProvincesResp", result)
+	}
+	return resp, nil
 }
 
 // GetChildren —— 返回指定行政区划的直接下级子节点
@@ -60,7 +65,11 @@ func (s *DistrictServiceImpl) GetChildren(ctx context.Context, req *v1.GetChildr
 		return nil, err
 	}
 
-	return result.(*v1.GetChildrenResp), nil
+	resp, ok := result.(*v1.GetChildrenResp)
+	if !ok {
+		return nil, fmt.Errorf("singleflight: unexpected type %T for GetChildrenResp", result)
+	}
+	return resp, nil
 }
 
 // UpdateDistrict 从高德地图拉取行政区划数据，全量替换数据库。

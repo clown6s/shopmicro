@@ -121,16 +121,16 @@ func (d *UserDal) Create(ctx context.Context, user *module.User) error {
 func (d *UserDal) GetByID(ctx context.Context, id int64) (*module.User, error) {
 	return scanUser(d.db.QueryRowContext(ctx,
 		`SELECT id, password, COALESCE(real_name,''), COALESCE(avatar,''), gender, COALESCE(age,0),
-		        phone, COALESCE(email,''), create_time, update_time, COALESCE(remark,''), COALESCE(deleted_at,'')
-		 FROM user WHERE id = ? AND deleted_at IS NULL`, id,
+	        phone, COALESCE(email,''), create_time, update_time, COALESCE(remark,''), deleted_at
+	 FROM user WHERE id = ? AND deleted_at IS NULL`, id,
 	))
 }
 
 func (d *UserDal) GetByPhone(ctx context.Context, phone string) (*module.User, error) {
 	return scanUser(d.db.QueryRowContext(ctx,
 		`SELECT id, password, COALESCE(real_name,''), COALESCE(avatar,''), gender, COALESCE(age,0),
-		        phone, COALESCE(email,''), create_time, update_time, COALESCE(remark,''), COALESCE(deleted_at,'')
-		 FROM user WHERE phone = ? AND deleted_at IS NULL`, phone,
+	        phone, COALESCE(email,''), create_time, update_time, COALESCE(remark,''), deleted_at
+	 FROM user WHERE phone = ? AND deleted_at IS NULL`, phone,
 	))
 }
 

@@ -4,22 +4,26 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 var (
-	L           *zap.SugaredLogger
-	once        sync.Once
-	initialized bool
+	L    *zap.SugaredLogger
+	once sync.Once
+
+	// P1-09: 使用 atomic.Bool 替代裸 bool，消除 Init() 的数据竞争。
+	// initialized 在 once.Do 内部设置，保证只写一次。
+	initialized atomic.Bool
 )
 
 // P3-11: 用于检测日志数据中敏感信息的模式。
 // 由 Safe() 使用，用于对看起来像凭证的值进行脱敏处理。
 var sensitivePatterns = []string{
 	"password", "passwd", "pwd",
-	"secret", "token", "authorization",
+	"secret", "authorization",
 	"cookie", "session",
 	"credit_card", "cvv", "ssn",
 	// R5-P3-01: 常见密钥字段关键词补充
@@ -27,6 +31,9 @@ var sensitivePatterns = []string{
 	"private_key", "privatekey", "signing_key",
 	// DSN 包含数据库凭证 (user:password@tcp(...))
 	"dsn",
+	// P2-13: token 子串用具体场景替代，避免 "tokenizer"、"token_bucket" 等误匹配
+	"refresh_token", "access_token", "csrf_token", "bearer_token",
+	"jwt_token", "reset_token",
 }
 
 // Safe 返回输入字符串的脱敏版本，如果其键名（fieldName）
@@ -35,29 +42,46 @@ var sensitivePatterns = []string{
 //	logger.Infof("config: %s=%s", "jwt_secret", logger.Safe("jwt_secret", secretValue))
 //
 // 如果 fieldName 为空，则原样返回 val（不脱敏）。
+// P2-13: 使用单词边界匹配，防止 "token" 匹配 "tokenizer" 等非敏感字段。
 func Safe(fieldName, val string) string {
 	if fieldName == "" || val == "" {
 		return val
 	}
 	lower := strings.ToLower(fieldName)
 	for _, p := range sensitivePatterns {
-		if strings.Contains(lower, p) {
+		if wordMatch(lower, p) {
 			return "***"
 		}
 	}
 	return val
 }
 
+// wordMatch 检查 pattern 是否作为独立单词出现在 s 中。
+// 单词边界定义为字符串首尾、下划线(_)或连字符(-)。
+func wordMatch(s, pattern string) bool {
+	for {
+		idx := strings.Index(s, pattern)
+		if idx < 0 {
+			return false
+		}
+		before := idx == 0 || s[idx-1] == '_' || s[idx-1] == '-'
+		after := idx+len(pattern) >= len(s) || s[idx+len(pattern)] == '_' || s[idx+len(pattern)] == '-'
+		if before && after {
+			return true
+		}
+		s = s[idx+1:]
+	}
+}
+
 func Init(mode string) error {
-	if initialized {
-		// sync.Once 保证只执行一次，重复调用被静默忽略。
-		// 此警告用于帮助开发者发现意外多次初始化的问题。
+	if initialized.Load() {
+		// P1-09: 使用 atomic.Bool 的 Load 替代裸 bool 读取，消除数据竞争。
+		// 此警告帮助开发者发现意外多次初始化的问题。
 		fmt.Fprintf(zap.NewStdLog(zap.NewNop()).Writer(), "[WARN] logger.Init called more than once (mode=%s), ignoring\n", mode)
 		return nil
 	}
 	var initErr error
 	once.Do(func() {
-		initialized = true
 		var cfg zap.Config
 		if strings.ToLower(mode) == "dev" {
 			cfg = zap.NewDevelopmentConfig()
@@ -73,6 +97,7 @@ func Init(mode string) error {
 			return
 		}
 		L = log.Sugar()
+		initialized.Store(true)
 	})
 	return initErr
 }

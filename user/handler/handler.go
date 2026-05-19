@@ -107,6 +107,11 @@ func NewUserHandler(d *data.Data, jwtSecret string, jwtExpHours int, jwtIssuer s
 	}, nil
 }
 
+// =========================
+// Redis Key 前缀常量
+// 集中定义，便于全局搜索和维护命名空间一致性。
+// =========================
+
 const tokenPrefix = "shopmicro:user:token:"
 const refreshTokenPrefix = "shopmicro:user:refresh:"
 
@@ -172,7 +177,15 @@ func (s *UserServiceImpl) checkLoginAttempts(ctx context.Context, phone string) 
 		logger.Warnf("login: redis unavailable for rate check, failing closed (phone=%s): %v", maskPhone(phone), err)
 		return errAccountLocked
 	}
-	if n, _ := strconv.Atoi(count); n >= loginMaxFailures {
+	if count == "" {
+		return nil // 空值视为无失败记录
+	}
+	if n, err := strconv.Atoi(count); err != nil {
+		// P1-07: Redis 返回非数字值（数据损坏或竞态写入），
+		// 按失败关闭处理，防止绕过暴力破解保护。
+		logger.Warnf("login: invalid redis counter value for phone %s: %q (err=%v)", maskPhone(phone), count, err)
+		return errAccountLocked
+	} else if n >= loginMaxFailures {
 		return errAccountLocked
 	}
 	return nil
@@ -229,12 +242,23 @@ func parseInt64(s string) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
 }
 
-// maskPhone 脱敏手机号：保留前3后4，中间用 * 代替（中国手机号 11 位）
+// maskPhone 脱敏手机号：保留前3后4，中间用 * 代替（中国手机号 11 位）。
+// 其他长度的号码：保留前3后2。极短号码(≤3)全掩码。
 func maskPhone(phone string) string {
-	if len(phone) != 11 {
+	n := len(phone)
+	if n <= 3 {
 		return "***"
 	}
-	return phone[:3] + "****" + phone[7:]
+	if n == 11 {
+		// 中国手机号标准格式
+		return phone[:3] + "****" + phone[7:]
+	}
+	if n < 7 {
+		// 短号码：显示前3 + 掩码
+		return phone[:3] + "***"
+	}
+	// 其他长度：前3 + 掩码 + 后2
+	return phone[:3] + "****" + phone[n-2:]
 }
 
 // maskEmail 脱敏邮箱：a***@example.com
