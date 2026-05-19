@@ -47,6 +47,7 @@ type ServiceClient struct {
 type Proxy struct {
 	mu               sync.RWMutex
 	clients          map[string]*ServiceClient
+	instanceCount    map[string]int64 // 每个服务的 etcd 实例引用计数
 	jwtParser        *pkgjwt.Parser
 	rdb              *redis.Client
 	publicMethod     map[string]bool
@@ -166,6 +167,7 @@ func WithMaxRetries(n int) Option {
 func New(opts ...Option) *Proxy {
 	p := &Proxy{
 		clients:          make(map[string]*ServiceClient),
+		instanceCount:    make(map[string]int64),
 		publicMethod:     make(map[string]bool),
 		allowedMethods:   make(map[string]map[string]bool),
 		httpMethodMap:    make(map[string]map[string]bool),
@@ -289,6 +291,7 @@ func (p *Proxy) registerService(
 		Generic: g,
 		svcDesc: svcDesc,
 	}
+	p.instanceCount[serviceName] = 1
 
 	logger.Infof("service registered: %s (proto: %s)", serviceName, protoPath)
 	return nil

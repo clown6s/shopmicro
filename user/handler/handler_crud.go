@@ -148,12 +148,11 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
 	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
-	// R5-P2-04: 与 UpdateUser 保持一致，撤销失败返回错误。
-	// 虽然软删除已提交 DB，但旧 token 仍可通过 Redis 验证，
-	// 不返回错误会让客户端以为操作完全成功。
+	// 软删除已提交 DB，Redis 撤销失败不返回错误（降级为 warning）。
+	// 原因：返回错误会让客户端重试，但 GetByID 因 deleted_at!=nil 返回 "用户不存在"，
+	// 造成更严重的困惑。旧 token 短暂有效远比 "用户不存在" 好处理。
 	if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}); err != nil {
-		logger.Warnf("delete user: failed to revoke tokens (user_id=%d): %v", req.GetId(), err)
-		return nil, errInternal
+		logger.Warnf("delete user: failed to revoke tokens (user_id=%d), user already deleted: %v", req.GetId(), err)
 	}
 
 	logger.Infof("user deleted: user_id=%d", req.GetId())
@@ -197,12 +196,14 @@ func (s *UserServiceImpl) ListUser(ctx context.Context, req *v1.ListUserReq) (*v
 
 // toUserInfoMasked 返回手机号和邮箱已脱敏的用户信息。
 func toUserInfoMasked(u *module.User) *v1.UserInfo {
+	gender := v1.Gender(u.Gender)
+	age := int32(u.Age)
 	return &v1.UserInfo{
 		Id:       u.ID,
 		RealName: u.RealName,
 		Avatar:   u.Avatar,
-		Gender:   new(v1.Gender(u.Gender)),
-		Age:      new(int32(u.Age)),
+		Gender:   &gender,
+		Age:      &age,
 		Phone:    maskPhone(u.Phone),
 		Email:    maskEmail(u.Email),
 		Remark:   u.Remark,

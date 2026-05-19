@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudwego/kitex/client/callopt"
 	"github.com/cloudwego/kitex/pkg/discovery"
+	"github.com/sony/gobreaker"
 
 	"shopmicro/pkg/logger"
 )
@@ -17,7 +18,7 @@ import (
 // req 必须是 JSON 编码的字符串（用于 JSONPbGeneric）。
 // method 必须是 CamelCase 的 protobuf RPC 名称。
 //
-// 对可重试的瞬态错误最多重试 2 次，使用指数退避。
+// 每次重试独立通过熔断器，确保熔断状态变更能被及时感知。
 // 如果配置了熔断器，在熔断打开时快速失败返回 503。
 func (p *Proxy) Call(
 	ctx context.Context,
@@ -31,43 +32,57 @@ func (p *Proxy) Call(
 		return nil, fmt.Errorf("%w: %s", ErrServiceNotFound, service)
 	}
 
-	rpcFn := func() (interface{}, error) {
-		maxRetries := p.maxRetries
-		var lastErr error
-		for attempt := 0; attempt <= maxRetries; attempt++ {
-			resp, err := cli.Client.GenericCall(ctx, method, req, callOpts...)
-			if err == nil {
-				return resp, nil
-			}
-			lastErr = err
-			// P2-01: 仅对明确的瞬态错误重试
-			errMsg := err.Error()
-			isTransient := strings.Contains(errMsg, "connection reset by peer") ||
-				strings.Contains(errMsg, "connection refused") ||
-				strings.Contains(errMsg, "connection shutdown") ||
-				strings.Contains(errMsg, "i/o timeout") ||
-				strings.Contains(errMsg, "deadline exceeded") ||
-				errors.Is(err, context.DeadlineExceeded)
-			if !isTransient || attempt == maxRetries {
-				return nil, err
-			}
-			// 指数退避：100ms, 200ms
-			backoff := time.Duration(1<<(attempt+1)) * 50 * time.Millisecond
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(backoff):
-			}
-			logger.Warnf("rpc transient error, retrying %d/%d: service=%s method=%s err=%v", attempt+1, maxRetries, service, method, err)
+	cbKey := service + "/" + method
+	maxRetries := p.maxRetries
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// 每次重试独立通过熔断器，确保熔断状态变更能被及时感知。
+		rpcFn := func() (interface{}, error) {
+			return cli.Client.GenericCall(ctx, method, req, callOpts...)
 		}
-		return nil, lastErr
+
+		var resp interface{}
+		var err error
+		if p.cb != nil {
+			resp, err = p.cb.Execute(cbKey, rpcFn)
+		} else {
+			resp, err = rpcFn()
+		}
+
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+
+		// 熔断器打开或半开状态请求过多，快速失败不重试。
+		if errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests) {
+			return nil, err
+		}
+
+		// P2-01: 仅对明确的瞬态错误重试
+		errMsg := err.Error()
+		isTransient := strings.Contains(errMsg, "connection reset by peer") ||
+			strings.Contains(errMsg, "connection refused") ||
+			strings.Contains(errMsg, "connection shutdown") ||
+			strings.Contains(errMsg, "i/o timeout") ||
+			strings.Contains(errMsg, "deadline exceeded") ||
+			errors.Is(err, context.DeadlineExceeded)
+		if !isTransient || attempt == maxRetries {
+			return nil, err
+		}
+
+		// 指数退避：100ms, 200ms
+		backoff := time.Duration(1<<(attempt+1)) * 50 * time.Millisecond
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		logger.Warnf("rpc transient error, retrying %d/%d: service=%s method=%s err=%v", attempt+1, maxRetries, service, method, err)
 	}
 
-	cbKey := service + "/" + method
-	if p.cb != nil {
-		return p.cb.Execute(cbKey, rpcFn)
-	}
-	return rpcFn()
+	return nil, lastErr
 }
 
 // retryRegister 尝试注册服务，最多重试 maxRetries 次，带退避。

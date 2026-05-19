@@ -41,12 +41,14 @@ func (p *Proxy) DiscoverAndRegister(
 	}
 
 	seen := make(map[string]struct{})
+	instanceMap := make(map[string]int) // service name → instance count in etcd
 	var regFailures []string
 	for _, kv := range resp.Kvs {
 		svcName := extractServiceName(string(kv.Key), prefix)
 		if svcName == "" {
 			continue
 		}
+		instanceMap[svcName]++
 		if _, done := seen[svcName]; done {
 			continue
 		}
@@ -70,6 +72,14 @@ func (p *Proxy) DiscoverAndRegister(
 	if len(regFailures) > 0 {
 		return fmt.Errorf("failed to register services at startup: %v", regFailures)
 	}
+	// 用 etcd 中的实际实例数覆盖 registerService 设置的初始值 1
+	p.mu.Lock()
+	for svcName, count := range instanceMap {
+		if _, ok := p.clients[svcName]; ok && count > 0 {
+			p.instanceCount[svcName] = int64(count)
+		}
+	}
+	p.mu.Unlock()
 	return nil
 }
 
@@ -144,6 +154,10 @@ func (p *Proxy) watchOnce(
 
 			switch ev.Type {
 			case clientv3.EventTypePut:
+				p.mu.Lock()
+				p.instanceCount[svcName]++
+				p.mu.Unlock()
+
 				if _, ok := p.getClient(svcName); ok {
 					continue
 				}
@@ -163,7 +177,27 @@ func (p *Proxy) watchOnce(
 					logger.Warnf("WatchServices: failed to register %s after retries: %v", svcName, regErr)
 				}
 			case clientv3.EventTypeDelete:
-				logger.Infof("WatchServices: instance deregistered for %s (Kitex resolver tracks instances)", svcName)
+				p.mu.Lock()
+				p.instanceCount[svcName]--
+				count := p.instanceCount[svcName]
+				shouldRemove := count <= 0
+				p.mu.Unlock()
+
+				if shouldRemove {
+					p.mu.Lock()
+					if sc, ok := p.clients[svcName]; ok {
+						delete(p.clients, svcName)
+						delete(p.instanceCount, svcName)
+						_ = sc.Generic.Close()
+						sc.Client.Close()
+						logger.Infof("WatchServices: removed client for %s (all instances deregistered)", svcName)
+					} else {
+						delete(p.instanceCount, svcName)
+					}
+					p.mu.Unlock()
+				} else {
+					logger.Infof("WatchServices: instance deregistered for %s (remaining: %d)", svcName, count)
+				}
 			}
 		}
 	}

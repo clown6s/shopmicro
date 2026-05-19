@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,10 @@ import (
 
 // requestIDHeader 是请求 ID 的 HTTP 头名称。
 const requestIDHeader = "X-Request-Id"
+
+// requestIDRegex 校验客户端提供的 X-Request-Id 格式：
+// 仅允许字母、数字、连字符、下划线，长度 1-64。
+var requestIDRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
 // TraceIDMiddleware 设置 X-Trace-Id 响应头，使调用方可以
 // 使用 crypto/rand 生成密码学质量的追踪 ID。
@@ -32,9 +37,12 @@ func TraceIDMiddleware() app.HandlerFunc {
 
 		// 即使 otel 链路追踪被禁用，我们仍然提供一个关联 ID。
 		existingReqID := c.Request.Header.Get(requestIDHeader)
-		if existingReqID != "" {
+		if existingReqID != "" && requestIDRegex.MatchString(existingReqID) {
 			c.Response.Header.Set(requestIDHeader, existingReqID)
 		} else {
+			if existingReqID != "" {
+				logger.Infof("trace: rejected invalid X-Request-Id %q, generated replacement", existingReqID)
+			}
 			c.Response.Header.Set(requestIDHeader, generateRequestID())
 		}
 	}
