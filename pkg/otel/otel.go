@@ -66,16 +66,14 @@ func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(cont
 		opts...,
 	)
 	if err != nil {
-		// 真正的配置错误。以适当的级别记录日志并给出指引。
 		if mode == "dev" {
+			// dev 模式：允许无 tracing 降级启动，返回 noop shutdown
 			logger.Infof("otel: exporter unavailable in dev mode (endpoint=%s), tracing disabled: %v", endpoint, err)
 			return func(ctx context.Context) error { return nil }
 		}
-		// R4-P1-07: 生产/预发环境：返回 noop shutdown func，使调用方的 defer 安全执行。
-		// 之前返回 nil 会导致调用方 defer shutdown(ctx) 时 panic。
-		logger.Errorf("otel: failed to create exporter (endpoint=%s), tracing DISABLED. "+
-			"Verify OTEL_EXPORTER_OTLP_ENDPOINT is reachable: %v", endpoint, err)
-		return func(ctx context.Context) error { return nil }
+		// prod/staging 模式：返回 nil，由调用方 nil guard 终止启动
+		logger.Errorf("otel: failed to create exporter (endpoint=%s): %v", endpoint, err)
+		return nil
 	}
 
 	// 可配置的采样率

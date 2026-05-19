@@ -70,7 +70,11 @@ func Run(configPath string) error {
 	if shutdownTracer == nil {
 		return fmt.Errorf("otel init failed — see logs above for details")
 	}
-	defer shutdownTracer(context.Background())
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		shutdownTracer(ctx)
+	}()
 
 	// =========================
 	// 数据层
