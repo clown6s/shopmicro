@@ -83,6 +83,20 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 		return nil, errNothingUpdate
 	}
 
+	// R5-P1-06: 先撤销旧 token（轻操作），再更新 DB（重操作）。
+	// 原因：如果先更新 DB 再撤销 Redis，DB 成功但 Redis 失败时
+	// 会出现"数据已变更但旧 token 仍有效"的不一致状态。
+	// 反过来：Redis 失败直接返回错误（DB 未动），Redis 成功但 DB 失败
+	// 仅导致用户需要重新登录（安全优先），数据保持不变。
+	if upd.Phone != nil {
+		tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
+		rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
+		if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}); err != nil {
+			logger.Warnf("update user: failed to revoke tokens before DB update (user_id=%d): %v", req.GetId(), err)
+			return nil, errInternal
+		}
+	}
+
 	if err := s.userDal.Update(ctx, req.GetId(), updates); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errUserNotFound
@@ -100,17 +114,6 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 		}
 		logger.Errorf("update user failed: %v", err)
 		return nil, errInternal
-	}
-
-	// P2-12 修复：手机号变更时撤销所有会话。
-	// R4-P2-05: 撤销失败返回错误，避免客户端以为 token 已失效但实际仍有效
-	if upd.Phone != nil {
-		tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
-		rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", req.GetId())
-		if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}); err != nil {
-			logger.Warnf("update user: failed to revoke tokens (user_id=%d): %v", req.GetId(), err)
-			return nil, errInternal
-		}
 	}
 
 	return &v1.UpdateUserResp{}, nil
@@ -194,14 +197,12 @@ func (s *UserServiceImpl) ListUser(ctx context.Context, req *v1.ListUserReq) (*v
 
 // toUserInfoMasked 返回手机号和邮箱已脱敏的用户信息。
 func toUserInfoMasked(u *module.User) *v1.UserInfo {
-	gender := v1.Gender(u.Gender)
-	age := int32(u.Age)
 	return &v1.UserInfo{
 		Id:       u.ID,
 		RealName: u.RealName,
 		Avatar:   u.Avatar,
-		Gender:   &gender,
-		Age:      &age,
+		Gender:   new(v1.Gender(u.Gender)),
+		Age:      new(int32(u.Age)),
 		Phone:    maskPhone(u.Phone),
 		Email:    maskEmail(u.Email),
 		Remark:   u.Remark,

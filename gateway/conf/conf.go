@@ -167,7 +167,7 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.JWT.Issuer == "" && c.Mode == "prod" {
-		log.Printf("[WARN] jwt issuer is empty in production mode — tokens from any issuer will be accepted")
+		return fmt.Errorf("jwt issuer is required in production mode to prevent accepting tokens from any issuer")
 	}
 	return nil
 }
