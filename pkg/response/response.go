@@ -26,11 +26,6 @@ type R struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-// JSON 使用预定义的 errcode.ErrCode 发送统一 JSON 响应。
-func JSON(c *app.RequestContext, code errcode.ErrCode, data interface{}) {
-	c.JSON(HttpStatus(code.Code), R{Code: code.Code, Message: code.Msg, Data: data})
-}
-
 // OK 发送成功响应（code=0）。
 func OK(c *app.RequestContext, data interface{}) {
 	c.JSON(http.StatusOK, R{Code: 0, Message: "ok", Data: data})

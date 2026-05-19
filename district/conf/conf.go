@@ -27,10 +27,10 @@ type Config struct {
 	Vault      secrets.VaultConfig `yaml:"vault"`
 }
 
-// GetHealthAddr 返回健康检查监听地址，默认为 :8899。
+// GetHealthAddr 返回健康检查监听地址，默认为 :8898（避免与 user 的 :8899 冲突）。
 func (c *Config) GetHealthAddr() string {
 	if c.HealthAddr == "" {
-		return ":8899"
+		return ":8898"
 	}
 	return c.HealthAddr
 }

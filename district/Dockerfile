@@ -34,8 +34,8 @@ RUN apk --no-cache add ca-certificates tzdata
 
 WORKDIR /app
 
-# gRPC 服务监听 127.0.0.1:8888（仅容器内部），健康检查监听 :8899
-EXPOSE 8888 8899
+# gRPC 服务监听 127.0.0.1:8888（仅容器内部），健康检查监听 :8898
+EXPOSE 8888 8898
 
 COPY --from=builder /district-bin ./
 COPY district/conf ./conf
@@ -47,9 +47,9 @@ USER appuser
 # 环境变量覆盖敏感配置（无需重新构建镜像）
 # MYSQL_DSN, AMAP_KEY, REDIS_ADDR, REDIS_PASSWORD, ETCD_ADDRS
 ENV SERVER_ADDR=0.0.0.0:8888
-ENV HEALTH_ADDR=:8899
+ENV HEALTH_ADDR=:8898
 
 ENTRYPOINT ["./district-bin", "-c", "conf/config.yaml"]
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -sf http://localhost:8899/health || exit 1
+  CMD curl -sf http://localhost:8898/health || exit 1
