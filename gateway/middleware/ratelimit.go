@@ -163,13 +163,16 @@ func uniqueMember(now time.Time) string {
 		// 使用时间戳+计数器作为 fallback，记录 ERROR 以便运维介入。
 		logger.Errorf("ratelimit: crypto/rand unavailable — rate limiter uniqueness degraded")
 		nano := now.UnixNano()
-		b[0] = byte(nano)
-		b[1] = byte(nano >> 8)
-		b[2] = byte(nano >> 16)
-		b[3] = byte(nano >> 24)
 		cnt := fallbackCounter.Add(1)
-		b[4] = byte(cnt)
-		b[5] = byte(cnt >> 8)
+		// 写满 8 字节：高 4 字节为纳秒时间戳，低 4 字节为计数器
+		b[0] = byte(nano >> 24)
+		b[1] = byte(nano >> 16)
+		b[2] = byte(nano >> 8)
+		b[3] = byte(nano)
+		b[4] = byte(cnt >> 24)
+		b[5] = byte(cnt >> 16)
+		b[6] = byte(cnt >> 8)
+		b[7] = byte(cnt)
 	}
 	return fmt.Sprintf("%d:%08x", now.UnixNano(), binary.BigEndian.Uint64(b[:]))
 }

@@ -155,6 +155,8 @@ func Run(configPath string) error {
 	h.Use(middleware.CORS(&middleware.CORSConfig{  // 跨域
 		AllowOrigins:     cfg.CORS.AllowOrigins,
 		AllowCredentials: cfg.CORS.AllowCredentials,
+		AllowHeaders:     cfg.CORS.AllowHeaders,
+		MaxAge:           cfg.CORS.MaxAgeSec,
 	}, cfg.Mode))
 	h.Use(middleware.SecurityHeadersMiddleware(cfg.Mode)) // HSTS、CSP、X-Frame-Options 等
 	h.Use(gzip.Gzip(gzip.DefaultCompression))             // gzip 压缩，减少大响应传输量

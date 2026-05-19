@@ -251,58 +251,20 @@ func (d *DistrictDal) fullReplace(ctx context.Context, records []districtRecord)
 
 		batch := records[i:end]
 
-		var (
-			values []string
-			args   []any
-		)
-
-		values =
-			make([]string, 0, len(batch))
-
-		args =
-			make([]any, 0, len(batch)*5)
+		values := make([]string, 0, len(batch))
+		args := make([]any, 0, len(batch)*5)
 
 		for _, r := range batch {
-
-			values = append(
-				values,
-				"(?,?,?,?,?,NOW())",
-			)
-
-			args = append(
-				args,
-				r.AdCode,
-				r.Name,
-				r.Level,
-				r.Center,
-				r.ParentAdCode,
-			)
+			values = append(values, "(?,?,?,?,?,NOW())")
+			args = append(args, r.AdCode, r.Name, r.Level, r.Center, r.ParentAdCode)
 		}
 
 		query := fmt.Sprintf(
-			`
-				INSERT INTO district
-				(
-					ad_code,
-					name,
-					level,
-					center,
-					parent_adcode,
-					created_at
-				)
-				VALUES %s
-`,
+			"INSERT INTO district (ad_code, name, level, center, parent_adcode, created_at) VALUES %s",
 			strings.Join(values, ","),
 		)
 
-		_, err =
-			tx.ExecContext(
-				ctx,
-				query,
-				args...,
-			)
-
-		if err != nil {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 			return err
 		}
 	}

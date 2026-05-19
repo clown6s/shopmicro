@@ -277,7 +277,10 @@ func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, r
 		logger.Warnf("pregzip: gzip write failed: %v", err)
 		return false
 	}
-	w.Close()
+	if err := w.Close(); err != nil {
+		logger.Warnf("pregzip: gzip close failed: %v", err)
+		return false
+	}
 
 	gzipped := buf.Bytes()
 	// R5-P0-02: cacheKey 已在函数开头计算并校验

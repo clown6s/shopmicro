@@ -73,6 +73,8 @@ type OTEL struct {
 type CORS struct {
 	AllowOrigins     []string `yaml:"allowOrigins"`
 	AllowCredentials bool     `yaml:"allowCredentials"`
+	AllowHeaders     []string `yaml:"allowHeaders"` // 允许的请求头列表，为空时使用默认值
+	MaxAgeSec        int      `yaml:"maxAgeSec"`    // preflight 缓存秒数 (default: 3600)
 }
 
 type JWT struct {

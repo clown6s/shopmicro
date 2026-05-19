@@ -3,16 +3,25 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"shopmicro/pkg/logger"
 )
 
+// defaultAllowHeaders 默认允许的请求头列表
+var defaultAllowHeaders = strings.Join([]string{
+	"Content-Type", "Authorization", "Token", "X-Request-Id", "Accept-Language",
+}, ", ")
+
 // CORSConfig 跨域配置
 type CORSConfig struct {
 	AllowOrigins     []string // 允许的域名列表，"*" 表示全部（生产环境禁用）
 	AllowCredentials bool     // 是否允许携带 Cookie / Authorization 头
+	AllowHeaders     []string // 允许的请求头列表，为空时使用默认值
+	MaxAge           int      // preflight 缓存秒数，0 时使用默认 3600
 }
 
 // CORS 返回一个 Hertz 中间件，用于设置跨域资源共享（CORS）响应头。
@@ -43,6 +52,18 @@ func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 		logger.Warnf("CORS: AllowOrigins=['*'] with AllowCredentials=true is invalid — browsers will reject responses")
 	}
 
+	// Allow-Headers 默认值
+	allowHeaders := defaultAllowHeaders
+	if len(cfg.AllowHeaders) > 0 {
+		allowHeaders = strings.Join(cfg.AllowHeaders, ", ")
+	}
+
+	// Max-Age 默认 3600
+	maxAge := "3600"
+	if cfg.MaxAge > 0 {
+		maxAge = strconv.Itoa(cfg.MaxAge)
+	}
+
 	// R4-P3-02: 浏览器按规范会拒绝凭据+通配符的组合（默认安全）。
 	// 服务端无需额外防护 —— 如果配置错误，浏览器会直接阻止响应。
 	// 已移除仅生产环境的防护（因为是无效代码，isAllowedOrigin 不会匹配 "*"）。
@@ -68,9 +89,8 @@ func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 
 		if originAllowed {
 			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE")
-			// R5-P2-03: 补充常见自定义请求头
-			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, Token, X-Request-Id, Accept-Language")
-			c.Header("Access-Control-Max-Age", "3600")
+			c.Header("Access-Control-Allow-Headers", allowHeaders)
+			c.Header("Access-Control-Max-Age", maxAge)
 			if creds {
 				c.Header("Access-Control-Allow-Credentials", "true")
 			}

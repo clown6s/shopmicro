@@ -8,6 +8,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	v1 "shopmicro/district/kitex_gen/api/district/v1"
+	"shopmicro/pkg/logger"
 )
 
 // DistrictServiceImpl 行政区划服务实现
@@ -30,13 +31,16 @@ func NewDistrictHandler(store DistrictStore) (*DistrictServiceImpl, error) {
 // GetProvinces —— 返回省级行政区列表（扁平，无 children）
 func (s *DistrictServiceImpl) GetProvinces(ctx context.Context, req *v1.GetProvincesReq) (*v1.GetProvincesResp, error) {
 
-	result, err, _ := s.sf.Do("provinces", func() (interface{}, error) {
+	result, err, shared := s.sf.Do("provinces", func() (interface{}, error) {
 		nodes, err := s.store.GetProvinces(ctx)
 		if err != nil {
 			return nil, err
 		}
 		return &v1.GetProvincesResp{List: nodes}, nil
 	})
+	if shared {
+		logger.Infof("district: GetProvinces request coalesced by singleflight")
+	}
 
 	if err != nil {
 		return nil, err
@@ -58,13 +62,16 @@ func (s *DistrictServiceImpl) GetChildren(ctx context.Context, req *v1.GetChildr
 	}
 
 	code := strconv.FormatUint(uint64(parentAdCode), 10)
-	result, err, _ := s.sf.Do("children:"+code, func() (interface{}, error) {
+	result, err, shared := s.sf.Do("children:"+code, func() (interface{}, error) {
 		nodes, err := s.store.GetChildrenByParent(ctx, parentAdCode)
 		if err != nil {
 			return nil, err
 		}
 		return &v1.GetChildrenResp{List: nodes}, nil
 	})
+	if shared {
+		logger.Infof("district: GetChildren[%s] request coalesced by singleflight", code)
+	}
 
 	if err != nil {
 		return nil, err
@@ -80,9 +87,12 @@ func (s *DistrictServiceImpl) GetChildren(ctx context.Context, req *v1.GetChildr
 // UpdateDistrict 从高德地图拉取行政区划数据，全量替换数据库。
 // R4-P2-11: 使用 singleflight 防止并发全量替换导致锁竞争或数据不一致
 func (s *DistrictServiceImpl) UpdateDistrict(ctx context.Context, req *v1.UpdateDistrictReq) (*v1.UpdateDistrictResp, error) {
-	_, err, _ := s.sf.Do("update-district", func() (interface{}, error) {
+	_, err, shared := s.sf.Do("update-district", func() (interface{}, error) {
 		return nil, s.store.UpdateDistrict(ctx)
 	})
+	if shared {
+		logger.Infof("district: UpdateDistrict request coalesced by singleflight (duplicate update suppressed)")
+	}
 	if err != nil {
 		return nil, err
 	}
