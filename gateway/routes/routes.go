@@ -85,10 +85,10 @@ func ProxyOptions() []proxy.Option {
 			"Login",
 			"RefreshToken",
 		),
-		//proxy.WithPublicMethods("district",
-		//	"GetProvinces",
-		//	"GetChildren",
-		//),
+		proxy.WithPublicMethods("district",
+			"GetProvinces",
+			"GetChildren",
+		),
 
 		// RPC 方法白名单
 		proxy.WithAllowedMethods("user",

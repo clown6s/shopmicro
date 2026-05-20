@@ -58,10 +58,13 @@ func (p *Proxy) DiscoverAndRegister(
 
 		if _, err := os.Stat(protoPath); err != nil {
 			if os.IsNotExist(err) {
-				return fmt.Errorf("proto file not found for service %q: %s (protoBase=%s) — cannot start without it",
-					svcName, protoPath, protoBase)
+				// 警告并跳过该服务，允许 gateway 启动（服务可后补 proto 后再注册）
+				logger.Warnf("proto file not found for service %q: %s — skipping registration, "+
+					"service will be available once proto is in place", svcName, protoPath)
+				continue
 			}
-			return fmt.Errorf("stat proto file for service %q: %w", svcName, err)
+			logger.Warnf("stat proto file for service %q: %v — skipping", svcName, err)
+			continue
 		}
 
 		if err := p.registerService(ctx, svcName, protoPath, resolver); err != nil {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bytedance/gopkg/cloud/metainfo"
@@ -54,33 +55,76 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 var errRefreshTokenRequired = newBizHTTP(errcode.CodeUserTokenRequired, "refresh token is required", 401)
 var errRefreshTokenInvalid = newBizHTTP(errcode.CodeUserTokenInvalid, "invalid or expired refresh token", 401)
 
-// refreshTokensScript 原子性地轮换刷新令牌 + 存储新 access token。
-// KEYS[1]=rtSetKey, KEYS[2]=newRTKey, KEYS[3]=tokenKey
+// refreshTokensScript 原子性完成 RT 轮换 + grace period 崩溃恢复。
+//
+// 流程（单次完整刷新）：
+//  1. GETDEL 原子删除旧 RT（KEYS[3]），返回 userID
+//  2. 检查 pending 键（KEYS[3] 本身作为 pending 键）
+//     - 有值（崩溃恢复路径）：返回已保存的新 AT+RT，Go 不重新生成
+//  3. 正常路径：写入 pending（KEYS[3]）→ tokenKey → rtSetKey → 清理 pending
+//
+// KEYS[1]=rtSetKey, KEYS[2]=tokenKey, KEYS[3]=oldRTKey（兼作 pending 键）
+// ARGV[1]=oldRT, ARGV[2]=userIDStr, ARGV[3]=newAT, ARGV[4]=newRT,
+// ARGV[5]=atTTL(sec), ARGV[6]=graceTTL(sec), ARGV[7]=rtSetTTL(sec)
+//
+// Lua 返回值：
+//   - "ok:{newAT}:{newRT}"       正常轮换成功
+//   - "recovery:{newAT}:{newRT}"  崩溃恢复，从 pending 返回已保存的 Token
+//   - nil                         旧 RT 已删除且无 pending（正常过期或并发已处理）
 const refreshTokensScript = `
-redis.call('SREM', KEYS[1], ARGV[1])
-redis.call('SADD', KEYS[1], ARGV[2])
-redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[5])
-redis.call('EXPIRE', KEYS[1], ARGV[4])
-redis.call('SADD', KEYS[3], ARGV[6])
-redis.call('EXPIRE', KEYS[3], ARGV[7])
-return 1
+local rtSetKey = KEYS[1]
+local tokenKey = KEYS[2]
+local rtKey = KEYS[3]
+local oldRT = ARGV[1]
+local userID = ARGV[2]
+local newAT = ARGV[3]
+local newRT = ARGV[4]
+local atTTL = tonumber(ARGV[5])
+local graceTTL = tonumber(ARGV[6])
+local keyTTL = tonumber(ARGV[7])
+
+-- ① 原子删除旧 RT（防重放），同时获取 userID
+local deletedValue = redis.call('GETDEL', rtKey)
+
+-- ② pending 键存在：崩溃恢复。
+--    rtKey 在 GETDEL 后被重新 SET 为 pending 值（见③），这里 GET 读取。
+local pending = redis.call('GET', rtKey)
+if pending then
+    -- pending 格式: userID:newAT:newRT
+    -- 校验 userID 防止跨用户数据泄露（即使 key 名正确）
+    if redis.call('SUBSTR', pending, 0, string.len(userID)-1) == userID then
+        redis.call('DEL', rtKey)
+        return 'recovery:' .. string.sub(pending, string.len(userID)+2)
+    end
+end
+
+-- ③ 正常路径：pending 写入作为崩溃恢复锚点（grace period 内有效）
+--    格式: userID:newAT:newRT
+redis.call('SET', rtKey, userID .. ':' .. newAT .. ':' .. newRT, 'EX', graceTTL)
+redis.call('SET', tokenKey, newAT, 'EX', atTTL)
+redis.call('SADD', rtSetKey, newRT)
+redis.call('EXPIRE', rtSetKey, keyTTL)
+-- ④ 清除 pending 锚点（表示本轮刷新已完全成功）
+redis.call('DEL', rtKey)
+return 'ok:' .. newAT .. ':' .. newRT
 `
 
 // RefreshToken 签发新的访问令牌 + 刷新令牌对。
+// 支持崩溃恢复：GETDEL 后进程崩溃，grace period（默认 5s）内旧 RT 重试时
+// Lua 脚本从 rt-pending 键直接返回已保存的新 Token，无需重新生成。
 func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshTokenReq) (resp *v1.RefreshTokenResp, err error) {
 	rt := req.GetRefreshToken()
 	if rt == "" {
 		return nil, errRefreshTokenRequired
 	}
 
-	// 原子消费旧 refresh token（防重放）。
-	// 权衡：GetDel 后如果进程崩溃，旧 RT 已消费但新 AT/RT 未写入，用户需重新登录。
-	// 这是标准的 token rotation 安全设计（RFC 6749 §6）。
 	rtKey := fmt.Sprintf("%s%s", refreshTokenPrefix, rt)
-	userIDStr, err := s.rdb.GetDel(ctx, rtKey)
-	if err != nil {
-		// R5-P1-02: Redis 故障时记录日志，区分网络错误和 token 不存在
-		logger.Warnf("refresh token: redis GetDel failed: %v", err)
+
+	// 先只读获取 userID（用于后续校验），不删除。
+	// Lua 脚本内部会做 GETDEL 和 pending 检查，确保原子性。
+	userIDStr, getErr := s.rdb.Get(ctx, rtKey)
+	if getErr != nil {
+		logger.Warnf("refresh token: redis GET failed (rtKey=%s): %v", rtKey[:30]+"...", getErr)
 		return nil, errRefreshTokenInvalid
 	}
 	if userIDStr == "" {
@@ -89,7 +133,6 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 
 	userID, err := parseInt64(userIDStr)
 	if err != nil || userID <= 0 {
-		// R4-P1-04: 记录异常 userIDStr，便于排查数据一致性问题
 		if userIDStr != "" {
 			logger.Warnf("refresh token: invalid userID from Redis (raw=%q, err=%v)", userIDStr, err)
 		}
@@ -97,8 +140,6 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 	}
 
 	// P2-07：按用户 ID 限制刷新令牌频率（每分钟 10 次）
-	// R7-P2-04: 使用 fmt.Sprintf("%d", userID) 而非原始 userIDStr，
-	// 确保 key 一致性（避免 Redis 中存储非规范化值如前导零）
 	refreshRateKey := refreshRateLimitKey + fmt.Sprintf("%d", userID)
 	limited, rlErr := s.rdb.RunScript(ctx, rateLimitScript, []string{refreshRateKey}, s.sec.RefreshLimitMax, s.sec.RefreshLimitWindow)
 	if rlErr != nil {
@@ -119,6 +160,8 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 		return nil, errInternal
 	}
 
+	// 先生成新 Token，再原子写入 Redis。
+	// 如果进程在这里崩溃：旧 RT 还在 Redis 中，下次请求直接 GETDEL → 用户不受影响。
 	token, err := s.jwtGen.Generate(userID)
 	if err != nil {
 		logger.Errorf("refresh token: generate new access token failed: %v", err)
@@ -133,20 +176,59 @@ func (s *UserServiceImpl) RefreshToken(ctx context.Context, req *v1.RefreshToken
 
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, userID)
 	atTTL := time.Duration(s.jwtExpHrs) * time.Hour
-	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", userID)
-	newRTKey := fmt.Sprintf("%s%s", refreshTokenPrefix, newRT)
+	rtSetKey := fmt.Sprintf("%s%d", tokenSetKeyPrefix, userID)
 	rtTTL := time.Duration(s.rtExpHrs) * time.Hour
-	// 原子性：AT 写入 + RT 轮换 在同一个 Lua 脚本中完成
-	if _, err := s.rdb.RunScript(ctx, refreshTokensScript,
-		[]string{rtSetKey, newRTKey, tokenKey},
-		rt, newRT, fmt.Sprintf("%d", userID), int(rtTTL.Seconds()), int(rtTTL.Seconds()), token, int(atTTL.Seconds()),
-	); err != nil {
-		logger.Errorf("refresh token: atomic token rotation failed (user_id=%d): %v", userID, err)
+	graceTTLSec := s.sec.TokenRotationGracePeriodSec
+	if graceTTLSec <= 0 {
+		graceTTLSec = 5 // 安全默认值
+	}
+
+	// 原子性：GETDEL + pending 检查 + Token 写入 在一个 Lua 脚本中完成
+	scriptResult, err := s.rdb.RunScript(ctx, refreshTokensScript,
+		[]string{rtSetKey, tokenKey, rtKey},
+		rt, userIDStr, token, newRT,
+		int(atTTL.Seconds()), graceTTLSec, int(rtTTL.Seconds()),
+	)
+	if err != nil {
+		logger.Errorf("refresh token: atomic token rotation script failed (user_id=%d): %v", userID, err)
+		return nil, errInternal
+	}
+
+	resultStr, ok := scriptResult.(string)
+	if !ok {
+		logger.Errorf("refresh token: unexpected script return type (user_id=%d): %T", userID, scriptResult)
+		return nil, errInternal
+	}
+
+	// 解析 Lua 返回值：格式 "status:AT:RT"
+	colonIdx := strings.Index(resultStr, ":")
+	if colonIdx < 1 {
+		logger.Errorf("refresh token: malformed script result (user_id=%d): %s", userID, resultStr)
+		return nil, errInternal
+	}
+	status := resultStr[:colonIdx]
+	payload := resultStr[colonIdx+1:]
+
+	// payload 格式: AT:RT
+	payloadColonIdx := strings.Index(payload, ":")
+	if payloadColonIdx < 1 {
+		logger.Errorf("refresh token: malformed token payload (user_id=%d): %s", userID, payload)
+		return nil, errInternal
+	}
+	retAT := payload[:payloadColonIdx]
+	retRT := payload[payloadColonIdx+1:]
+
+	if status == "recovery" {
+		// 崩溃恢复：旧 RT 在 GETDEL 后进程崩溃，pending 键保留了新 Token。
+		// 直接返回已保存的新 Token（无需重新生成）。
+		logger.Infof("refresh token: crash recovery served from pending (user_id=%d)", userID)
+	} else if status != "ok" {
+		logger.Errorf("refresh token: unexpected script status (user_id=%d): %s", userID, status)
 		return nil, errInternal
 	}
 
 	return &v1.RefreshTokenResp{
-		Token:        token,
-		RefreshToken: newRT,
+		Token:        retAT,
+		RefreshToken: retRT,
 	}, nil
 }

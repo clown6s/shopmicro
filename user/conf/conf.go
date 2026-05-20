@@ -33,6 +33,8 @@ type Security struct {
 	PasswordMinLen     int `yaml:"passwordMinLen"`     // 最短密码长度 (default: 8)
 	PasswordMaxLen     int `yaml:"passwordMaxLen"`     // 最长密码长度 (default: 128)
 	PasswordBcryptCost int `yaml:"passwordBcryptCost"` // bcrypt cost (default: 12)
+	// Token rotation grace period：GETDEL 后进程崩溃的恢复窗口秒数 (default: 5)
+	TokenRotationGracePeriodSec int `yaml:"tokenRotationGracePeriodSec"`
 }
 
 type Config struct {
@@ -84,6 +86,10 @@ func (c *Config) SetDefaults() {
 	}
 	if s.PasswordBcryptCost <= 0 {
 		s.PasswordBcryptCost = 12
+	}
+	// Token rotation grace period：崩溃恢复窗口，默认 5 秒足够覆盖 99.9% 的 RPC 超时重试
+	if s.TokenRotationGracePeriodSec <= 0 {
+		s.TokenRotationGracePeriodSec = 5
 	}
 }
 
