@@ -263,33 +263,36 @@ func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, r
 
 	// RPC 响应必须是 JSON 字符串
 	s, ok := resp.(string)
-	if !ok || s == "" {
+	if !ok {
+		logger.Warnf("pregzip: resp is %T, not string (service=%s method=%s)", resp, service, method)
+		return false
+	}
+	if s == "" {
 		return false
 	}
 
-	// 解析为 map，检查是否为包装响应
+	// 解析原始 protobuf JSON 响应
 	var m map[string]interface{}
 	if err := sonic.UnmarshalString(s, &m); err != nil {
+		logger.Warnf("pregzip: unmarshal failed (service=%s method=%s): %v", service, method, err)
 		return false
 	}
 
-	// 只缓存 code==0 的成功响应
-	codeRaw, hasCode := m["code"]
-	if !hasCode {
-		return false
+	// GenericCall 成功 (err==nil) 的响应就是成功响应，
+	// 不需要检查 code 字段（原始 protobuf JSON 没有 code）。
+	// 构建与 handleRPCResponse 一致的响应信封。
+	// handleRPCResponse 逻辑：有 code → 取 m["data"]；无 code → 整个 m
+	var data interface{}
+	if _, hasCode := m["code"]; hasCode {
+		data = m["data"]
+	} else {
+		data = m
 	}
 
-	// P0-02: 严格检查 code 类型，非 float64 视为异常，不缓存
-	code, ok := codeRaw.(float64)
-	if !ok || int(code) != 0 {
-		return false
-	}
-
-	// 构建与 handleRPCResponse 一致的响应信封（使用 sonic，与 c.JSON 一致）
 	respBody := response.R{
 		Code:    0,
 		Message: "ok",
-		Data:    m["data"],
+		Data:    data,
 	}
 
 	jsonBytes, err := sonic.Marshal(respBody)
@@ -299,7 +302,8 @@ func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, r
 
 	// 小响应不值得预压缩 —— 但已解析过一次，直接投递避免 handleRPCResponse 重复解析
 	if len(jsonBytes) < preGzipCfg.minSize {
-		response.OK(c, m["data"])
+		logger.Infof("pregzip: skip caching, response too small (%d < %d) (service=%s method=%s)", len(jsonBytes), preGzipCfg.minSize, service, method)
+		response.OK(c, data)
 		c.Abort()
 		return true
 	}

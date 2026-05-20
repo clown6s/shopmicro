@@ -122,10 +122,13 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		if reqMethod == http.MethodGet && p.cacheableMethods[service+"/"+method] {
 			ae := string(c.Request.Header.Peek("Accept-Encoding"))
 			if strings.Contains(ae, "gzip") {
-				if gzipped, ok := getPreGzip(preGzipCacheKey(service, method, c.Request.QueryString())); ok {
+				cacheKey := preGzipCacheKey(service, method, c.Request.QueryString())
+				if gzipped, ok := getPreGzip(cacheKey); ok {
+					logger.Debugf("pregzip cache HIT: %s (%d bytes)", cacheKey, len(gzipped))
 					servePreGzip(c, gzipped)
 					return
 				}
+				logger.Debugf("pregzip cache MISS: %s", cacheKey)
 			}
 		}
 

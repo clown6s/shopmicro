@@ -15,8 +15,6 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
 
-	"github.com/hertz-contrib/gzip"
-
 	hertztracing "github.com/hertz-contrib/obs-opentelemetry/tracing"
 
 	"github.com/kitex-contrib/registry-etcd"
@@ -158,7 +156,7 @@ func Run(configPath string) error {
 		MaxAge:           cfg.CORS.MaxAgeSec,
 	}, cfg.Mode))
 	h.Use(middleware.SecurityHeadersMiddleware(cfg.Mode)) // HSTS、CSP、X-Frame-Options 等
-	h.Use(gzip.Gzip(gzip.DefaultCompression))             // gzip 压缩，减少大响应传输量
+	h.Use(middleware.GzipMiddleware())                    // gzip 压缩（跳过 pre-gzip 已压缩的响应）
 	h.Use(middleware.AccessLogMiddleware())               // 访问日志
 	h.Use(middleware.TraceIDMiddleware())                 // trace-id 响应头
 	h.Use(middleware.RealIPMiddleware())                  // X-Forwarded-For 信任链 → _real_ip
