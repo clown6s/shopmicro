@@ -42,9 +42,9 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 	}
 
 	tokenKey := fmt.Sprintf("%s%d", tokenPrefix, userID)
-	rtSetKey := fmt.Sprintf("%s%d", "shopmicro:user:rtset:", userID)
+	rtSetKey := fmt.Sprintf("%s%d", tokenSetKeyPrefix, userID)
 	// 同时撤销 access token 和 refresh token
-	if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}); err != nil {
+	if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}, refreshTokenPrefix); err != nil {
 		logger.Errorf("logout: failed to revoke tokens atomically (user_id=%d): %v", userID, err)
 		return nil, errInternal
 	}
@@ -101,7 +101,8 @@ end
 -- ③ 正常路径：pending 写入作为崩溃恢复锚点（grace period 内有效）
 --    格式: userID:newAT:newRT
 redis.call('SET', rtKey, userID .. ':' .. newAT .. ':' .. newRT, 'EX', graceTTL)
-redis.call('SET', tokenKey, newAT, 'EX', atTTL)
+redis.call('SADD', tokenKey, newAT)
+redis.call('EXPIRE', tokenKey, atTTL)
 redis.call('SADD', rtSetKey, newRT)
 redis.call('EXPIRE', rtSetKey, keyTTL)
 -- ④ 清除 pending 锚点（表示本轮刷新已完全成功）

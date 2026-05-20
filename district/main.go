@@ -64,9 +64,9 @@ func Run(configPath string) error {
 	// otel 追踪器
 	// =========================
 
-	shutdownTracer := otel.InitTracer("district-service", cfg.Mode)
-	if shutdownTracer == nil {
-		return fmt.Errorf("otel init failed — see logs above for details")
+	shutdownTracer, err := otel.InitTracer("district-service", cfg.Mode)
+	if err != nil {
+		return fmt.Errorf("otel init failed: %w", err)
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -78,7 +78,7 @@ func Run(configPath string) error {
 	// 数据层
 	// =========================
 
-	dataProvider, cleanup, err := data.New(cfg.MySQL, cfg.Redis, cfg.AMap.Key, time.Duration(cfg.AMap.Timeout)*time.Second)
+	dataProvider, cleanup, err := data.New(cfg.MySQL, cfg.AMap.Key, time.Duration(cfg.AMap.Timeout)*time.Second)
 	if err != nil {
 		return err
 	}
@@ -184,7 +184,7 @@ func Run(configPath string) error {
 	healthy := &atomic.Bool{}
 	healthy.Store(true)
 
-	healthMux := pkghealth.BuildHealthMux(pkghealth.Dependencies{DB: dataProvider.DB, Rdb: dataProvider.Rdb}, healthy)
+	healthMux := pkghealth.BuildHealthMux(pkghealth.Dependencies{DB: dataProvider.DB}, healthy)
 	healthSrv := &http.Server{
 		Addr:         cfg.GetHealthAddr(),
 		Handler:      healthMux,

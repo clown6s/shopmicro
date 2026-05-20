@@ -4,12 +4,6 @@ server:
 mysql:
   dsn: ""  # 通过 MYSQL_DSN 环境变量或 .env 设置
 
-# 业务缓存 Redis（开发阶段与网关共用，生产环境隔离）
-redis:
-  addr: "127.0.0.1:6379"
-  password: ""  # 通过 REDIS_PASSWORD 环境变量或 .env 设置
-  db: 1
-
 etcd:
   addrs:
     - "127.0.0.1:2379"

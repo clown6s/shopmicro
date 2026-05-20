@@ -151,12 +151,15 @@ return count
 `
 
 // R2-P2-04：用于撤销用户所有令牌（访问令牌 + 刷新令牌）的原子性 Lua 脚本。
+// KEYS[1]=tokenKey, KEYS[2]=rtSetKey
+// ARGV[1]=refreshTokenPrefix（用于构造 RT 反查 key），避免 Lua 内硬编码前缀
 const revokeTokensScript = `
 local tokenKey = KEYS[1]
 local rtSetKey = KEYS[2]
+local rtPrefix = ARGV[1]
 local rtTokens = redis.call('SMEMBERS', rtSetKey)
 for _, rt in ipairs(rtTokens) do
-    local rtKey = 'shopmicro:user:refresh:' .. rt
+    local rtKey = rtPrefix .. rt
     redis.call('DEL', rtKey)
 end
 redis.call('DEL', rtSetKey)

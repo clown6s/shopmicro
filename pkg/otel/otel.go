@@ -2,6 +2,7 @@ package otel
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -12,14 +13,15 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
 	"shopmicro/pkg/logger"
 )
 
 // InitTracerWithEndpoint 带有自定义 endpoint 的初始化函数
 // endpoint 可通过环境变量 OTEL_EXPORTER_OTLP_ENDPOINT 覆盖
-func InitTracerWithEndpoint(serviceName, mode, defaultEndpoint string) func(context.Context) error {
+// 返回 (shutdown 函数, error)，调用方必须检查 error
+func InitTracerWithEndpoint(serviceName, mode, defaultEndpoint string) (func(context.Context) error, error) {
 	// P0-01 修复：支持通过参数传入默认 endpoint
 	endpoint := defaultEndpoint
 	if ep := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); ep != "" {
@@ -34,21 +36,21 @@ func InitTracerWithEndpoint(serviceName, mode, defaultEndpoint string) func(cont
 }
 
 // InitTracer 初始化 OpenTelemetry tracer provider 和全局传播器。
-// 返回一个关闭函数，必须在优雅关闭期间调用。
+// 返回一个关闭函数和 error，必须在优雅关闭期间调用关闭函数。
 //
 // P0-02 修复：endpoint 现在可通过 OTEL_EXPORTER_OTLP_ENDPOINT 环境变量配置
 // （回退到 "localhost:4317"）。初始化错误会被返回而不是 panic。
 //
 // P0-11 修复：采样率可通过 OTEL_TRACE_SAMPLE_RATE 环境变量配置
 // （0.0–1.0，非 dev 模式默认 0.1）。使用 "1.0" 或 mode="dev" 进行全量采样。
-func InitTracer(serviceName, mode string) func(context.Context) error {
+func InitTracer(serviceName, mode string) (func(context.Context) error, error) {
 	return InitTracerWithEndpoint(serviceName, mode, "localhost:4317")
 }
 
 // initTracerCommon 公共的 tracer 初始化逻辑
 // R5-P1-01 修复：useTLS 参数独立传入，不再依赖 endpoint 中的 scheme 前缀
 // gRPC exporter 需要裸 host:port，TLS 由 useTLS 布尔值控制
-func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(context.Context) error {
+func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) (func(context.Context) error, error) {
 	// 使用有超时的上下文，防止 exporter 永久阻塞
 	initCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -69,11 +71,11 @@ func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(cont
 		if mode == "dev" {
 			// dev 模式：允许无 tracing 降级启动，返回 noop shutdown
 			logger.Infof("otel: exporter unavailable in dev mode (endpoint=%s), tracing disabled: %v", endpoint, err)
-			return func(ctx context.Context) error { return nil }
+			return func(ctx context.Context) error { return nil }, nil
 		}
-		// prod/staging 模式：返回 nil，由调用方 nil guard 终止启动
+		// prod/staging 模式：返回错误，由调用方决定是否终止启动
 		logger.Errorf("otel: failed to create exporter (endpoint=%s): %v", endpoint, err)
-		return nil
+		return nil, fmt.Errorf("otel: failed to create exporter (endpoint=%s): %w", endpoint, err)
 	}
 
 	// 可配置的采样率
@@ -119,5 +121,5 @@ func initTracerCommon(serviceName, mode, endpoint string, useTLS bool) func(cont
 	)
 
 	logger.Infof("otel: tracer initialised (endpoint=%s, sampleRate=%.2f)", endpoint, sampleRate)
-	return tp.Shutdown
+	return tp.Shutdown, nil
 }

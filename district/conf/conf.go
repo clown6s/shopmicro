@@ -7,7 +7,6 @@ import (
 	"shopmicro/pkg/conf"
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/mysql"
-	"shopmicro/pkg/redis"
 	"shopmicro/pkg/secrets"
 )
 
@@ -21,7 +20,6 @@ type Config struct {
 	HealthAddr string              `yaml:"healthAddr"`
 	Etcd       conf.Etcd           `yaml:"etcd"`
 	MySQL      mysql.Config        `yaml:"mysql"`
-	Redis      redis.Config        `yaml:"redis"`
 	AMap       AMapConfig          `yaml:"amap"`
 	Mode       string              `yaml:"mode"`
 	Vault      secrets.VaultConfig `yaml:"vault"`
@@ -46,6 +44,11 @@ func (c *Config) GetHealthAddr() string {
 
 // ApplyEnv 从环境变量覆盖敏感配置
 func (c *Config) ApplyEnv() {
+	// MySQL DSN 优先从环境变量获取（.env 或系统环境变量）
+	if c.MySQL.DSN == "" {
+		c.MySQL.DSN = conf.Env("MYSQL_DSN", "")
+	}
+
 	// P2-11 修复：永远不要使用 config.yaml 中的 Vault.Token 作为默认值。
 	if c.Vault.Address != "" {
 		if token := conf.Env("VAULT_TOKEN", ""); token != "" {
@@ -58,15 +61,6 @@ func (c *Config) ApplyEnv() {
 		}
 	}
 
-	if v := conf.Env("MYSQL_DSN", ""); v != "" {
-		c.MySQL.DSN = v
-	}
-	if v := conf.Env("REDIS_ADDR", ""); v != "" {
-		c.Redis.Addr = v
-	}
-	if v := conf.Env("REDIS_PASSWORD", ""); v != "" {
-		c.Redis.Password = v
-	}
 	if v := conf.Env("SERVER_ADDR", ""); v != "" {
 		c.Server.Addr = v
 	}
@@ -83,12 +77,6 @@ func (c *Config) Validate() error {
 	if err := c.MySQL.Validate(); err != nil {
 		return err
 	}
-	if c.Redis.Addr == "" {
-		return fmt.Errorf("redis address is required, set REDIS_ADDR env or config.yaml")
-	}
-	if err := c.Redis.Validate(); err != nil {
-		return fmt.Errorf("redis config invalid: %w", err)
-	}
 
 	mode := strings.ToLower(c.Mode)
 	if mode != "dev" && mode != "prod" && mode != "staging" {
@@ -96,10 +84,6 @@ func (c *Config) Validate() error {
 	}
 	if len(c.Etcd.Addrs) == 0 {
 		return fmt.Errorf("etcd addresses are required, set ETCD_ADDRS env or config.yaml")
-	}
-	// P2-08：生产环境需要 Redis 密码
-	if mode == "prod" && c.Redis.Password == "" {
-		return fmt.Errorf("redis password is required in production mode, set REDIS_PASSWORD env")
 	}
 	return nil
 }

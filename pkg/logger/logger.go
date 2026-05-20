@@ -63,15 +63,15 @@ func Safe(fieldName, val string) string {
 }
 
 // wordMatch 检查 pattern 是否作为独立单词出现在 s 中。
-// 单词边界定义为字符串首尾、下划线(_)或连字符(-)。
+// 单词边界定义为字符串首尾、下划线(_)、连字符(-)或点号(.)。
 func wordMatch(s, pattern string) bool {
 	for {
 		idx := strings.Index(s, pattern)
 		if idx < 0 {
 			return false
 		}
-		before := idx == 0 || s[idx-1] == '_' || s[idx-1] == '-'
-		after := idx+len(pattern) >= len(s) || s[idx+len(pattern)] == '_' || s[idx+len(pattern)] == '-'
+		before := idx == 0 || s[idx-1] == '_' || s[idx-1] == '-' || s[idx-1] == '.'
+		after := idx+len(pattern) >= len(s) || s[idx+len(pattern)] == '_' || s[idx+len(pattern)] == '-' || s[idx+len(pattern)] == '.'
 		if before && after {
 			return true
 		}

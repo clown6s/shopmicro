@@ -67,9 +67,9 @@ func Run(configPath string) error {
 	// otel 链路追踪
 	// =========================
 
-	shutdownTracer := otel.InitTracer("user-service", cfg.Mode)
-	if shutdownTracer == nil {
-		return fmt.Errorf("otel init failed — see logs above for details")
+	shutdownTracer, err := otel.InitTracer("user-service", cfg.Mode)
+	if err != nil {
+		return fmt.Errorf("otel init failed: %w", err)
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

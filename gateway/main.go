@@ -79,13 +79,13 @@ func Run(configPath string) error {
 		os.Setenv("OTEL_TRACE_SAMPLE_RATE", strconv.FormatFloat(cfg.OTEL.SampleRate, 'f', -1, 64))
 	}
 
-	shutdownTracer := otel.InitTracerWithEndpoint(
+	shutdownTracer, err := otel.InitTracerWithEndpoint(
 		"shopmicro-gateway",
 		cfg.Mode,
 		cfg.OTEL.Endpoint,
 	)
-	if shutdownTracer == nil {
-		return fmt.Errorf("otel init failed — see logs above for details")
+	if err != nil {
+		return fmt.Errorf("otel init failed: %w", err)
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

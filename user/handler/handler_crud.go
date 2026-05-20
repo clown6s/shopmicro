@@ -91,7 +91,7 @@ func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *v1.UpdateUserReq)
 	if upd.Phone != nil {
 		tokenKey := fmt.Sprintf("%s%d", tokenPrefix, req.GetId())
 		rtSetKey := fmt.Sprintf("%s%d", tokenSetKeyPrefix, req.GetId())
-		if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}); err != nil {
+		if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}, refreshTokenPrefix); err != nil {
 			logger.Warnf("update user: failed to revoke tokens before DB update (user_id=%d): %v", req.GetId(), err)
 			return nil, errInternal
 		}
@@ -151,7 +151,7 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 	// 软删除已提交 DB，Redis 撤销失败不返回错误（降级为 warning）。
 	// 原因：返回错误会让客户端重试，但 GetByID 因 deleted_at!=nil 返回 "用户不存在"，
 	// 造成更严重的困惑。旧 token 短暂有效远比 "用户不存在" 好处理。
-	if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}); err != nil {
+	if _, err := s.rdb.RunScript(ctx, revokeTokensScript, []string{tokenKey, rtSetKey}, refreshTokenPrefix); err != nil {
 		logger.Warnf("delete user: failed to revoke tokens (user_id=%d), user already deleted: %v", req.GetId(), err)
 	}
 

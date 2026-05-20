@@ -60,12 +60,11 @@ func BuildHealthMux(deps Dependencies, healthy *atomic.Bool) *http.ServeMux {
 			unhealthy = true
 		}
 
-		if deps.Rdb == nil {
-			logger.Warn("healthz: rdb is nil")
-			unhealthy = true
-		} else if err := deps.Rdb.PingErr(ctx); err != nil {
-			logger.Warnf("healthz: redis ping failed: %v", err)
-			unhealthy = true
+		if deps.Rdb != nil {
+			if err := deps.Rdb.PingErr(ctx); err != nil {
+				logger.Warnf("healthz: redis ping failed: %v", err)
+				unhealthy = true
+			}
 		}
 
 		if unhealthy {

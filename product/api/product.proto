@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package api.product.v1;
+
+option go_package = "shopmicro/product/kitex_gen/api/product/v1";
+
+service ProductService {
+    rpc GetCategory (GetCategoryReq) returns (GetProvincesResp);
+    rpc UpdateCategory (UpdateCategoryReq) returns (UpdateCategoryResp);
+}
+
+
+message GetCategoryReq {}
+
+message GetProvincesResp {
+  repeated CategoryNode list = 1;
+}
+
+message UpdateCategoryReq {}
+
+message UpdateCategoryResp {}
+
+message CategoryNode {
+  uint32 id = 1;
+  string name = 3;
+  uint32 parent_cid = 2;
+  uint32 cat_level = 4;
+}

@@ -15,7 +15,7 @@ import (
 // R4-P2-10: 使用 DistrictStore 接口替代具体类型，提升可测试性
 type DistrictServiceImpl struct {
 	store DistrictStore
-	sf    singleflight.Group
+	sf    *singleflight.Group // 使用指针，UpdateDistrict 时原子替换清除所有缓存
 }
 
 // R4-P2-10: NewDistrictHandler 接受 DistrictStore 接口
@@ -25,6 +25,7 @@ func NewDistrictHandler(store DistrictStore) (*DistrictServiceImpl, error) {
 	}
 	return &DistrictServiceImpl{
 		store: store,
+		sf:    &singleflight.Group{},
 	}, nil
 }
 
@@ -96,8 +97,9 @@ func (s *DistrictServiceImpl) UpdateDistrict(ctx context.Context, req *v1.Update
 	if err != nil {
 		return nil, err
 	}
-	// 数据已更新，清除查询缓存，下次请求重新从数据库加载
-	s.sf.Forget("provinces")
+	// 数据已更新，替换 singleflight Group 清除所有查询缓存
+	// （包括 "provinces" 和所有 "children:xxx"），下次请求重新从数据库加载
+	s.sf = &singleflight.Group{}
 	logger.Info("district: singleflight query cache cleared after UpdateDistrict")
 	return &v1.UpdateDistrictResp{}, nil
 }

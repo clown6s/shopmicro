@@ -66,7 +66,15 @@ func BizErr(c *app.RequestContext, biz *errcode.BizError) {
 }
 
 // Fail 使用自定义 HTTP 状态码发送通用错误。
+// P3-14: 限制消息长度以防止泄漏内部细节，与 BizErr() 行为一致。
 func Fail(c *app.RequestContext, httpCode int, bizCode int, msg string) {
+	if len(msg) > maxBizErrMsgLen {
+		logger.Warnf("fail message truncated (bizCode=%d, len=%d)", bizCode, len(msg))
+		msg = "internal error"
+		if httpCode < 500 {
+			httpCode = consts.StatusInternalServerError
+		}
+	}
 	c.JSON(httpCode, R{Code: bizCode, Message: msg})
 }
 

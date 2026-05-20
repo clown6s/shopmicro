@@ -34,12 +34,12 @@ func (c VaultConfig) String() string {
 		c.Address, c.MountPath, c.Namespace, masked)
 }
 
-// Validate 检查 Vault key 的合法性，防止路径穿越攻击。
+// Validate 检查 Vault key 的合法性，防止路径穿越攻击和 URL 编码注入。
 func validateVaultKey(key string) error {
 	if key == "" {
 		return fmt.Errorf("vault: key must not be empty")
 	}
-	if strings.Contains(key, "..") || strings.Contains(key, "\x00") {
+	if strings.Contains(key, "..") || strings.Contains(key, "\x00") || strings.Contains(key, "%") {
 		return fmt.Errorf("vault: key contains invalid characters (path traversal detected)")
 	}
 	if key[0] == '/' {

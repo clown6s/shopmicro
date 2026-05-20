@@ -455,7 +455,7 @@ use (
 
 ```bash
 cd district
-kitex -module shopmicro/district -service district -type protobuf api/district.proto
+kitex -module shopmicro/district -service district -type protobuf api/product.proto
 ```
 
 执行后会自动生成以下内容：
@@ -939,7 +939,7 @@ curl http://localhost:8898/health
 ```bash
 # Ctrl+C 停掉旧 gateway，重新运行
 cd gateway && go run main.go
-# 输出中应看到：service registered: district (proto: ../district/api/district.proto)
+# 输出中应看到：service registered: district (proto: ../district/api/product.proto)
 ```
 
 #### ④ 发送测试请求

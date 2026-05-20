@@ -199,11 +199,8 @@ func (p *Proxy) watchOnce(
 							logger.Warnf("WatchServices: close client for %s: %v", svcName, err)
 						}
 						logger.Infof("WatchServices: removed client for %s (all instances deregistered)", svcName)
-					} else {
-						p.mu.Lock()
-						delete(p.instanceCount, svcName)
-						p.mu.Unlock()
 					}
+					// instanceCount[svcName] 已在 L193 删除，无需重复操作
 				} else {
 					logger.Infof("WatchServices: instance deregistered for %s (remaining: %d)", svcName, count)
 				}
