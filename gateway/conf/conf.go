@@ -110,7 +110,9 @@ func (c *Config) SetDefaults() {
 	if c.OTEL.Endpoint == "" {
 		c.OTEL.Endpoint = "localhost:4317"
 	}
-	if c.OTEL.SampleRate <= 0 {
+	// sampleRate == 0：显式关闭采样
+	// sampleRate < 0：未设置，使用默认值
+	if c.OTEL.SampleRate < 0 {
 		if c.Mode == "dev" {
 			c.OTEL.SampleRate = 1.0
 		} else {

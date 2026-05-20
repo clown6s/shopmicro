@@ -142,28 +142,8 @@ func Run(configPath string) error {
 	}
 	defer redisCleanup()
 
-	// =========================
-	// 中间件
-	// =========================
-
-	h.Use(hertztracing.ServerMiddleware(traceCfg)) // otel 根 span + 链路上下文
-	h.Use(middleware.PrometheusMiddleware())       // P2: Prometheus 指标采集（QPS/延迟/并发）
-	h.Use(middleware.RecoveryMiddleware(cfg.Mode)) // panic 恢复
-	h.Use(middleware.CORS(&middleware.CORSConfig{  // 跨域
-		AllowOrigins:     cfg.CORS.AllowOrigins,
-		AllowCredentials: cfg.CORS.AllowCredentials,
-		AllowHeaders:     cfg.CORS.AllowHeaders,
-		MaxAge:           cfg.CORS.MaxAgeSec,
-	}, cfg.Mode))
-	h.Use(middleware.SecurityHeadersMiddleware(cfg.Mode)) // HSTS、CSP、X-Frame-Options 等
-	h.Use(middleware.GzipMiddleware())                    // gzip 压缩（跳过 pre-gzip 已压缩的响应）
-	h.Use(middleware.AccessLogMiddleware())               // 访问日志
-	h.Use(middleware.TraceIDMiddleware())                 // trace-id 响应头
-	h.Use(middleware.RealIPMiddleware())                  // X-Forwarded-For 信任链 → _real_ip
-
 	// 分布式限流（Redis 滑动窗口，按 IP）
 	rl := setupRateLimiter(rdb, cfg)
-	h.Use(middleware.RateLimitMiddleware(rl))
 
 	// =========================
 	// 代理
@@ -205,6 +185,35 @@ func Run(configPath string) error {
 	opts = append(opts, routes.ProxyOptions()...)
 
 	p := proxy.New(opts...)
+
+	// =========================
+	// 中间件（注册顺序 = 执行顺序，先注册最先执行）
+	// =========================
+
+	// ① Pre-gzip 缓存中间件：命中时直接响应，跳过后续所有中间件
+	h.Use(p.PreGzipCacheMiddleware())
+
+	// ② Panic 恢复（安全兜底，必须在最前面）
+	h.Use(middleware.RecoveryMiddleware(cfg.Mode))
+
+	// ③ OpenTelemetry 链路追踪（缓存命中已跳过）
+	h.Use(hertztracing.ServerMiddleware(traceCfg))
+
+	// ④ Prometheus 指标采集（缓存命中已跳过）
+	h.Use(middleware.PrometheusMiddleware())
+
+	h.Use(middleware.CORS(&middleware.CORSConfig{ // 跨域
+		AllowOrigins:     cfg.CORS.AllowOrigins,
+		AllowCredentials: cfg.CORS.AllowCredentials,
+		AllowHeaders:     cfg.CORS.AllowHeaders,
+		MaxAge:           cfg.CORS.MaxAgeSec,
+	}, cfg.Mode))
+	h.Use(middleware.SecurityHeadersMiddleware(cfg.Mode)) // HSTS、CSP、X-Frame-Options 等
+	h.Use(middleware.GzipMiddleware())                    // gzip 压缩（跳过 pre-gzip 已压缩的响应）
+	h.Use(middleware.AccessLogMiddleware())               // 访问日志
+	h.Use(middleware.TraceIDMiddleware())                 // trace-id 响应头
+	h.Use(middleware.RealIPMiddleware())                  // X-Forwarded-For 信任链 → _real_ip
+	h.Use(middleware.RateLimitMiddleware(rl))             // 限流
 
 	// 发现服务
 	if err := p.DiscoverAndRegister(r, cfg.Etcd.Addrs, cfg.ProtoBase); err != nil {

@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	goredis "github.com/redis/go-redis/v9"
+	"golang.org/x/time/rate"
 
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/redis"
@@ -154,6 +156,21 @@ func (rl *RedisRateLimiter) allowWithConfig(ctx context.Context, key string, now
 // fallbackCounter 是 crypto/rand 失败时的后备计数器
 var fallbackCounter atomic.Uint64
 
+// localLimiterPerIP 本地内存限流器（按 IP），用于 GET 公开接口的轻量限流。
+// 使用 sync.Map + golang.org/x/time/rate 实现无锁读。
+var localLimiterPerIP sync.Map // map[string]*rate.Limiter
+
+const localRateLimit = 100000 // 每秒每 IP 100000 次（GET 公开接口，内存限流上限）
+
+func getLocalLimiter(ip string) *rate.Limiter {
+	if v, ok := localLimiterPerIP.Load(ip); ok {
+		return v.(*rate.Limiter)
+	}
+	limiter := rate.NewLimiter(rate.Limit(localRateLimit), localRateLimit)
+	actual, _ := localLimiterPerIP.LoadOrStore(ip, limiter)
+	return actual.(*rate.Limiter)
+}
+
 // uniqueMember 返回一个限流成员字符串，即使在同一纳秒的并发请求中也能保证唯一。
 // 格式: {unixNano}:{randSuffix}
 func uniqueMember(now time.Time) string {
@@ -179,14 +196,25 @@ func uniqueMember(now time.Time) string {
 
 // RateLimitMiddleware 返回一个 Hertz 中间件，通过 Redis 执行分布式
 // 按 IP 滑动窗口限流。
-// R2-P2-01: 已从中间件中移除按用户限流（之前基于未验证的
-// JWT 载荷，可被绕过）。代理处理器中的按端点限流
-// 为敏感操作提供了更严格的、与方法无关的保护。
+// GET 请求走本地内存限流（避免 Redis 往返开销），其他方法走 Redis。
 func RateLimitMiddleware(rl *RedisRateLimiter) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		ip := ClientRealIP(c)
-		ipKey := fmt.Sprintf("shopmicro:ratelimit:ip:%s", ip)
 
+		// GET 请求走本地内存限流，零网络开销
+		if string(c.Request.Method()) == http.MethodGet {
+			limiter := getLocalLimiter(ip)
+			if !limiter.Allow() {
+				response.TooManyRequests(c)
+				c.Abort()
+				return
+			}
+			c.Next(ctx)
+			return
+		}
+
+		// 非 GET 请求走 Redis 分布式限流
+		ipKey := fmt.Sprintf("shopmicro:ratelimit:ip:%s", ip)
 		if !rl.Allow(ctx, ipKey) {
 			response.TooManyRequests(c)
 			c.Abort()

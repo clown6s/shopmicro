@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"net/http"
 	"net/url"
 	"sort"
@@ -232,6 +233,58 @@ func servePreGzip(c *app.RequestContext, gzipped []byte) {
 	c.Response.SetStatusCode(consts.StatusOK)
 	c.Response.SetBody(gzipped)
 	c.Abort()
+}
+
+// PreGzipCacheMiddleware 返回一个轻量中间件，在所有业务中间件之前
+// 检查 pre-gzip 缓存。命中时直接响应并 Abort，跳过后续所有中间件。
+// 仅对 GET 请求生效。
+func (p *Proxy) PreGzipCacheMiddleware() app.HandlerFunc {
+	return func(ctx context.Context, c *app.RequestContext) {
+		// 仅 GET
+		if string(c.Request.Method()) != http.MethodGet {
+			c.Next(ctx)
+			return
+		}
+
+		// 必须带 Accept-Encoding: gzip
+		ae := string(c.Request.Header.Peek("Accept-Encoding"))
+		if !strings.Contains(ae, "gzip") {
+			c.Next(ctx)
+			return
+		}
+
+		// 从路径提取 service/method：/api/v1/:service/:method
+		path := string(c.Request.URI().Path())
+		parts := strings.SplitN(path, "/", 5) // ["", "api", "v1", "product", "GetCategoryTree"]
+		if len(parts) < 5 {
+			c.Next(ctx)
+			return
+		}
+		service, method := parts[3], toMethodName(parts[4])
+		if service == "" || method == "" {
+			c.Next(ctx)
+			return
+		}
+
+		// 检查是否在缓存白名单
+		if !p.cacheableMethods[service+"/"+method] {
+			c.Next(ctx)
+			return
+		}
+
+		// 尝试读缓存
+		cacheKey := preGzipCacheKey(service, method, c.Request.QueryString())
+		if cacheKey == "" {
+			c.Next(ctx)
+			return
+		}
+		if gzipped, ok := getPreGzip(cacheKey); ok {
+			servePreGzip(c, gzipped)
+			return
+		}
+
+		c.Next(ctx)
+	}
 }
 
 // tryPreGzipCache 尝试将成功的 GET 响应预压缩并缓存。

@@ -118,19 +118,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		}
 		ctx = authCtx
 
-		// Pre-gzip 缓存命中检查
-		if reqMethod == http.MethodGet && p.cacheableMethods[service+"/"+method] {
-			ae := string(c.Request.Header.Peek("Accept-Encoding"))
-			if strings.Contains(ae, "gzip") {
-				cacheKey := preGzipCacheKey(service, method, c.Request.QueryString())
-				if gzipped, ok := getPreGzip(cacheKey); ok {
-					logger.Debugf("pregzip cache HIT: %s (%d bytes)", cacheKey, len(gzipped))
-					servePreGzip(c, gzipped)
-					return
-				}
-				logger.Debugf("pregzip cache MISS: %s", cacheKey)
-			}
-		}
+		// Pre-gzip 缓存命中已由前置中间件处理，此处无需重复检查
 
 		// 请求体处理
 		rawBody := c.Request.Body()
