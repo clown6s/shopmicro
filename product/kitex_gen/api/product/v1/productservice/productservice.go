@@ -15,10 +15,17 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
-	"GetCategory": kitex.NewMethodInfo(
-		getCategoryHandler,
-		newGetCategoryArgs,
-		newGetCategoryResult,
+	"CreateCategory": kitex.NewMethodInfo(
+		createCategoryHandler,
+		newCreateCategoryArgs,
+		newCreateCategoryResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingUnary),
+	),
+	"GetCategoryTree": kitex.NewMethodInfo(
+		getCategoryTreeHandler,
+		newGetCategoryTreeArgs,
+		newGetCategoryTreeResult,
 		false,
 		kitex.WithStreamingMode(kitex.StreamingUnary),
 	),
@@ -26,6 +33,13 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		updateCategoryHandler,
 		newUpdateCategoryArgs,
 		newUpdateCategoryResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingUnary),
+	),
+	"DeleteCategory": kitex.NewMethodInfo(
+		deleteCategoryHandler,
+		newDeleteCategoryArgs,
+		newDeleteCategoryResult,
 		false,
 		kitex.WithStreamingMode(kitex.StreamingUnary),
 	),
@@ -95,52 +109,52 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 	return svcInfo
 }
 
-func getCategoryHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+func createCategoryHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	switch s := arg.(type) {
 	case *streaming.Args:
 		st := s.Stream
-		req := new(v1.GetCategoryReq)
+		req := new(v1.CreateCategoryReq)
 		if err := st.RecvMsg(req); err != nil {
 			return err
 		}
-		resp, err := handler.(v1.ProductService).GetCategory(ctx, req)
+		resp, err := handler.(v1.ProductService).CreateCategory(ctx, req)
 		if err != nil {
 			return err
 		}
 		return st.SendMsg(resp)
-	case *GetCategoryArgs:
-		success, err := handler.(v1.ProductService).GetCategory(ctx, s.Req)
+	case *CreateCategoryArgs:
+		success, err := handler.(v1.ProductService).CreateCategory(ctx, s.Req)
 		if err != nil {
 			return err
 		}
-		realResult := result.(*GetCategoryResult)
+		realResult := result.(*CreateCategoryResult)
 		realResult.Success = success
 		return nil
 	default:
 		return errInvalidMessageType
 	}
 }
-func newGetCategoryArgs() interface{} {
-	return &GetCategoryArgs{}
+func newCreateCategoryArgs() interface{} {
+	return &CreateCategoryArgs{}
 }
 
-func newGetCategoryResult() interface{} {
-	return &GetCategoryResult{}
+func newCreateCategoryResult() interface{} {
+	return &CreateCategoryResult{}
 }
 
-type GetCategoryArgs struct {
-	Req *v1.GetCategoryReq
+type CreateCategoryArgs struct {
+	Req *v1.CreateCategoryReq
 }
 
-func (p *GetCategoryArgs) Marshal(out []byte) ([]byte, error) {
+func (p *CreateCategoryArgs) Marshal(out []byte) ([]byte, error) {
 	if !p.IsSetReq() {
 		return out, nil
 	}
 	return proto.Marshal(p.Req)
 }
 
-func (p *GetCategoryArgs) Unmarshal(in []byte) error {
-	msg := new(v1.GetCategoryReq)
+func (p *CreateCategoryArgs) Unmarshal(in []byte) error {
+	msg := new(v1.CreateCategoryReq)
 	if err := proto.Unmarshal(in, msg); err != nil {
 		return err
 	}
@@ -148,38 +162,38 @@ func (p *GetCategoryArgs) Unmarshal(in []byte) error {
 	return nil
 }
 
-var GetCategoryArgs_Req_DEFAULT *v1.GetCategoryReq
+var CreateCategoryArgs_Req_DEFAULT *v1.CreateCategoryReq
 
-func (p *GetCategoryArgs) GetReq() *v1.GetCategoryReq {
+func (p *CreateCategoryArgs) GetReq() *v1.CreateCategoryReq {
 	if !p.IsSetReq() {
-		return GetCategoryArgs_Req_DEFAULT
+		return CreateCategoryArgs_Req_DEFAULT
 	}
 	return p.Req
 }
 
-func (p *GetCategoryArgs) IsSetReq() bool {
+func (p *CreateCategoryArgs) IsSetReq() bool {
 	return p.Req != nil
 }
 
-func (p *GetCategoryArgs) GetFirstArgument() interface{} {
+func (p *CreateCategoryArgs) GetFirstArgument() interface{} {
 	return p.Req
 }
 
-type GetCategoryResult struct {
-	Success *v1.GetProvincesResp
+type CreateCategoryResult struct {
+	Success *v1.CreateCategoryResp
 }
 
-var GetCategoryResult_Success_DEFAULT *v1.GetProvincesResp
+var CreateCategoryResult_Success_DEFAULT *v1.CreateCategoryResp
 
-func (p *GetCategoryResult) Marshal(out []byte) ([]byte, error) {
+func (p *CreateCategoryResult) Marshal(out []byte) ([]byte, error) {
 	if !p.IsSetSuccess() {
 		return out, nil
 	}
 	return proto.Marshal(p.Success)
 }
 
-func (p *GetCategoryResult) Unmarshal(in []byte) error {
-	msg := new(v1.GetProvincesResp)
+func (p *CreateCategoryResult) Unmarshal(in []byte) error {
+	msg := new(v1.CreateCategoryResp)
 	if err := proto.Unmarshal(in, msg); err != nil {
 		return err
 	}
@@ -187,22 +201,133 @@ func (p *GetCategoryResult) Unmarshal(in []byte) error {
 	return nil
 }
 
-func (p *GetCategoryResult) GetSuccess() *v1.GetProvincesResp {
+func (p *CreateCategoryResult) GetSuccess() *v1.CreateCategoryResp {
 	if !p.IsSetSuccess() {
-		return GetCategoryResult_Success_DEFAULT
+		return CreateCategoryResult_Success_DEFAULT
 	}
 	return p.Success
 }
 
-func (p *GetCategoryResult) SetSuccess(x interface{}) {
-	p.Success = x.(*v1.GetProvincesResp)
+func (p *CreateCategoryResult) SetSuccess(x interface{}) {
+	p.Success = x.(*v1.CreateCategoryResp)
 }
 
-func (p *GetCategoryResult) IsSetSuccess() bool {
+func (p *CreateCategoryResult) IsSetSuccess() bool {
 	return p.Success != nil
 }
 
-func (p *GetCategoryResult) GetResult() interface{} {
+func (p *CreateCategoryResult) GetResult() interface{} {
+	return p.Success
+}
+
+func getCategoryTreeHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	switch s := arg.(type) {
+	case *streaming.Args:
+		st := s.Stream
+		req := new(v1.GetCategoryTreeReq)
+		if err := st.RecvMsg(req); err != nil {
+			return err
+		}
+		resp, err := handler.(v1.ProductService).GetCategoryTree(ctx, req)
+		if err != nil {
+			return err
+		}
+		return st.SendMsg(resp)
+	case *GetCategoryTreeArgs:
+		success, err := handler.(v1.ProductService).GetCategoryTree(ctx, s.Req)
+		if err != nil {
+			return err
+		}
+		realResult := result.(*GetCategoryTreeResult)
+		realResult.Success = success
+		return nil
+	default:
+		return errInvalidMessageType
+	}
+}
+func newGetCategoryTreeArgs() interface{} {
+	return &GetCategoryTreeArgs{}
+}
+
+func newGetCategoryTreeResult() interface{} {
+	return &GetCategoryTreeResult{}
+}
+
+type GetCategoryTreeArgs struct {
+	Req *v1.GetCategoryTreeReq
+}
+
+func (p *GetCategoryTreeArgs) Marshal(out []byte) ([]byte, error) {
+	if !p.IsSetReq() {
+		return out, nil
+	}
+	return proto.Marshal(p.Req)
+}
+
+func (p *GetCategoryTreeArgs) Unmarshal(in []byte) error {
+	msg := new(v1.GetCategoryTreeReq)
+	if err := proto.Unmarshal(in, msg); err != nil {
+		return err
+	}
+	p.Req = msg
+	return nil
+}
+
+var GetCategoryTreeArgs_Req_DEFAULT *v1.GetCategoryTreeReq
+
+func (p *GetCategoryTreeArgs) GetReq() *v1.GetCategoryTreeReq {
+	if !p.IsSetReq() {
+		return GetCategoryTreeArgs_Req_DEFAULT
+	}
+	return p.Req
+}
+
+func (p *GetCategoryTreeArgs) IsSetReq() bool {
+	return p.Req != nil
+}
+
+func (p *GetCategoryTreeArgs) GetFirstArgument() interface{} {
+	return p.Req
+}
+
+type GetCategoryTreeResult struct {
+	Success *v1.GetCategoryTreeResp
+}
+
+var GetCategoryTreeResult_Success_DEFAULT *v1.GetCategoryTreeResp
+
+func (p *GetCategoryTreeResult) Marshal(out []byte) ([]byte, error) {
+	if !p.IsSetSuccess() {
+		return out, nil
+	}
+	return proto.Marshal(p.Success)
+}
+
+func (p *GetCategoryTreeResult) Unmarshal(in []byte) error {
+	msg := new(v1.GetCategoryTreeResp)
+	if err := proto.Unmarshal(in, msg); err != nil {
+		return err
+	}
+	p.Success = msg
+	return nil
+}
+
+func (p *GetCategoryTreeResult) GetSuccess() *v1.GetCategoryTreeResp {
+	if !p.IsSetSuccess() {
+		return GetCategoryTreeResult_Success_DEFAULT
+	}
+	return p.Success
+}
+
+func (p *GetCategoryTreeResult) SetSuccess(x interface{}) {
+	p.Success = x.(*v1.GetCategoryTreeResp)
+}
+
+func (p *GetCategoryTreeResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *GetCategoryTreeResult) GetResult() interface{} {
 	return p.Success
 }
 
@@ -317,6 +442,117 @@ func (p *UpdateCategoryResult) GetResult() interface{} {
 	return p.Success
 }
 
+func deleteCategoryHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	switch s := arg.(type) {
+	case *streaming.Args:
+		st := s.Stream
+		req := new(v1.DeleteCategoryReq)
+		if err := st.RecvMsg(req); err != nil {
+			return err
+		}
+		resp, err := handler.(v1.ProductService).DeleteCategory(ctx, req)
+		if err != nil {
+			return err
+		}
+		return st.SendMsg(resp)
+	case *DeleteCategoryArgs:
+		success, err := handler.(v1.ProductService).DeleteCategory(ctx, s.Req)
+		if err != nil {
+			return err
+		}
+		realResult := result.(*DeleteCategoryResult)
+		realResult.Success = success
+		return nil
+	default:
+		return errInvalidMessageType
+	}
+}
+func newDeleteCategoryArgs() interface{} {
+	return &DeleteCategoryArgs{}
+}
+
+func newDeleteCategoryResult() interface{} {
+	return &DeleteCategoryResult{}
+}
+
+type DeleteCategoryArgs struct {
+	Req *v1.DeleteCategoryReq
+}
+
+func (p *DeleteCategoryArgs) Marshal(out []byte) ([]byte, error) {
+	if !p.IsSetReq() {
+		return out, nil
+	}
+	return proto.Marshal(p.Req)
+}
+
+func (p *DeleteCategoryArgs) Unmarshal(in []byte) error {
+	msg := new(v1.DeleteCategoryReq)
+	if err := proto.Unmarshal(in, msg); err != nil {
+		return err
+	}
+	p.Req = msg
+	return nil
+}
+
+var DeleteCategoryArgs_Req_DEFAULT *v1.DeleteCategoryReq
+
+func (p *DeleteCategoryArgs) GetReq() *v1.DeleteCategoryReq {
+	if !p.IsSetReq() {
+		return DeleteCategoryArgs_Req_DEFAULT
+	}
+	return p.Req
+}
+
+func (p *DeleteCategoryArgs) IsSetReq() bool {
+	return p.Req != nil
+}
+
+func (p *DeleteCategoryArgs) GetFirstArgument() interface{} {
+	return p.Req
+}
+
+type DeleteCategoryResult struct {
+	Success *v1.DeleteCategoryResp
+}
+
+var DeleteCategoryResult_Success_DEFAULT *v1.DeleteCategoryResp
+
+func (p *DeleteCategoryResult) Marshal(out []byte) ([]byte, error) {
+	if !p.IsSetSuccess() {
+		return out, nil
+	}
+	return proto.Marshal(p.Success)
+}
+
+func (p *DeleteCategoryResult) Unmarshal(in []byte) error {
+	msg := new(v1.DeleteCategoryResp)
+	if err := proto.Unmarshal(in, msg); err != nil {
+		return err
+	}
+	p.Success = msg
+	return nil
+}
+
+func (p *DeleteCategoryResult) GetSuccess() *v1.DeleteCategoryResp {
+	if !p.IsSetSuccess() {
+		return DeleteCategoryResult_Success_DEFAULT
+	}
+	return p.Success
+}
+
+func (p *DeleteCategoryResult) SetSuccess(x interface{}) {
+	p.Success = x.(*v1.DeleteCategoryResp)
+}
+
+func (p *DeleteCategoryResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *DeleteCategoryResult) GetResult() interface{} {
+	return p.Success
+}
+
 type kClient struct {
 	c client.Client
 }
@@ -327,11 +563,21 @@ func newServiceClient(c client.Client) *kClient {
 	}
 }
 
-func (p *kClient) GetCategory(ctx context.Context, Req *v1.GetCategoryReq) (r *v1.GetProvincesResp, err error) {
-	var _args GetCategoryArgs
+func (p *kClient) CreateCategory(ctx context.Context, Req *v1.CreateCategoryReq) (r *v1.CreateCategoryResp, err error) {
+	var _args CreateCategoryArgs
 	_args.Req = Req
-	var _result GetCategoryResult
-	if err = p.c.Call(ctx, "GetCategory", &_args, &_result); err != nil {
+	var _result CreateCategoryResult
+	if err = p.c.Call(ctx, "CreateCategory", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) GetCategoryTree(ctx context.Context, Req *v1.GetCategoryTreeReq) (r *v1.GetCategoryTreeResp, err error) {
+	var _args GetCategoryTreeArgs
+	_args.Req = Req
+	var _result GetCategoryTreeResult
+	if err = p.c.Call(ctx, "GetCategoryTree", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil
@@ -342,6 +588,16 @@ func (p *kClient) UpdateCategory(ctx context.Context, Req *v1.UpdateCategoryReq)
 	_args.Req = Req
 	var _result UpdateCategoryResult
 	if err = p.c.Call(ctx, "UpdateCategory", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) DeleteCategory(ctx context.Context, Req *v1.DeleteCategoryReq) (r *v1.DeleteCategoryResp, err error) {
+	var _args DeleteCategoryArgs
+	_args.Req = Req
+	var _result DeleteCategoryResult
+	if err = p.c.Call(ctx, "DeleteCategory", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

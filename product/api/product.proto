@@ -5,24 +5,107 @@ package api.product.v1;
 option go_package = "shopmicro/product/kitex_gen/api/product/v1";
 
 service ProductService {
-    rpc GetCategory (GetCategoryReq) returns (GetProvincesResp);
+    // 新增分类
+    rpc CreateCategory (CreateCategoryReq) returns (CreateCategoryResp);
+    // 获取全部分类树（嵌套 children）
+    rpc GetCategoryTree (GetCategoryTreeReq) returns (GetCategoryTreeResp);
+    // 更新分类信息
     rpc UpdateCategory (UpdateCategoryReq) returns (UpdateCategoryResp);
+    // 删除分类（软删除，级联删除所有子分类）
+    rpc DeleteCategory (DeleteCategoryReq) returns (DeleteCategoryResp);
 }
 
+// CreateCategory —— 新增分类
+message CreateCategoryReq {
+  string name = 1;
+  int64 parentCid = 2;
+  int32 showStatus = 3;
+  int32 sort = 4;
+  string icon = 5;
+}
 
-message GetCategoryReq {}
+message CreateCategoryResp {
+  int64 catId = 1;
+}
 
-message GetProvincesResp {
+// GetCategories —— 返回全部分类列表（扁平）
+message GetCategoriesReq {}
+
+message GetCategoriesResp {
   repeated CategoryNode list = 1;
 }
 
-message UpdateCategoryReq {}
+// GetCategoryTree —— 返回嵌套树结构
+message GetCategoryTreeReq {}
+
+message GetCategoryTreeResp {
+  repeated CategoryTreeNode list = 1;
+}
+
+// GetAllSubCategories —— 递归获取所有子分类
+message GetAllSubCategoriesReq {
+  int64 catId = 1;
+}
+
+message GetAllSubCategoriesResp {
+  repeated CategoryNode list = 1;
+}
+
+// GetSubCategories —— 按父级查子分类
+message GetSubCategoriesReq {
+  int64 parentCid = 1;
+}
+
+message GetSubCategoriesResp {
+  repeated CategoryNode list = 1;
+}
+
+// UpdateCategory —— 更新分类
+message UpdateCategoryReq {
+  int64 catId = 1;
+  string name = 2;
+  int32 showStatus = 3;
+  int32 sort = 4;
+  string icon = 5;
+}
 
 message UpdateCategoryResp {}
 
+// DeleteCategory —— 删除分类（软删除）
+message DeleteCategoryReq {
+  int64 catId = 1;
+}
+
+message DeleteCategoryResp {}
+
+message Category {
+  int64 catId = 1;
+  string name = 2;
+  int64 parentCid = 3;
+  int32 catLevel = 4;
+  int32 showStatus = 5;
+  int32 sort = 6;
+  string icon = 7;
+}
+
 message CategoryNode {
-  uint32 id = 1;
-  string name = 3;
-  uint32 parent_cid = 2;
-  uint32 cat_level = 4;
+  int64 catId = 1;
+  string name = 2;
+  int64 parentCid = 3;
+  int32 catLevel = 4;
+  int32 showStatus = 5;
+  int32 sort = 6;
+  string icon = 7;
+}
+
+// CategoryTreeNode 嵌套树节点（带 children）
+message CategoryTreeNode {
+  int64 catId = 1;
+  string name = 2;
+  int64 parentCid = 3;
+  int32 catLevel = 4;
+  int32 showStatus = 5;
+  int32 sort = 6;
+  string icon = 7;
+  repeated CategoryTreeNode children = 8;
 }

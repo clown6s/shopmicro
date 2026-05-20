@@ -86,8 +86,7 @@ shopmicro/
     ├── otel/
     │   └── otel.go          # OpenTelemetry 初始化
     └── secrets/
-        ├── provider.go      # 密钥提供者接口
-        └── vault.go         # HashiCorp Vault 集成
+        └── provider.go      # 密钥提供者接口（环境变量）
 ```
 
 ---
@@ -503,17 +502,15 @@ import (
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/mysql"
 	"shopmicro/pkg/redis"
-	"shopmicro/pkg/secrets"
 )
 
 type Config struct {
-	Server     conf.Server         `yaml:"server"`
-	HealthAddr string              `yaml:"healthAddr"`
-	Etcd       conf.Etcd           `yaml:"etcd"`
-	MySQL      mysql.Config        `yaml:"mysql"`
-	Redis      redis.Config        `yaml:"redis"`
-	Mode       string              `yaml:"mode"`
-	Vault      secrets.VaultConfig `yaml:"vault"`
+	Server     conf.Server    `yaml:"server"`
+	HealthAddr string         `yaml:"healthAddr"`
+	Etcd       conf.Etcd      `yaml:"etcd"`
+	MySQL      mysql.Config   `yaml:"mysql"`
+	Redis      redis.Config   `yaml:"redis"`
+	Mode       string         `yaml:"mode"`
 }
 
 // GetHealthAddr 返回健康检查端口，默认 :8898
@@ -526,13 +523,6 @@ func (c *Config) GetHealthAddr() string {
 
 // ApplyEnv 从环境变量覆盖敏感配置
 func (c *Config) ApplyEnv() {
-	// Vault 支持
-	if c.Vault.Address != "" {
-		if token := conf.Env("VAULT_TOKEN", ""); token != "" {
-			c.Vault.Token = token
-		}
-		secrets.InitProvider(c.Vault)
-	}
 	// 环境变量覆盖
 	if v := conf.Env("MYSQL_DSN", ""); v != "" { c.MySQL.DSN = v }
 	if v := conf.Env("REDIS_ADDR", ""); v != "" { c.Redis.Addr = v }
@@ -558,7 +548,7 @@ func (c *Config) Validate() error {
 
 > ⚠️ **注意**：
 > - `Server`、`Etcd` 类型来自 `pkg/conf`，是所有服务共享的基础配置结构
-> - `MySQL.Config`、`Redis.Config`、`secrets.VaultConfig` 同理，直接复用 pkg
+> - `MySQL.Config`、`Redis.Config` 同理，直接复用 pkg
 > - `Validate()` 中必须校验 `mode` 和生产环境密码要求
 
 #### ② 创建 `conf/config.yaml`
@@ -580,11 +570,6 @@ etcd:
     - "127.0.0.1:2379"
 
 mode: "dev"
-
-vault:
-  address: ""
-  token: ""
-  mountPath: "secret"
 
 healthAddr: ":8898"         # ★ 健康检查端口也要不同！user=8899, district=8898
 ```
@@ -1024,8 +1009,6 @@ kitex -module shopmicro/user -service user -type protobuf api/user.proto
 | user MySQL 连接 | `user/conf/config.yaml` → `mysql.dsn` | `MYSQL_DSN` |
 | Redis 地址 | 各服务 `conf/config.yaml` → `redis.addr` | `REDIS_ADDR` |
 | Redis 密码 | 各服务 `conf/config.yaml` → `redis.password` | `REDIS_PASSWORD` |
-| Vault 地址 | 各服务 `conf/config.yaml` → `vault.address` | `VAULT_ADDRESS` |
-| Vault Token | 各服务 `conf/config.yaml` → `vault.token` | `VAULT_TOKEN` |
 
 配置优先级：**环境变量 > .env 文件 > config.yaml**
 
@@ -1070,10 +1053,6 @@ ETCD_ADDRS=10.211.55.5:2379
 
 # Gateway proto 路径（Docker 内部路径）
 PROTO_BASE=/app/service-protos/
-
-# 可选：Vault 密钥管理
-VAULT_ADDRESS=http://your-vault-server:8200
-VAULT_TOKEN=hvs.your-vault-token
 ```
 
 ---
@@ -1152,7 +1131,7 @@ span.SetAttributes(attribute.Int64("user.query.page", int64(req.Page)))
 | **健康检查脱敏** | `gateway/health` + `user/main.go` | /health 仅返回 `{"status":"ok"}`，/ready 仅返回 ready/not_ready，/healthz 不暴露依赖名称 |
 | **List 不查密码** | `user/data/user.go` | ListUser 查询不 SELECT password 列，password 字段 `json:"-"` |
 | **软删除** | `user/data/user.go` | DeleteUser 使用 `deleted_at` 字段，所有查询排除已删除记录 |
-| **密钥管理** | `pkg/secrets/` | 支持 Vault 集成（atomic.Value 线程安全切换）+ 环境变量回退，.env 已 gitignore |
+| **密钥管理** | `pkg/secrets/` | 环境变量回退，.env 已 gitignore |
 | **Docker 安全** | Dockerfile | 非 root 用户运行，多阶段构建 |
 | **Graceful Shutdown** | `gateway/main.go` + `user/main.go` | WaitGroup + 超时控制，shutdown 前标记 unhealthy 通知 K8s |
 
@@ -1198,9 +1177,6 @@ circuitBreaker:
 - [ ] **实施 RBAC（基于角色的访问控制）**
       当前 `checkOwnership()` 仅校验"本人操作本人"
       建议：添加 `role` 字段，支持 `admin`/`user` 角色，ListUser 等接口需管理员权限
-
-- [ ] **集成 HashiCorp Vault**
-      代码已包含 Vault provider（`pkg/secrets/vault.go`），需在生产环境部署 Vault 并配置 KV secrets engine
 
 - [ ] **审计日志**
       敏感操作（登录、注册、更新、删除）应记录审计日志（用户 ID、操作类型、IP、时间戳）

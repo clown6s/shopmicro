@@ -5,10 +5,8 @@ import (
 	"strings"
 
 	"shopmicro/pkg/conf"
-	"shopmicro/pkg/logger"
 	"shopmicro/pkg/mysql"
 	"shopmicro/pkg/redis"
-	"shopmicro/pkg/secrets"
 )
 
 type JWT struct {
@@ -38,15 +36,14 @@ type Security struct {
 }
 
 type Config struct {
-	Server     conf.Server         `yaml:"server"`
-	HealthAddr string              `yaml:"healthAddr"`
-	Etcd       conf.Etcd           `yaml:"etcd"`
-	MySQL      mysql.Config        `yaml:"mysql"`
-	Redis      redis.Config        `yaml:"redis"`
-	JWT        JWT                 `yaml:"jwt"`
-	Mode       string              `yaml:"mode"`
-	Vault      secrets.VaultConfig `yaml:"vault"`
-	Security   Security            `yaml:"security"`
+	Server     conf.Server  `yaml:"server"`
+	HealthAddr string       `yaml:"healthAddr"`
+	Etcd       conf.Etcd    `yaml:"etcd"`
+	MySQL      mysql.Config `yaml:"mysql"`
+	Redis      redis.Config `yaml:"redis"`
+	JWT        JWT          `yaml:"jwt"`
+	Mode       string       `yaml:"mode"`
+	Security   Security     `yaml:"security"`
 }
 
 // GetHealthAddr 返回健康检查监听地址，默认为 :8899。
@@ -95,17 +92,6 @@ func (c *Config) SetDefaults() {
 
 // ApplyEnv 从环境变量覆盖敏感配置
 func (c *Config) ApplyEnv() {
-	// P2-11 修复：绝不使用 config.yaml 中的 Vault.Token 作为默认值。
-	if c.Vault.Address != "" {
-		if token := conf.Env("VAULT_TOKEN", ""); token != "" {
-			c.Vault.Token = token
-		}
-		if c.Vault.Token == "" {
-			logger.Warnf("vault address is set but VAULT_TOKEN env var is missing — vault init will fail")
-		}
-		secrets.InitProvider(c.Vault)
-	}
-
 	if v := conf.Env("MYSQL_DSN", ""); v != "" {
 		c.MySQL.DSN = v
 	}

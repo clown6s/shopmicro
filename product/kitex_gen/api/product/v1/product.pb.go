@@ -8,33 +8,208 @@ import (
 	"github.com/cloudwego/prutal"
 )
 
-type GetCategoryReq struct {
+// CreateCategory —— 新增分类
+type CreateCategoryReq struct {
+	Name       string `protobuf:"bytes,1,opt,name=name" json:"name,omitempty"`
+	ParentCid  int64  `protobuf:"varint,2,opt,name=parentCid" json:"parentCid,omitempty"`
+	ShowStatus int32  `protobuf:"varint,3,opt,name=showStatus" json:"showStatus,omitempty"`
+	Sort       int32  `protobuf:"varint,4,opt,name=sort" json:"sort,omitempty"`
+	Icon       string `protobuf:"bytes,5,opt,name=icon" json:"icon,omitempty"`
 }
 
-func (x *GetCategoryReq) Reset() { *x = GetCategoryReq{} }
+func (x *CreateCategoryReq) Reset() { *x = CreateCategoryReq{} }
 
-func (x *GetCategoryReq) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+func (x *CreateCategoryReq) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
 
-func (x *GetCategoryReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+func (x *CreateCategoryReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
 
-type GetProvincesResp struct {
+func (x *CreateCategoryReq) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CreateCategoryReq) GetParentCid() int64 {
+	if x != nil {
+		return x.ParentCid
+	}
+	return 0
+}
+
+func (x *CreateCategoryReq) GetShowStatus() int32 {
+	if x != nil {
+		return x.ShowStatus
+	}
+	return 0
+}
+
+func (x *CreateCategoryReq) GetSort() int32 {
+	if x != nil {
+		return x.Sort
+	}
+	return 0
+}
+
+func (x *CreateCategoryReq) GetIcon() string {
+	if x != nil {
+		return x.Icon
+	}
+	return ""
+}
+
+type CreateCategoryResp struct {
+	CatId int64 `protobuf:"varint,1,opt,name=catId" json:"catId,omitempty"`
+}
+
+func (x *CreateCategoryResp) Reset() { *x = CreateCategoryResp{} }
+
+func (x *CreateCategoryResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *CreateCategoryResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *CreateCategoryResp) GetCatId() int64 {
+	if x != nil {
+		return x.CatId
+	}
+	return 0
+}
+
+// GetCategories —— 返回全部分类列表（扁平）
+type GetCategoriesReq struct {
+}
+
+func (x *GetCategoriesReq) Reset() { *x = GetCategoriesReq{} }
+
+func (x *GetCategoriesReq) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *GetCategoriesReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+type GetCategoriesResp struct {
 	List []*CategoryNode `protobuf:"bytes,1,rep,name=list" json:"list,omitempty"`
 }
 
-func (x *GetProvincesResp) Reset() { *x = GetProvincesResp{} }
+func (x *GetCategoriesResp) Reset() { *x = GetCategoriesResp{} }
 
-func (x *GetProvincesResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+func (x *GetCategoriesResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
 
-func (x *GetProvincesResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+func (x *GetCategoriesResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
 
-func (x *GetProvincesResp) GetList() []*CategoryNode {
+func (x *GetCategoriesResp) GetList() []*CategoryNode {
 	if x != nil {
 		return x.List
 	}
 	return nil
 }
 
+// GetCategoryTree —— 返回嵌套树结构
+type GetCategoryTreeReq struct {
+}
+
+func (x *GetCategoryTreeReq) Reset() { *x = GetCategoryTreeReq{} }
+
+func (x *GetCategoryTreeReq) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *GetCategoryTreeReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+type GetCategoryTreeResp struct {
+	List []*CategoryTreeNode `protobuf:"bytes,1,rep,name=list" json:"list,omitempty"`
+}
+
+func (x *GetCategoryTreeResp) Reset() { *x = GetCategoryTreeResp{} }
+
+func (x *GetCategoryTreeResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *GetCategoryTreeResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *GetCategoryTreeResp) GetList() []*CategoryTreeNode {
+	if x != nil {
+		return x.List
+	}
+	return nil
+}
+
+// GetAllSubCategories —— 递归获取所有子分类
+type GetAllSubCategoriesReq struct {
+	CatId int64 `protobuf:"varint,1,opt,name=catId" json:"catId,omitempty"`
+}
+
+func (x *GetAllSubCategoriesReq) Reset() { *x = GetAllSubCategoriesReq{} }
+
+func (x *GetAllSubCategoriesReq) Marshal(in []byte) ([]byte, error) {
+	return prutal.MarshalAppend(in, x)
+}
+
+func (x *GetAllSubCategoriesReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *GetAllSubCategoriesReq) GetCatId() int64 {
+	if x != nil {
+		return x.CatId
+	}
+	return 0
+}
+
+type GetAllSubCategoriesResp struct {
+	List []*CategoryNode `protobuf:"bytes,1,rep,name=list" json:"list,omitempty"`
+}
+
+func (x *GetAllSubCategoriesResp) Reset() { *x = GetAllSubCategoriesResp{} }
+
+func (x *GetAllSubCategoriesResp) Marshal(in []byte) ([]byte, error) {
+	return prutal.MarshalAppend(in, x)
+}
+
+func (x *GetAllSubCategoriesResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *GetAllSubCategoriesResp) GetList() []*CategoryNode {
+	if x != nil {
+		return x.List
+	}
+	return nil
+}
+
+// GetSubCategories —— 按父级查子分类
+type GetSubCategoriesReq struct {
+	ParentCid int64 `protobuf:"varint,1,opt,name=parentCid" json:"parentCid,omitempty"`
+}
+
+func (x *GetSubCategoriesReq) Reset() { *x = GetSubCategoriesReq{} }
+
+func (x *GetSubCategoriesReq) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *GetSubCategoriesReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *GetSubCategoriesReq) GetParentCid() int64 {
+	if x != nil {
+		return x.ParentCid
+	}
+	return 0
+}
+
+type GetSubCategoriesResp struct {
+	List []*CategoryNode `protobuf:"bytes,1,rep,name=list" json:"list,omitempty"`
+}
+
+func (x *GetSubCategoriesResp) Reset() { *x = GetSubCategoriesResp{} }
+
+func (x *GetSubCategoriesResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *GetSubCategoriesResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *GetSubCategoriesResp) GetList() []*CategoryNode {
+	if x != nil {
+		return x.List
+	}
+	return nil
+}
+
+// UpdateCategory —— 更新分类
 type UpdateCategoryReq struct {
+	CatId      int64  `protobuf:"varint,1,opt,name=catId" json:"catId,omitempty"`
+	Name       string `protobuf:"bytes,2,opt,name=name" json:"name,omitempty"`
+	ShowStatus int32  `protobuf:"varint,3,opt,name=showStatus" json:"showStatus,omitempty"`
+	Sort       int32  `protobuf:"varint,4,opt,name=sort" json:"sort,omitempty"`
+	Icon       string `protobuf:"bytes,5,opt,name=icon" json:"icon,omitempty"`
 }
 
 func (x *UpdateCategoryReq) Reset() { *x = UpdateCategoryReq{} }
@@ -42,6 +217,41 @@ func (x *UpdateCategoryReq) Reset() { *x = UpdateCategoryReq{} }
 func (x *UpdateCategoryReq) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
 
 func (x *UpdateCategoryReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *UpdateCategoryReq) GetCatId() int64 {
+	if x != nil {
+		return x.CatId
+	}
+	return 0
+}
+
+func (x *UpdateCategoryReq) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *UpdateCategoryReq) GetShowStatus() int32 {
+	if x != nil {
+		return x.ShowStatus
+	}
+	return 0
+}
+
+func (x *UpdateCategoryReq) GetSort() int32 {
+	if x != nil {
+		return x.Sort
+	}
+	return 0
+}
+
+func (x *UpdateCategoryReq) GetIcon() string {
+	if x != nil {
+		return x.Icon
+	}
+	return ""
+}
 
 type UpdateCategoryResp struct {
 }
@@ -52,11 +262,106 @@ func (x *UpdateCategoryResp) Marshal(in []byte) ([]byte, error) { return prutal.
 
 func (x *UpdateCategoryResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
 
+// DeleteCategory —— 删除分类（软删除）
+type DeleteCategoryReq struct {
+	CatId int64 `protobuf:"varint,1,opt,name=catId" json:"catId,omitempty"`
+}
+
+func (x *DeleteCategoryReq) Reset() { *x = DeleteCategoryReq{} }
+
+func (x *DeleteCategoryReq) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *DeleteCategoryReq) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *DeleteCategoryReq) GetCatId() int64 {
+	if x != nil {
+		return x.CatId
+	}
+	return 0
+}
+
+type DeleteCategoryResp struct {
+}
+
+func (x *DeleteCategoryResp) Reset() { *x = DeleteCategoryResp{} }
+
+func (x *DeleteCategoryResp) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *DeleteCategoryResp) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+type Category struct {
+	CatId      int64  `protobuf:"varint,1,opt,name=catId" json:"catId,omitempty"`
+	Name       string `protobuf:"bytes,2,opt,name=name" json:"name,omitempty"`
+	ParentCid  int64  `protobuf:"varint,3,opt,name=parentCid" json:"parentCid,omitempty"`
+	CatLevel   int32  `protobuf:"varint,4,opt,name=catLevel" json:"catLevel,omitempty"`
+	ShowStatus int32  `protobuf:"varint,5,opt,name=showStatus" json:"showStatus,omitempty"`
+	Sort       int32  `protobuf:"varint,6,opt,name=sort" json:"sort,omitempty"`
+	Icon       string `protobuf:"bytes,7,opt,name=icon" json:"icon,omitempty"`
+}
+
+func (x *Category) Reset() { *x = Category{} }
+
+func (x *Category) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *Category) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *Category) GetCatId() int64 {
+	if x != nil {
+		return x.CatId
+	}
+	return 0
+}
+
+func (x *Category) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Category) GetParentCid() int64 {
+	if x != nil {
+		return x.ParentCid
+	}
+	return 0
+}
+
+func (x *Category) GetCatLevel() int32 {
+	if x != nil {
+		return x.CatLevel
+	}
+	return 0
+}
+
+func (x *Category) GetShowStatus() int32 {
+	if x != nil {
+		return x.ShowStatus
+	}
+	return 0
+}
+
+func (x *Category) GetSort() int32 {
+	if x != nil {
+		return x.Sort
+	}
+	return 0
+}
+
+func (x *Category) GetIcon() string {
+	if x != nil {
+		return x.Icon
+	}
+	return ""
+}
+
 type CategoryNode struct {
-	Id        uint32 `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
-	Name      string `protobuf:"bytes,3,opt,name=name" json:"name,omitempty"`
-	ParentCid uint32 `protobuf:"varint,2,opt,name=parent_cid" json:"parent_cid,omitempty"`
-	CatLevel  uint32 `protobuf:"varint,4,opt,name=cat_level" json:"cat_level,omitempty"`
+	CatId      int64  `protobuf:"varint,1,opt,name=catId" json:"catId,omitempty"`
+	Name       string `protobuf:"bytes,2,opt,name=name" json:"name,omitempty"`
+	ParentCid  int64  `protobuf:"varint,3,opt,name=parentCid" json:"parentCid,omitempty"`
+	CatLevel   int32  `protobuf:"varint,4,opt,name=catLevel" json:"catLevel,omitempty"`
+	ShowStatus int32  `protobuf:"varint,5,opt,name=showStatus" json:"showStatus,omitempty"`
+	Sort       int32  `protobuf:"varint,6,opt,name=sort" json:"sort,omitempty"`
+	Icon       string `protobuf:"bytes,7,opt,name=icon" json:"icon,omitempty"`
 }
 
 func (x *CategoryNode) Reset() { *x = CategoryNode{} }
@@ -65,9 +370,9 @@ func (x *CategoryNode) Marshal(in []byte) ([]byte, error) { return prutal.Marsha
 
 func (x *CategoryNode) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
 
-func (x *CategoryNode) GetId() uint32 {
+func (x *CategoryNode) GetCatId() int64 {
 	if x != nil {
-		return x.Id
+		return x.CatId
 	}
 	return 0
 }
@@ -79,21 +384,118 @@ func (x *CategoryNode) GetName() string {
 	return ""
 }
 
-func (x *CategoryNode) GetParentCid() uint32 {
+func (x *CategoryNode) GetParentCid() int64 {
 	if x != nil {
 		return x.ParentCid
 	}
 	return 0
 }
 
-func (x *CategoryNode) GetCatLevel() uint32 {
+func (x *CategoryNode) GetCatLevel() int32 {
 	if x != nil {
 		return x.CatLevel
 	}
 	return 0
 }
 
+func (x *CategoryNode) GetShowStatus() int32 {
+	if x != nil {
+		return x.ShowStatus
+	}
+	return 0
+}
+
+func (x *CategoryNode) GetSort() int32 {
+	if x != nil {
+		return x.Sort
+	}
+	return 0
+}
+
+func (x *CategoryNode) GetIcon() string {
+	if x != nil {
+		return x.Icon
+	}
+	return ""
+}
+
+// CategoryTreeNode 嵌套树节点（带 children）
+type CategoryTreeNode struct {
+	CatId      int64               `protobuf:"varint,1,opt,name=catId" json:"catId,omitempty"`
+	Name       string              `protobuf:"bytes,2,opt,name=name" json:"name,omitempty"`
+	ParentCid  int64               `protobuf:"varint,3,opt,name=parentCid" json:"parentCid,omitempty"`
+	CatLevel   int32               `protobuf:"varint,4,opt,name=catLevel" json:"catLevel,omitempty"`
+	ShowStatus int32               `protobuf:"varint,5,opt,name=showStatus" json:"showStatus,omitempty"`
+	Sort       int32               `protobuf:"varint,6,opt,name=sort" json:"sort,omitempty"`
+	Icon       string              `protobuf:"bytes,7,opt,name=icon" json:"icon,omitempty"`
+	Children   []*CategoryTreeNode `protobuf:"bytes,8,rep,name=children" json:"children,omitempty"`
+}
+
+func (x *CategoryTreeNode) Reset() { *x = CategoryTreeNode{} }
+
+func (x *CategoryTreeNode) Marshal(in []byte) ([]byte, error) { return prutal.MarshalAppend(in, x) }
+
+func (x *CategoryTreeNode) Unmarshal(in []byte) error { return prutal.Unmarshal(in, x) }
+
+func (x *CategoryTreeNode) GetCatId() int64 {
+	if x != nil {
+		return x.CatId
+	}
+	return 0
+}
+
+func (x *CategoryTreeNode) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CategoryTreeNode) GetParentCid() int64 {
+	if x != nil {
+		return x.ParentCid
+	}
+	return 0
+}
+
+func (x *CategoryTreeNode) GetCatLevel() int32 {
+	if x != nil {
+		return x.CatLevel
+	}
+	return 0
+}
+
+func (x *CategoryTreeNode) GetShowStatus() int32 {
+	if x != nil {
+		return x.ShowStatus
+	}
+	return 0
+}
+
+func (x *CategoryTreeNode) GetSort() int32 {
+	if x != nil {
+		return x.Sort
+	}
+	return 0
+}
+
+func (x *CategoryTreeNode) GetIcon() string {
+	if x != nil {
+		return x.Icon
+	}
+	return ""
+}
+
+func (x *CategoryTreeNode) GetChildren() []*CategoryTreeNode {
+	if x != nil {
+		return x.Children
+	}
+	return nil
+}
+
 type ProductService interface {
-	GetCategory(ctx context.Context, req *GetCategoryReq) (res *GetProvincesResp, err error)
+	CreateCategory(ctx context.Context, req *CreateCategoryReq) (res *CreateCategoryResp, err error)
+	GetCategoryTree(ctx context.Context, req *GetCategoryTreeReq) (res *GetCategoryTreeResp, err error)
 	UpdateCategory(ctx context.Context, req *UpdateCategoryReq) (res *UpdateCategoryResp, err error)
+	DeleteCategory(ctx context.Context, req *DeleteCategoryReq) (res *DeleteCategoryResp, err error)
 }

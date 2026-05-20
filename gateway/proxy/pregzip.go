@@ -304,9 +304,9 @@ func (p *Proxy) tryPreGzipCache(c *app.RequestContext, service, method string, r
 		return true
 	}
 
-	// BestCompression：只压一次，用最高压缩率换取最小缓存体积
+	// BestSpeed：压缩一次缓存，速度优先，小体积数据压缩率差异可忽略
 	var buf bytes.Buffer
-	w, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	w, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
 
 	if err != nil {
 		return false

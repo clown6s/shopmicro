@@ -5,9 +5,7 @@ import (
 	"strings"
 
 	"shopmicro/pkg/conf"
-	"shopmicro/pkg/logger"
 	"shopmicro/pkg/mysql"
-	"shopmicro/pkg/secrets"
 )
 
 type AMapConfig struct {
@@ -16,14 +14,13 @@ type AMapConfig struct {
 }
 
 type Config struct {
-	Server     conf.Server         `yaml:"server"`
-	HealthAddr string              `yaml:"healthAddr"`
-	Etcd       conf.Etcd           `yaml:"etcd"`
-	MySQL      mysql.Config        `yaml:"mysql"`
-	AMap       AMapConfig          `yaml:"amap"`
-	Mode       string              `yaml:"mode"`
-	Vault      secrets.VaultConfig `yaml:"vault"`
-	Auth       AuthConfig          `yaml:"auth"`
+	Server     conf.Server  `yaml:"server"`
+	HealthAddr string       `yaml:"healthAddr"`
+	Etcd       conf.Etcd    `yaml:"etcd"`
+	MySQL      mysql.Config `yaml:"mysql"`
+	AMap       AMapConfig   `yaml:"amap"`
+	Mode       string       `yaml:"mode"`
+	Auth       AuthConfig   `yaml:"auth"`
 }
 
 // AuthConfig 鉴权配置。
@@ -47,18 +44,6 @@ func (c *Config) ApplyEnv() {
 	// MySQL DSN 优先从环境变量获取（.env 或系统环境变量）
 	if c.MySQL.DSN == "" {
 		c.MySQL.DSN = conf.Env("MYSQL_DSN", "")
-	}
-
-	// P2-11 修复：永远不要使用 config.yaml 中的 Vault.Token 作为默认值。
-	if c.Vault.Address != "" {
-		if token := conf.Env("VAULT_TOKEN", ""); token != "" {
-			c.Vault.Token = token
-		}
-		if c.Vault.Token == "" {
-			logger.Warnf("vault address is set but VAULT_TOKEN env var is missing — skipping vault init")
-		} else {
-			secrets.InitProvider(c.Vault)
-		}
 	}
 
 	if v := conf.Env("SERVER_ADDR", ""); v != "" {

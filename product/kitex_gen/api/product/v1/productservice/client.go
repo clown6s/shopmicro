@@ -11,8 +11,10 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
-	GetCategory(ctx context.Context, Req *v1.GetCategoryReq, callOptions ...callopt.Option) (r *v1.GetProvincesResp, err error)
+	CreateCategory(ctx context.Context, Req *v1.CreateCategoryReq, callOptions ...callopt.Option) (r *v1.CreateCategoryResp, err error)
+	GetCategoryTree(ctx context.Context, Req *v1.GetCategoryTreeReq, callOptions ...callopt.Option) (r *v1.GetCategoryTreeResp, err error)
 	UpdateCategory(ctx context.Context, Req *v1.UpdateCategoryReq, callOptions ...callopt.Option) (r *v1.UpdateCategoryResp, err error)
+	DeleteCategory(ctx context.Context, Req *v1.DeleteCategoryReq, callOptions ...callopt.Option) (r *v1.DeleteCategoryResp, err error)
 }
 
 // NewClient creates a client for the service defined in IDL.
@@ -44,12 +46,22 @@ type kProductServiceClient struct {
 	*kClient
 }
 
-func (p *kProductServiceClient) GetCategory(ctx context.Context, Req *v1.GetCategoryReq, callOptions ...callopt.Option) (r *v1.GetProvincesResp, err error) {
+func (p *kProductServiceClient) CreateCategory(ctx context.Context, Req *v1.CreateCategoryReq, callOptions ...callopt.Option) (r *v1.CreateCategoryResp, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
-	return p.kClient.GetCategory(ctx, Req)
+	return p.kClient.CreateCategory(ctx, Req)
+}
+
+func (p *kProductServiceClient) GetCategoryTree(ctx context.Context, Req *v1.GetCategoryTreeReq, callOptions ...callopt.Option) (r *v1.GetCategoryTreeResp, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.GetCategoryTree(ctx, Req)
 }
 
 func (p *kProductServiceClient) UpdateCategory(ctx context.Context, Req *v1.UpdateCategoryReq, callOptions ...callopt.Option) (r *v1.UpdateCategoryResp, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.UpdateCategory(ctx, Req)
+}
+
+func (p *kProductServiceClient) DeleteCategory(ctx context.Context, Req *v1.DeleteCategoryReq, callOptions ...callopt.Option) (r *v1.DeleteCategoryResp, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.DeleteCategory(ctx, Req)
 }

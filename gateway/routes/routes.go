@@ -85,9 +85,11 @@ func ProxyOptions() []proxy.Option {
 			"Login",
 			"RefreshToken",
 		),
-		proxy.WithPublicMethods("district",
-			"GetProvinces",
-			"GetChildren",
+		proxy.WithPublicMethods("product",
+			"GetCategories",
+			"GetCategoryTree",
+			"GetSubCategories",
+			"GetAllSubCategories",
 		),
 
 		// RPC 方法白名单
@@ -105,6 +107,15 @@ func ProxyOptions() []proxy.Option {
 			"GetChildren",
 			"UpdateDistrict",
 		),
+		proxy.WithAllowedMethods("product",
+			"GetCategories",
+			"GetCategoryTree",
+			"GetSubCategories",
+			"GetAllSubCategories",
+			"CreateCategory",
+			"UpdateCategory",
+			"DeleteCategory",
+		),
 
 		// HTTP 方法映射 —— 限制每个 RPC 方法允许的 HTTP 请求方法
 		proxy.WithHTTPMethod("user", "RegisterUser", http.MethodPost),
@@ -117,11 +128,21 @@ func ProxyOptions() []proxy.Option {
 		proxy.WithHTTPMethod("district", "GetProvinces", http.MethodGet),
 		proxy.WithHTTPMethod("district", "GetChildren", http.MethodGet),
 		proxy.WithHTTPMethod("district", "UpdateDistrict", http.MethodPost),
+		proxy.WithHTTPMethod("product", "GetCategories", http.MethodGet),
+		proxy.WithHTTPMethod("product", "GetCategoryTree", http.MethodGet),
+		proxy.WithHTTPMethod("product", "GetSubCategories", http.MethodGet),
+		proxy.WithHTTPMethod("product", "GetAllSubCategories", http.MethodGet),
+		proxy.WithHTTPMethod("product", "CreateCategory", http.MethodPost),
+		proxy.WithHTTPMethod("product", "UpdateCategory", http.MethodPut),
+		proxy.WithHTTPMethod("product", "DeleteCategory", http.MethodDelete),
 
-		// pre-gzip 缓存白名单：只有非用户特定的公开 GET 方法才允许缓存
+		// pre-gzip 缓存白名单
 		proxy.WithCacheableMethods("district",
 			"GetProvinces",
 			"GetChildren",
+		),
+		proxy.WithCacheableMethods("product",
+			"GetCategoryTree",
 		),
 
 		// 方法级超时覆盖

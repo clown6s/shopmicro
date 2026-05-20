@@ -2,27 +2,24 @@ package conf
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"net/url"
 	"strings"
 
 	"shopmicro/pkg/conf"
 	"shopmicro/pkg/redis"
-	"shopmicro/pkg/secrets"
 )
 
 type Config struct {
-	Server    conf.Server         `yaml:"server"`
-	Etcd      conf.Etcd           `yaml:"etcd"`
-	CORS      CORS                `yaml:"cors"`
-	Redis     redis.Config        `yaml:"redis"`
-	JWT       JWT                 `yaml:"jwt"`
-	ProtoBase string              `yaml:"protoBase"`
-	Mode      string              `yaml:"mode"`
-	RateLimit RateLimit           `yaml:"rateLimit"`
-	Vault     secrets.VaultConfig `yaml:"vault"`
-	OTEL      OTEL                `yaml:"otel"`
+	Server    conf.Server  `yaml:"server"`
+	Etcd      conf.Etcd    `yaml:"etcd"`
+	CORS      CORS         `yaml:"cors"`
+	Redis     redis.Config `yaml:"redis"`
+	JWT       JWT          `yaml:"jwt"`
+	ProtoBase string       `yaml:"protoBase"`
+	Mode      string       `yaml:"mode"`
+	RateLimit RateLimit    `yaml:"rateLimit"`
+	OTEL      OTEL         `yaml:"otel"`
 	// TrustedProxies 列出可信反向代理的 CIDR 或 IP 列表。
 	// X-Forwarded-For 从右往左解析；第一个不可信 IP 即为真实客户端。
 	TrustedProxies []string `yaml:"trustedProxies"`
@@ -175,7 +172,7 @@ func (c *Config) SetDefaults() {
 		pg.CleanupInterval = 1800
 	}
 	if pg.MinSizeKB <= 0 {
-		pg.MinSizeKB = 100
+		pg.MinSizeKB = 1
 	}
 	if pg.MaxEntries <= 0 {
 		pg.MaxEntries = 1000
@@ -189,19 +186,6 @@ func (c *Config) SetDefaults() {
 }
 
 func (c *Config) ApplyEnv() {
-	// 初始化密钥提供者（如配置了 Vault 则使用，否则回退到环境变量）
-	// P2-11 修复：绝不使用 config.yaml 中的 Vault.Token 作为默认值 ——
-	// 那样会导致 token 被提交到代码仓库。只能通过环境变量设置。
-	if c.Vault.Address != "" {
-		if token := conf.Env("VAULT_TOKEN", ""); token != "" {
-			c.Vault.Token = token
-		}
-		if c.Vault.Token == "" {
-			log.Printf("[WARN] vault address is set but VAULT_TOKEN env var is missing — vault init will fail")
-		}
-		secrets.InitProvider(c.Vault)
-	}
-
 	if v := conf.Env("REDIS_ADDR", ""); v != "" {
 		c.Redis.Addr = v
 	}

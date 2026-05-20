@@ -33,7 +33,6 @@ import (
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/otel"
 	"shopmicro/pkg/redis"
-	"shopmicro/pkg/secrets"
 )
 
 func Run(configPath string) error {
@@ -250,9 +249,6 @@ func Run(configPath string) error {
 		proxy.StopPreGzipCleaner()
 		// R4-P1-02: 停止 metrics 更新 goroutine，避免泄漏
 		health.StopMetricsUpdater()
-
-		// 关闭 Vault provider（清理 HTTP 空闲连接）
-		secrets.CloseProvider()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
