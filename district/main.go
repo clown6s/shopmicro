@@ -33,7 +33,6 @@ import (
 
 	pkgconf "shopmicro/pkg/conf"
 	pkghealth "shopmicro/pkg/health"
-	"shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/netutil"
 	"shopmicro/pkg/otel"
@@ -122,17 +121,6 @@ func Run(configPath string) error {
 
 	var authMws []endpoint.Middleware
 	{
-		// JWT 拦截器：校验从 gateway 转发的客户端 token
-		if cfg.Auth.JWTSecret != "" {
-			jwtParser, err := jwt.NewParser(cfg.Auth.JWTSecret, "")
-			if err != nil {
-				return fmt.Errorf("init jwt parser: %w", err)
-			}
-			authMws = append(authMws, districtMiddleware.UnaryJWTInterceptor(jwtParser))
-			logger.Info("district auth: JWT interceptor enabled")
-		} else if cfg.Mode == "prod" {
-			return fmt.Errorf("auth.jwtSecret is required in production mode")
-		}
 		// Internal token 拦截器：校验服务间 API Key
 		if cfg.Auth.InternalToken != "" {
 			authMws = append(authMws, districtMiddleware.UnaryServiceAuthInterceptor(cfg.Auth.InternalToken))

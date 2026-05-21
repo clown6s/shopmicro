@@ -48,9 +48,6 @@ func (c *Config) ApplyEnv() {
 	if v := conf.Env("ETCD_ADDRS", ""); v != "" {
 		c.Etcd.Addrs = strings.Split(v, ",")
 	}
-	if v := conf.Env("JWT_SECRET", ""); v != "" {
-		c.Auth.JWTSecret = v
-	}
 }
 
 // Validate 校验必填配置

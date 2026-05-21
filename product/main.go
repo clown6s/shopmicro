@@ -33,7 +33,6 @@ import (
 
 	pkgconf "shopmicro/pkg/conf"
 	pkghealth "shopmicro/pkg/health"
-	"shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
 	"shopmicro/pkg/netutil"
 	"shopmicro/pkg/otel"
@@ -122,17 +121,6 @@ func Run(configPath string) error {
 
 	var authMws []endpoint.Middleware
 	{
-		if cfg.Auth.JWTSecret != "" {
-			jwtParser, err := jwt.NewParser(cfg.Auth.JWTSecret, "")
-			if err != nil {
-				return fmt.Errorf("init jwt parser: %w", err)
-			}
-			authMws = append(authMws, productMiddleware.UnaryJWTInterceptor(jwtParser))
-			logger.Info("product auth: JWT interceptor enabled")
-		} else if cfg.Mode == "prod" {
-			return fmt.Errorf("auth.jwtSecret is required in production mode")
-		}
-
 		if cfg.Auth.InternalToken != "" {
 			authMws = append(authMws, productMiddleware.UnaryServiceAuthInterceptor(cfg.Auth.InternalToken))
 			logger.Info("product auth: internal token interceptor enabled")
