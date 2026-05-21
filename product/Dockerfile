@@ -17,10 +17,11 @@ COPY pkg/go.mod pkg/go.sum ./pkg/
 
 # 下载依赖（利用 Docker cache layer）
 # GOWORK=off: 忽略 go.work，只下载当前模块的直接依赖
+# GOPROXY: 使用国内代理（服务器无法访问 proxy.golang.org）
 WORKDIR /build/product
-RUN GOWORK=off go mod download
+RUN GOWORK=off GOPROXY=https://goproxy.cn,direct go mod download
 WORKDIR /build/pkg
-RUN GOWORK=off go mod download
+RUN GOWORK=off GOPROXY=https://goproxy.cn,direct go mod download
 WORKDIR /build
 
 # 复制源码
