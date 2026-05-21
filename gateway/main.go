@@ -256,6 +256,8 @@ func Run(configPath string) error {
 		proxy.StopPreGzipCleaner()
 		// R4-P1-02: 停止 metrics 更新 goroutine，避免泄漏
 		health.StopMetricsUpdater()
+		// 停止本地限流器清理 goroutine，避免泄漏
+		middleware.StopCleanLocalLimiters()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

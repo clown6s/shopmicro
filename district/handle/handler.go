@@ -105,7 +105,7 @@ func (s *DistrictServiceImpl) GetChildren(ctx context.Context, req *v1.GetChildr
 // UpdateDistrict 从高德地图拉取行政区划数据，全量替换数据库。
 // R4-P2-11: 使用 singleflight 防止并发全量替换导致锁竞争或数据不一致
 func (s *DistrictServiceImpl) UpdateDistrict(ctx context.Context, req *v1.UpdateDistrictReq) (*v1.UpdateDistrictResp, error) {
-	_, err, shared := s.sf.Do("update-district", func() (interface{}, error) {
+	_, err, shared := s.getSF().Do("update-district", func() (interface{}, error) {
 		return nil, s.store.UpdateDistrict(ctx)
 	})
 	if shared {

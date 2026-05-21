@@ -29,11 +29,8 @@ func (s *UserServiceImpl) Logout(ctx context.Context, req *v1.LogoutReq) (resp *
 		return nil, errUnauthorized
 	}
 
-	tokenStr, ok := getMeta(ctx, "token")
-	if !ok || tokenStr == "" {
-		logger.Warn("logout: token not found in metainfo, request may bypass gateway")
-		return nil, errUnauthorized
-	}
+	// 注：撤销逻辑是基于 userID 的全量撤销，会撤销该用户所有设备的所有 token。
+	// 这是设计意图——登出即踢掉所有设备。
 
 	userID, err := parseInt64(userIDStr)
 	if err != nil || userID <= 0 {

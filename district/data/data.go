@@ -39,7 +39,12 @@ func New(cfg mysql.Config, amapKey string, amapTimeout time.Duration) (*Data, fu
 		amapTimeout: amapTimeout,
 		// P1-02: 独立 HTTP 客户端，避免共享 http.DefaultClient（无超时、可被全局修改）。
 		// 不设置 Client.Timeout —— 由请求级 context.WithTimeout 控制。
-		httpClient: &http.Client{},
+		// 设置 Transport IdleConnTimeout 防止空闲连接长期占用文件描述符。
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				IdleConnTimeout: 90 * time.Second,
+			},
+		},
 	}
 	return d, cleanup, nil
 }

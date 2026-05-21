@@ -158,7 +158,9 @@ func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *v1.DeleteUserReq)
 	logger.Infof("user deleted: user_id=%d", req.GetId())
 
 	failKey := fmt.Sprintf("%s%s", loginFailKeyPrefix, user.Phone)
-	_ = s.rdb.Del(ctx, failKey)
+	if err := s.rdb.Del(ctx, failKey); err != nil {
+		logger.Warnf("user: failed to clear login failures on delete user (phone=%s): %v", user.Phone, err)
+	}
 
 	return &v1.DeleteUserResp{}, nil
 }

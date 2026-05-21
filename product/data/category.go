@@ -174,7 +174,10 @@ func (d *CategoryDal) UpdateCategory(ctx context.Context, catId int64, name stri
 		return fmt.Errorf("update category: %w", err)
 	}
 
-	n, _ := result.RowsAffected()
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update category: failed to get rows affected: %w", err)
+	}
 	if n == 0 {
 		return fmt.Errorf("category not found or already deleted (cat_id=%d)", catId)
 	}
@@ -192,18 +195,20 @@ func (d *CategoryDal) DeleteCategory(ctx context.Context, catId int64) error {
 	const query = `
 		UPDATE category
 		SET deleted_at = NOW()
-		WHERE cat_id = ?
-		   OR cat_id IN (
-			   WITH RECURSIVE sub_tree AS (
-			       SELECT cat_id FROM category WHERE parent_cid = ? AND deleted_at IS NULL
-			       UNION ALL
-			       SELECT c.cat_id FROM category c
-			       INNER JOIN sub_tree st ON c.parent_cid = st.cat_id
-			       WHERE c.deleted_at IS NULL
-			   )
-			   SELECT cat_id FROM sub_tree
-		   )
-		   AND deleted_at IS NULL
+		WHERE deleted_at IS NULL
+		  AND (
+		      cat_id = ?
+		      OR cat_id IN (
+		          WITH RECURSIVE sub_tree AS (
+		              SELECT cat_id FROM category WHERE parent_cid = ? AND deleted_at IS NULL
+		              UNION ALL
+		              SELECT c.cat_id FROM category c
+		              INNER JOIN sub_tree st ON c.parent_cid = st.cat_id
+		              WHERE c.deleted_at IS NULL
+		          )
+		          SELECT cat_id FROM sub_tree
+		      )
+		  )
 	`
 
 	result, err := d.db.ExecContext(ctx, query, catId, catId)
@@ -211,7 +216,10 @@ func (d *CategoryDal) DeleteCategory(ctx context.Context, catId int64) error {
 		return fmt.Errorf("delete category: %w", err)
 	}
 
-	n, _ := result.RowsAffected()
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete category: failed to get rows affected: %w", err)
+	}
 	if n == 0 {
 		return fmt.Errorf("category not found or already deleted (cat_id=%d)", catId)
 	}

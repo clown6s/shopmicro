@@ -203,7 +203,9 @@ func (s *UserServiceImpl) recordLoginFailure(ctx context.Context, phone string) 
 // clearLoginFailures 在成功登录后清除登录失败计数器。
 func (s *UserServiceImpl) clearLoginFailures(ctx context.Context, phone string) {
 	key := fmt.Sprintf("%s%s", loginFailKeyPrefix, phone)
-	_ = s.rdb.Del(ctx, key)
+	if err := s.rdb.Del(ctx, key); err != nil {
+		logger.Warnf("user: failed to clear login failures for phone=%s: %v", phone, err)
+	}
 }
 
 // checkOwnership 验证调用者的 user_id 是否与请求的用户 ID 匹配。

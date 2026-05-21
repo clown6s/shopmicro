@@ -2,7 +2,7 @@ version: '3.8'
 
 # ShopMicro 开发/集成测试环境
 # 使用方式: docker-compose up -d
-# 仅用于开发和 CI，不用于生产部署
+# 仅用于开发和 CI，不用于生产部署（生产见 deploy/）
 
 services:
   # ==================== 基础设施 ====================
@@ -65,8 +65,8 @@ services:
 
   user:
     build:
-      context: ./user
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: user/Dockerfile
     container_name: shopmicro-user
     restart: unless-stopped
     depends_on:
@@ -81,15 +81,15 @@ services:
       REDIS_PASSWORD: "${REDIS_PASSWORD:-dev_redis_123}"
       ETCD_ADDRS: "etcd:2379"
       JWT_SECRET: "${JWT_SECRET}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: ""   # 容器内禁用 otel（避免连接不存在的 collector）
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
     ports:
       - "${USER_GRPC_PORT:-8888}:8888"
       - "${USER_HEALTH_PORT:-8899}:8899"
 
   district:
     build:
-      context: ./district
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: district/Dockerfile
     container_name: shopmicro-district
     restart: unless-stopped
     depends_on:
@@ -111,10 +111,34 @@ services:
       - "${DISTRICT_GRPC_PORT:-8900}:8888"
       - "${DISTRICT_HEALTH_PORT:-8898}:8899"
 
+  product:
+    build:
+      context: .
+      dockerfile: product/Dockerfile
+    container_name: shopmicro-product
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+    environment:
+      SERVER_ADDR: ":8888"
+      MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-root_dev_only}@tcp(mysql:3306)/${MYSQL_DATABASE:-shopmall}?charset=utf8mb4&parseTime=true&loc=Local"
+      REDIS_ADDR: "redis:6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-dev_redis_123}"
+      ETCD_ADDRS: "etcd:2379"
+      AUTH_JWT_SECRET: "${JWT_SECRET}"
+      AUTH_INTERNAL_TOKEN: "${INTERNAL_TOKEN:-dev-internal-token}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    ports:
+      - "${PRODUCT_GRPC_PORT:-8901}:8888"
+      - "${PRODUCT_HEALTH_PORT:-8897}:8897"
+
   gateway:
     build:
-      context: ./gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: gateway/Dockerfile
     container_name: shopmicro-gateway
     restart: unless-stopped
     depends_on:
@@ -126,13 +150,14 @@ services:
         condition: service_started
       district:
         condition: service_started
+      product:
+        condition: service_started
     environment:
       SERVER_ADDR: ":7000"
       REDIS_ADDR: "redis:6379"
       REDIS_PASSWORD: "${REDIS_PASSWORD:-dev_redis_123}"
       ETCD_ADDRS: "etcd:2379"
       JWT_SECRET: "${JWT_SECRET}"
-      PROTO_BASE: "/proto"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     ports:
       - "${GATEWAY_HTTP_PORT:-7000}:7000"

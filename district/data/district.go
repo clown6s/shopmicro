@@ -239,7 +239,9 @@ func (d *DistrictDal) fullReplace(ctx context.Context, records []districtRecord)
 
 	defer func() {
 		if err != nil {
-			_ = tx.Rollback()
+			if rbErr := tx.Rollback(); rbErr != nil {
+				logger.Warnf("district: tx rollback failed: %v", rbErr)
+			}
 		}
 	}()
 
@@ -282,7 +284,10 @@ func (d *DistrictDal) fullReplace(ctx context.Context, records []districtRecord)
 			return err
 		}
 
-		n, _ := result.RowsAffected()
+		n, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("fullReplace: failed to get rows affected: %w", err)
+		}
 		totalAffected += n
 	}
 

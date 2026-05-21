@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"golang.org/x/sync/singleflight"
 
@@ -14,6 +15,7 @@ import (
 type ProductServiceImpl struct {
 	store CategoryStore
 	sf    *singleflight.Group
+	sfMu  sync.RWMutex // 保护 sf 字段的并发读写
 }
 
 // NewProductHandler 创建商品服务 handler
@@ -25,6 +27,20 @@ func NewProductHandler(store CategoryStore) (*ProductServiceImpl, error) {
 		store: store,
 		sf:    &singleflight.Group{},
 	}, nil
+}
+
+// getSF 返回当前 singleflight.Group（读锁保护）。
+func (s *ProductServiceImpl) getSF() *singleflight.Group {
+	s.sfMu.RLock()
+	defer s.sfMu.RUnlock()
+	return s.sf
+}
+
+// resetSF 创建新的 singleflight.Group 以清除缓存（写锁保护）。
+func (s *ProductServiceImpl) resetSF() {
+	s.sfMu.Lock()
+	defer s.sfMu.Unlock()
+	s.sf = &singleflight.Group{}
 }
 
 // CreateCategory 新增分类
@@ -40,7 +56,7 @@ func (s *ProductServiceImpl) CreateCategory(ctx context.Context, req *v1.CreateC
 	}
 
 	// 新增成功，清除查询缓存
-	s.sf = &singleflight.Group{}
+	s.resetSF()
 	logger.Infof("product: category created (cat_id=%d, name=%q), query cache cleared", catId, name)
 
 	return &v1.CreateCategoryResp{CatId: catId}, nil
@@ -48,7 +64,7 @@ func (s *ProductServiceImpl) CreateCategory(ctx context.Context, req *v1.CreateC
 
 // GetCategoryTree 获取全部分类树（嵌套 children）
 func (s *ProductServiceImpl) GetCategoryTree(ctx context.Context, req *v1.GetCategoryTreeReq) (*v1.GetCategoryTreeResp, error) {
-	result, err, shared := s.sf.Do("category_tree", func() (interface{}, error) {
+	result, err, shared := s.getSF().Do("category_tree", func() (interface{}, error) {
 		tree, err := s.store.GetCategoryTree(ctx)
 		if err != nil {
 			return nil, err
@@ -82,7 +98,7 @@ func (s *ProductServiceImpl) UpdateCategory(ctx context.Context, req *v1.UpdateC
 	}
 
 	// 更新成功，清除查询缓存
-	s.sf = &singleflight.Group{}
+	s.resetSF()
 	logger.Infof("product: category updated (cat_id=%d), query cache cleared", catId)
 
 	return &v1.UpdateCategoryResp{}, nil
@@ -100,7 +116,7 @@ func (s *ProductServiceImpl) DeleteCategory(ctx context.Context, req *v1.DeleteC
 	}
 
 	// 删除成功，清除查询缓存
-	s.sf = &singleflight.Group{}
+	s.resetSF()
 	logger.Infof("product: category deleted (cat_id=%d), query cache cleared", catId)
 
 	return &v1.DeleteCategoryResp{}, nil

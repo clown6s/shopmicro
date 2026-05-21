@@ -175,38 +175,53 @@ const (
 	localLimiterCleanInterval = 5 * time.Minute
 )
 
+// cleanLocalLimitersStop 用于优雅关闭时停止清理 goroutine。
+var cleanLocalLimitersStop chan struct{}
+
 func init() {
-	go cleanLocalLimiters()
+	cleanLocalLimitersStop = make(chan struct{})
+	go cleanLocalLimiters(cleanLocalLimitersStop)
+}
+
+// StopCleanLocalLimiters 停止本地限流器清理 goroutine，防止 goroutine 泄漏。
+// 应在优雅关闭时调用。
+func StopCleanLocalLimiters() {
+	close(cleanLocalLimitersStop)
 }
 
 // cleanLocalLimiters 定期清理过期的 IP 限流器条目。
-func cleanLocalLimiters() {
+func cleanLocalLimiters(stop <-chan struct{}) {
 	ticker := time.NewTicker(localLimiterCleanInterval)
 	defer ticker.Stop()
-	for range ticker.C {
-		now := time.Now()
-		expiredAt := now.Add(-localLimiterTTL)
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			now := time.Now()
+			expiredAt := now.Add(-localLimiterTTL)
 
-		// 第一遍：统计当前条目数
-		var count int
-		localLimiterPerIP.Range(func(_, _ interface{}) bool {
-			count++
-			return true
-		})
+			// 第一遍：统计当前条目数
+			var count int
+			localLimiterPerIP.Range(func(_, _ interface{}) bool {
+				count++
+				return true
+			})
 
-		// 条目数在限制内且没有超限风险，跳过清理
-		if count < localLimiterMaxEntries/2 {
-			continue
-		}
-
-		// 第二遍：清理过期条目
-		localLimiterPerIP.Range(func(key, value interface{}) bool {
-			entry, ok := value.(*ipLimiterEntry)
-			if !ok || entry.lastSeen.Before(expiredAt) {
-				localLimiterPerIP.Delete(key)
+			// 条目数在限制内且没有超限风险，跳过清理
+			if count < localLimiterMaxEntries/2 {
+				continue
 			}
-			return true
-		})
+
+			// 第二遍：清理过期条目
+			localLimiterPerIP.Range(func(key, value interface{}) bool {
+				entry, ok := value.(*ipLimiterEntry)
+				if !ok || entry.lastSeen.Before(expiredAt) {
+					localLimiterPerIP.Delete(key)
+				}
+				return true
+			})
+		}
 	}
 }
 

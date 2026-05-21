@@ -66,8 +66,11 @@ func UnaryServiceAuthInterceptor(allowedToken string) endpoint.Middleware {
 			}
 
 			if token != allowedToken {
-				logger.Warnf("service auth failed: invalid internal token, caller=%s",
-					rpcinfo.GetRPCInfo(ctx).From().ServiceName())
+				var caller string
+				if ri := rpcinfo.GetRPCInfo(ctx); ri != nil {
+					caller = ri.From().ServiceName()
+				}
+				logger.Warnf("service auth failed: invalid internal token, caller=%s", caller)
 				return fmt.Errorf("service authentication failed")
 			}
 

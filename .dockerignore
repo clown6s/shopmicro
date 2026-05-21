@@ -7,6 +7,7 @@
 .vscode
 *.swp
 *.swo
+.workbuddy
 
 # OS
 .DS_Store
@@ -19,9 +20,6 @@ Thumbs.db
 *.out
 vendor
 
-# Generated code
-*/kitex_gen/
-
 # Logs
 *.log
 
@@ -29,6 +27,5 @@ vendor
 .env
 *.env
 
-# Docker files (each Dockerfile has its own build context)
-gateway/Dockerfile
-user/Dockerfile
+# Deploy (production configs, not needed in build context)
+deploy/

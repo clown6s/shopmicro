@@ -282,7 +282,9 @@ func (p *Proxy) registerService(
 
 	g, err := generic.JSONPbGeneric(provider)
 	if err != nil {
-		_ = provider.Close()
+		if closeErr := provider.Close(); closeErr != nil {
+			logger.Warnf("register %s: failed to close provider after error: %v", serviceName, closeErr)
+		}
 		return fmt.Errorf("create json-pb generic for %s: %w", serviceName, err)
 	}
 
@@ -303,7 +305,9 @@ func (p *Proxy) registerService(
 		}),
 	)
 	if err != nil {
-		_ = provider.Close()
+		if closeErr := provider.Close(); closeErr != nil {
+			logger.Warnf("register %s: failed to close provider after error: %v", serviceName, closeErr)
+		}
 		return fmt.Errorf("create kitex client for %s: %w", serviceName, err)
 	}
 

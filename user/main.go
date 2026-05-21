@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -184,7 +185,9 @@ func Run(configPath string) error {
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer shutdownCancel()
-		_ = healthSrv.Shutdown(shutdownCtx)
+		if err := healthSrv.Shutdown(shutdownCtx); err != nil {
+			logger.Warnf("health server shutdown failed: %v", err)
+		}
 	}()
 	go func() {
 		if err := healthSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -263,7 +266,7 @@ func panicRecoveryMiddleware(next endpoint.Endpoint) endpoint.Endpoint {
 	return func(ctx context.Context, req, resp interface{}) (err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("kitex panic recovered: %v", r)
+				logger.Errorf("kitex panic recovered: %v\n%s", r, debug.Stack())
 				err = fmt.Errorf("internal error: panic recovered")
 			}
 		}()

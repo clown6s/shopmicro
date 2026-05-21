@@ -118,6 +118,15 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		}
 		ctx = authCtx
 
+		// 通过 Kitex metainfo 传播请求追踪 ID 到下游服务，
+		// 使下游日志能与网关请求日志关联。
+		if reqID := string(c.Request.Header.Peek("X-Request-Id")); reqID != "" {
+			ctx = metainfo.WithPersistentValue(ctx, "request_id", reqID)
+		}
+		if traceID := string(c.Request.Header.Peek("X-Trace-Id")); traceID != "" {
+			ctx = metainfo.WithPersistentValue(ctx, "trace_id", traceID)
+		}
+
 		// Pre-gzip 缓存命中已由前置中间件处理，此处无需重复检查
 
 		// 请求体处理
