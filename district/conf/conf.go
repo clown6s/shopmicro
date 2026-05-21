@@ -20,15 +20,6 @@ type Config struct {
 	MySQL      mysql.Config `yaml:"mysql"`
 	AMap       AMapConfig   `yaml:"amap"`
 	Mode       string       `yaml:"mode"`
-	Auth       AuthConfig   `yaml:"auth"`
-}
-
-// AuthConfig 鉴权配置。
-// JWT: 网关转发客户端 token 时使用（gateway 已校验，district 二次验证）。
-// InternalToken: 微服务间直接调用时的 API Key（比 JWT 更轻量）。
-type AuthConfig struct {
-	JWTSecret     string `yaml:"jwtSecret"`     // HMAC 密钥（与 gateway/user 共享），空则禁用 JWT 鉴权
-	InternalToken string `yaml:"internalToken"` // 服务间 API Key，空则禁用
 }
 
 // GetHealthAddr 返回健康检查监听地址，默认为 :8898（避免与 user 的 :8899 冲突）。

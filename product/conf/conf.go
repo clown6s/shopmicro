@@ -14,15 +14,6 @@ type Config struct {
 	Etcd       conf.Etcd    `yaml:"etcd"`
 	MySQL      mysql.Config `yaml:"mysql"`
 	Mode       string       `yaml:"mode"`
-	Auth       AuthConfig   `yaml:"auth"`
-}
-
-// AuthConfig 鉴权配置。
-// JWT: 网关转发客户端 token 时使用（gateway 已校验，product 二次验证）。
-// InternalToken: 微服务间直接调用时的 API Key。
-type AuthConfig struct {
-	JWTSecret     string `yaml:"jwtSecret"`
-	InternalToken string `yaml:"internalToken"`
 }
 
 // GetHealthAddr 返回健康检查监听地址，默认为 :8897

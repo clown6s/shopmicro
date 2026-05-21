@@ -29,7 +29,6 @@ import (
 	"shopmicro/product/conf"
 	"shopmicro/product/data"
 	"shopmicro/product/handler"
-	productMiddleware "shopmicro/product/middleware"
 
 	pkgconf "shopmicro/pkg/conf"
 	pkghealth "shopmicro/pkg/health"
@@ -119,19 +118,7 @@ func Run(configPath string) error {
 	// 鉴权拦截器
 	// =========================
 
-	var authMws []endpoint.Middleware
-	{
-		if cfg.Auth.InternalToken != "" {
-			authMws = append(authMws, productMiddleware.UnaryServiceAuthInterceptor(cfg.Auth.InternalToken))
-			logger.Info("product auth: internal token interceptor enabled")
-		}
-	}
-
-	// 构建中间件链：鉴权 → panicRecovery
 	var mws []endpoint.Middleware
-	if len(authMws) > 0 {
-		mws = append(mws, authMws...)
-	}
 	mws = append(mws, panicRecoveryMiddleware)
 
 	chainMiddleware := func(next endpoint.Endpoint) endpoint.Endpoint {

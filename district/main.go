@@ -29,7 +29,6 @@ import (
 	"shopmicro/district/conf"
 	"shopmicro/district/data"
 	"shopmicro/district/handle"
-	districtMiddleware "shopmicro/district/middleware"
 
 	pkgconf "shopmicro/pkg/conf"
 	pkghealth "shopmicro/pkg/health"
@@ -119,20 +118,7 @@ func Run(configPath string) error {
 	// 鉴权拦截器
 	// =========================
 
-	var authMws []endpoint.Middleware
-	{
-		// Internal token 拦截器：校验服务间 API Key
-		if cfg.Auth.InternalToken != "" {
-			authMws = append(authMws, districtMiddleware.UnaryServiceAuthInterceptor(cfg.Auth.InternalToken))
-			logger.Info("district auth: internal token interceptor enabled")
-		}
-	}
-
-	// 构建中间件链：鉴权 → panicRecovery
 	var mws []endpoint.Middleware
-	if len(authMws) > 0 {
-		mws = append(mws, authMws...)
-	}
 	mws = append(mws, panicRecoveryMiddleware)
 
 	// 将中间件链合并为单个 Middleware 传入 WithMiddleware
