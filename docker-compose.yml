@@ -1,85 +1,22 @@
 version: '3.8'
 
-# ShopMicro 开发/集成测试环境
+# ShopMicro 微服务编排
 # 使用方式: docker-compose up -d
-# 仅用于开发和 CI，不用于生产部署（生产见 deploy/）
+# 基础设施（MySQL/Redis/etcd）需提前部署，见 deploy/docker-compose.yml
 
 services:
-  # ==================== 基础设施 ====================
-
-  mysql:
-    image: mysql:8.0
-    container_name: shopmicro-mysql
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_dev_only}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-shopmall}
-      MYSQL_CHARACTER_SET_SERVER: utf8mb4
-      MYSQL_COLLATION_SERVER: utf8mb4_unicode_ci
-    ports:
-      - "${MYSQL_PORT:-3306}:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 30s
-    command: --default-authentication-plugin=caching_sha2_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
-
-  redis:
-    image: redis:7-alpine
-    container_name: shopmicro-redis
-    restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD:-dev_redis_123}
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-dev_redis_123}", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  etcd:
-    image: bitnami/etcd:3.5
-    container_name: shopmicro-etcd
-    restart: unless-stopped
-    environment:
-      ALLOW_NONE_AUTHENTICATION: "yes"
-      ETCD_ADVERTISE_CLIENT_URLS: "http://etcd:2379"
-      ETCD_LISTEN_CLIENT_URLS: "http://0.0.0.0:2379"
-    ports:
-      - "${ETCD_PORT:-2379}:2379"
-    volumes:
-      - etcd_data:/bitnami/etcd
-    healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  # ==================== 微服务 ====================
-
   user:
     build:
       context: .
       dockerfile: user/Dockerfile
     container_name: shopmicro-user
     restart: unless-stopped
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     environment:
       SERVER_ADDR: ":8888"
-      MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-root_dev_only}@tcp(mysql:3306)/${MYSQL_DATABASE:-shopmall}?charset=utf8mb4&parseTime=true&loc=Local"
-      REDIS_ADDR: "redis:6379"
-      REDIS_PASSWORD: "${REDIS_PASSWORD:-dev_redis_123}"
-      ETCD_ADDRS: "etcd:2379"
+      MYSQL_DSN: "${MYSQL_DSN}"
+      REDIS_ADDR: "${REDIS_ADDR}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      ETCD_ADDRS: "${ETCD_ADDRS}"
       JWT_SECRET: "${JWT_SECRET}"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     ports:
@@ -92,17 +29,12 @@ services:
       dockerfile: district/Dockerfile
     container_name: shopmicro-district
     restart: unless-stopped
-    depends_on:
-      mysql:
-        condition: service_healthy
-      etcd:
-        condition: service_healthy
     environment:
       SERVER_ADDR: ":8888"
-      MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-root_dev_only}@tcp(mysql:3306)/${MYSQL_DATABASE:-shopmall}?charset=utf8mb4&parseTime=true&loc=Local"
-      REDIS_ADDR: "redis:6379"
-      REDIS_PASSWORD: "${REDIS_PASSWORD:-dev_redis_123}"
-      ETCD_ADDRS: "etcd:2379"
+      MYSQL_DSN: "${MYSQL_DSN}"
+      REDIS_ADDR: "${REDIS_ADDR}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      ETCD_ADDRS: "${ETCD_ADDRS}"
       AMAP_KEY: "${AMAP_KEY}"
       AUTH_JWT_SECRET: "${JWT_SECRET}"
       AUTH_INTERNAL_TOKEN: "${INTERNAL_TOKEN:-dev-internal-token}"
@@ -117,17 +49,12 @@ services:
       dockerfile: product/Dockerfile
     container_name: shopmicro-product
     restart: unless-stopped
-    depends_on:
-      mysql:
-        condition: service_healthy
-      etcd:
-        condition: service_healthy
     environment:
       SERVER_ADDR: ":8888"
-      MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-root_dev_only}@tcp(mysql:3306)/${MYSQL_DATABASE:-shopmall}?charset=utf8mb4&parseTime=true&loc=Local"
-      REDIS_ADDR: "redis:6379"
-      REDIS_PASSWORD: "${REDIS_PASSWORD:-dev_redis_123}"
-      ETCD_ADDRS: "etcd:2379"
+      MYSQL_DSN: "${MYSQL_DSN}"
+      REDIS_ADDR: "${REDIS_ADDR}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      ETCD_ADDRS: "${ETCD_ADDRS}"
       AUTH_JWT_SECRET: "${JWT_SECRET}"
       AUTH_INTERNAL_TOKEN: "${INTERNAL_TOKEN:-dev-internal-token}"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
@@ -142,29 +69,17 @@ services:
     container_name: shopmicro-gateway
     restart: unless-stopped
     depends_on:
-      redis:
-        condition: service_healthy
-      etcd:
-        condition: service_healthy
-      user:
-        condition: service_started
-      district:
-        condition: service_started
-      product:
-        condition: service_started
+      - user
+      - district
+      - product
     environment:
       SERVER_ADDR: ":7000"
-      REDIS_ADDR: "redis:6379"
-      REDIS_PASSWORD: "${REDIS_PASSWORD:-dev_redis_123}"
-      ETCD_ADDRS: "etcd:2379"
+      REDIS_ADDR: "${REDIS_ADDR}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      ETCD_ADDRS: "${ETCD_ADDRS}"
       JWT_SECRET: "${JWT_SECRET}"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     ports:
       - "${GATEWAY_HTTP_PORT:-7000}:7000"
     volumes:
       - ./proto:/proto:ro
-
-volumes:
-  mysql_data:
-  redis_data:
-  etcd_data:
