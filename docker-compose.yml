@@ -1,8 +1,11 @@
-version: '3.8'
-
 # ShopMicro 微服务编排
-# 使用方式: docker-compose up -d
-# 基础设施（MySQL/Redis/etcd）需提前部署，见 deploy/docker-compose.yml
+# 使用方式: docker compose up -d
+# 基础设施需先启动: cd deploy && docker compose up -d
+#
+# 配置: 每个服务读取自己的 .env 文件（env_file），
+#       environment 仅覆盖容器内网络地址（宿主机IP → 容器名）
+
+name: shopmicro
 
 services:
   user:
@@ -11,17 +14,19 @@ services:
       dockerfile: user/Dockerfile
     container_name: shopmicro-user
     restart: unless-stopped
+    env_file:
+      - user/.env
     environment:
-      SERVER_ADDR: ":8888"
-      MYSQL_DSN: "${MYSQL_DSN}"
-      REDIS_ADDR: "${REDIS_ADDR}"
-      REDIS_PASSWORD: "${REDIS_PASSWORD}"
-      ETCD_ADDRS: "${ETCD_ADDRS}"
-      JWT_SECRET: "${JWT_SECRET}"
+      # 容器内网络地址覆盖
+      REDIS_ADDR: "shopmicro-redis:6379"
+      ETCD_ADDRS: "shopmicro-etcd:2379"
+      MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-admin@zzp}@tcp(shopmicro-mysql:3306)/${MYSQL_DATABASE:-shop_micro}?charset=utf8mb4&parseTime=true&loc=Local"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     ports:
-      - "${USER_GRPC_PORT:-8888}:8888"
-      - "${USER_HEALTH_PORT:-8899}:8899"
+      - "8888:8888"
+      - "8899:8899"
+    networks:
+      - infra
 
   district:
     build:
@@ -29,19 +34,18 @@ services:
       dockerfile: district/Dockerfile
     container_name: shopmicro-district
     restart: unless-stopped
+    env_file:
+      - district/.env
     environment:
-      SERVER_ADDR: ":8888"
-      MYSQL_DSN: "${MYSQL_DSN}"
-      REDIS_ADDR: "${REDIS_ADDR}"
-      REDIS_PASSWORD: "${REDIS_PASSWORD}"
-      ETCD_ADDRS: "${ETCD_ADDRS}"
-      AMAP_KEY: "${AMAP_KEY}"
-      AUTH_JWT_SECRET: "${JWT_SECRET}"
-      AUTH_INTERNAL_TOKEN: "${INTERNAL_TOKEN:-dev-internal-token}"
+      REDIS_ADDR: "shopmicro-redis:6379"
+      ETCD_ADDRS: "shopmicro-etcd:2379"
+      MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-admin@zzp}@tcp(shopmicro-mysql:3306)/${MYSQL_DATABASE:-shop_micro}?charset=utf8mb4&parseTime=true&loc=Local"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     ports:
-      - "${DISTRICT_GRPC_PORT:-8900}:8888"
-      - "${DISTRICT_HEALTH_PORT:-8898}:8899"
+      - "8900:8888"
+      - "8898:8899"
+    networks:
+      - infra
 
   product:
     build:
@@ -49,18 +53,18 @@ services:
       dockerfile: product/Dockerfile
     container_name: shopmicro-product
     restart: unless-stopped
+    env_file:
+      - product/.env
     environment:
-      SERVER_ADDR: ":8888"
-      MYSQL_DSN: "${MYSQL_DSN}"
-      REDIS_ADDR: "${REDIS_ADDR}"
-      REDIS_PASSWORD: "${REDIS_PASSWORD}"
-      ETCD_ADDRS: "${ETCD_ADDRS}"
-      AUTH_JWT_SECRET: "${JWT_SECRET}"
-      AUTH_INTERNAL_TOKEN: "${INTERNAL_TOKEN:-dev-internal-token}"
+      REDIS_ADDR: "shopmicro-redis:6379"
+      ETCD_ADDRS: "shopmicro-etcd:2379"
+      MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-admin@zzp}@tcp(shopmicro-mysql:3306)/${MYSQL_DATABASE:-shop_micro}?charset=utf8mb4&parseTime=true&loc=Local"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     ports:
-      - "${PRODUCT_GRPC_PORT:-8901}:8888"
-      - "${PRODUCT_HEALTH_PORT:-8897}:8897"
+      - "8901:8888"
+      - "8897:8897"
+    networks:
+      - infra
 
   gateway:
     build:
@@ -72,14 +76,18 @@ services:
       - user
       - district
       - product
+    env_file:
+      - gateway/.env
     environment:
-      SERVER_ADDR: ":7000"
-      REDIS_ADDR: "${REDIS_ADDR}"
-      REDIS_PASSWORD: "${REDIS_PASSWORD}"
-      ETCD_ADDRS: "${ETCD_ADDRS}"
-      JWT_SECRET: "${JWT_SECRET}"
+      REDIS_ADDR: "shopmicro-redis:6379"
+      ETCD_ADDRS: "shopmicro-etcd:2379"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     ports:
-      - "${GATEWAY_HTTP_PORT:-7000}:7000"
-    volumes:
-      - ./proto:/proto:ro
+      - "7000:7000"
+    networks:
+      - infra
+
+networks:
+  infra:
+    external: true
+    name: shopmicro-infra
