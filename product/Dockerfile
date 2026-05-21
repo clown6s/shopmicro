@@ -16,10 +16,11 @@ COPY product/go.mod product/go.sum ./product/
 COPY pkg/go.mod pkg/go.sum ./pkg/
 
 # 下载依赖（利用 Docker cache layer）
+# GOWORK=off: 忽略 go.work，只下载当前模块的直接依赖
 WORKDIR /build/product
-RUN go mod download
+RUN GOWORK=off go mod download
 WORKDIR /build/pkg
-RUN go mod download
+RUN GOWORK=off go mod download
 WORKDIR /build
 
 # 复制源码
