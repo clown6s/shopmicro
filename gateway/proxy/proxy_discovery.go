@@ -41,14 +41,16 @@ func (p *Proxy) DiscoverAndRegister(
 	}
 
 	seen := make(map[string]struct{})
-	instanceMap := make(map[string]int) // service name → instance count in etcd
+	instanceKeysMap := make(map[string][]string) // service name → 实例 etcd key 列表
 	var regFailures []string
 	for _, kv := range resp.Kvs {
-		svcName := extractServiceName(string(kv.Key), prefix)
+		keyStr := string(kv.Key)
+		svcName := extractServiceName(keyStr, prefix)
 		if svcName == "" {
 			continue
 		}
-		instanceMap[svcName]++
+		instanceKeysMap[svcName] = append(instanceKeysMap[svcName], keyStr)
+
 		if _, done := seen[svcName]; done {
 			continue
 		}
@@ -77,11 +79,10 @@ func (p *Proxy) DiscoverAndRegister(
 	}
 	// 用 etcd 中的实际实例 key 初始化 instanceKeys
 	p.mu.Lock()
-	for svcName, count := range instanceMap {
-		if keys, ok := p.instanceKeys[svcName]; ok && count > 0 {
-			// 注册期间只知道计数，用序号作为占位 key
-			for i := 0; i < count; i++ {
-				keys[fmt.Sprintf("startup-%d", i)] = true
+	for svcName, keys := range instanceKeysMap {
+		if existing, ok := p.instanceKeys[svcName]; ok && len(keys) > 0 {
+			for _, k := range keys {
+				existing[k] = true
 			}
 		}
 	}

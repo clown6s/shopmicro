@@ -182,7 +182,7 @@ func (c *Config) SetDefaults() {
 		pg.CleanupInterval = 1800
 	}
 	if pg.MinSizeKB <= 0 {
-		pg.MinSizeKB = 1
+		pg.MinSizeKB = 100
 	}
 	if pg.MaxEntries <= 0 {
 		pg.MaxEntries = 1000

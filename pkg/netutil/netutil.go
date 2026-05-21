@@ -15,7 +15,6 @@ func GetLocalIP() (net.IP, error) {
 	defer conn.Close()
 	localAddr, ok := conn.LocalAddr().(*net.UDPAddr)
 	if !ok {
-		conn.Close()
 		return nil, fmt.Errorf("LocalAddr is %T, expected *net.UDPAddr", conn.LocalAddr())
 	}
 	return localAddr.IP, nil

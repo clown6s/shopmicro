@@ -109,11 +109,10 @@ func PrometheusMiddleware() app.HandlerFunc {
 	mc := globalCollector
 	return func(ctx context.Context, c *app.RequestContext) {
 		mc.inFlight.Add(1)
+		defer mc.inFlight.Add(-1) // 确保 panic 时也递减
 		start := time.Now()
 		c.Next(ctx)
 		elapsed := time.Since(start).Seconds()
-
-		mc.inFlight.Add(-1)
 
 		method := string(c.Method())
 		path := string(c.Request.URI().Path())
