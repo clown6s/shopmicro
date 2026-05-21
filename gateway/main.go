@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"strconv"
@@ -323,6 +324,6 @@ func main() {
 	flag.Parse()
 
 	if err := Run(*configPath); err != nil {
-		logger.Fatalf("gateway run failed: %v", err)
+		log.Fatalf("gateway run failed: %v", err)
 	}
 }
