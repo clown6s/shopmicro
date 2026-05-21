@@ -75,6 +75,19 @@ Content-Type: application/json
 # 方式一：Docker（推荐开发用）
 cd deploy && docker-compose up -d
 
+
+# 单独重新构建并部署某个服务（如 user）
+docker compose up -d --build --no-deps user
+
+# 只重建镜像不启动
+docker compose build user
+
+# 只重启（不重新构建）
+docker compose up -d --no-deps user
+
+# 如果该服务有依赖的服务也重启了，用 --no-deps 阻止
+
+
 # 方式二：本地已安装
 # 确保 MySQL、Redis、etcd 运行中
 ```

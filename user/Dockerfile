@@ -40,8 +40,7 @@ RUN apk --no-cache add ca-certificates tzdata curl
 
 WORKDIR /app
 
-# gRPC 服务监听 127.0.0.1:8888（仅容器内部），健康检查监听 :8899
-EXPOSE 8888 8899
+EXPOSE 6001 8899
 
 COPY --from=builder /user-bin ./
 COPY user/conf ./conf
@@ -49,11 +48,6 @@ COPY user/conf ./conf
 # 创建非 root 用户运行应用（安全最佳实践）
 RUN adduser -D -H -s /sbin/nologin appuser
 USER appuser
-
-# 环境变量覆盖敏感配置（无需重新构建镜像）
-# MYSQL_DSN, JWT_SECRET, REDIS_ADDR, REDIS_PASSWORD, ETCD_ADDRS
-ENV SERVER_ADDR=0.0.0.0:8888
-ENV HEALTH_ADDR=:8899
 
 ENTRYPOINT ["./user-bin", "-c", "conf/config.yaml"]
 

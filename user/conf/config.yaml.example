@@ -12,9 +12,9 @@ redis:
   db: 0
 
 jwt:
-  secret: "changeme"          # JWT 签名密钥（至少32位随机字符串）
-  refreshSecret: "changeme"   # Refresh Token 密钥
-  expiration: 24              # Token 过期时间（小时）
+  secret: '4*8#5@7!^i(nj_9876555=+s4x3v9g12m`js0lmb8(-=+-_!`~||\]}mb<.?,.>>,mncukdkieijufonicndknveufw3io'
+  refreshSecret: '4*8#5@7!^i(ng5yd963=+s4x3v9g12m`js0lmb8(-=+-_!`~||\]}mb<.?,.>>,nv853srwoxw2#09'
+  expiration: 24
   issuer: "shopmicro"
 
 etcd:

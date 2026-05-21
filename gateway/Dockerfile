@@ -64,11 +64,11 @@ USER appuser
 # 设置 PROTO_BASE=/app/service-protos 以使用容器内路径
 COPY --from=builder /proto-out /app/service-protos
 
-EXPOSE 8080
+EXPOSE 7000
 
 # R5-P3-04: 使用 curl 替代 wget（Alpine busybox wget 未来版本可能移除）
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -sf http://localhost:8080/health || exit 1
+  CMD curl -sf http://localhost:7000/health || exit 1
 
 # protoBase 在容器内应指向 /app/service-protos/
 # 通过环境变量覆盖 config.yaml 中的 protoBase（无需重新构建镜像）

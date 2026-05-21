@@ -233,7 +233,7 @@ services:
       JWT_SECRET: '4*8#5@7!^i(nj_9876555=+s4x3v9g12m`js0lmb8(-=+-_!`~||\]}mb<.?,.>>,mncukdkieijufonicndknveufw3io'
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     ports:
-      - "7000:8080"
+      - "7000:7000"
     networks:
       - infra
 
