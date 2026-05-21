@@ -5,13 +5,13 @@ import (
 	"time"
 )
 
-// testError 用于熔断器失败测试
-type testError struct{}
+// infraError 模拟基础设施错误（超时），用于熔断器失败测试
+type infraError struct{}
 
-func (e *testError) Error() string { return "test error" }
+func (e *infraError) Error() string { return "connection timeout" }
 
 // Verify it satisfies error interface
-var _ error = (*testError)(nil)
+var _ error = (*infraError)(nil)
 
 // ==================== preGzipCacheKey ====================
 
@@ -195,10 +195,10 @@ func TestCircuitBreaker_Execute_Success(t *testing.T) {
 func TestCircuitBreaker_Execute_Failure(t *testing.T) {
 	cb := NewCircuitBreaker(2, 30*time.Second, 5*time.Second, 3)
 
-	// 连续失败触发熔断（consecutiveFailures=2）
-	for i := 0; i < 5; i++ {
+	// 连续失败 20 次触发熔断（consecutiveFailures=2, 但需要 requests>=20 且 failureRate>=50%）
+	for i := 0; i < 20; i++ {
 		cb.Execute("svc/Fail", func() (interface{}, error) {
-			return nil, &testError{}
+			return nil, &infraError{} // 模拟基础设施错误（timeout）
 		})
 	}
 

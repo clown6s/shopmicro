@@ -31,6 +31,8 @@ type Config struct {
 	CircuitBreaker CircuitBreakerConfig `yaml:"circuitBreaker"`
 	// PreGzip 预压缩缓存配置
 	PreGzip PreGzipConfig `yaml:"preGzip"`
+	// AccessLog 访问日志配置
+	AccessLog AccessLogConfig `yaml:"accessLog"`
 }
 
 type HTTPServer struct {
@@ -47,10 +49,10 @@ type RPCConfig struct {
 }
 
 type CircuitBreakerConfig struct {
-	ConsecutiveFailures int `yaml:"consecutiveFailures"` // 连续失败触发熔断 (default: 5)
-	IntervalSec         int `yaml:"intervalSec"`         // Open→HalfOpen 间隔秒 (default: 30)
-	TimeoutSec          int `yaml:"timeoutSec"`          // HalfOpen 状态超时秒 (default: 5)
-	MaxRequests         int `yaml:"maxRequests"`         // HalfOpen 状态最大探测请求数 (default: 3)
+	ConsecutiveFailures int `yaml:"consecutiveFailures"` // 连续失败触发熔断辅助条件 (default: 5)
+	IntervalSec         int `yaml:"intervalSec"`         // Closed 状态计数重置间隔秒 (default: 30)
+	TimeoutSec          int `yaml:"timeoutSec"`          // Open→HalfOpen 超时秒 (default: 5)
+	MaxRequests         int `yaml:"maxRequests"`         // HalfOpen 状态最大探测请求数 (default: 10)
 }
 
 type PreGzipConfig struct {
@@ -60,6 +62,12 @@ type PreGzipConfig struct {
 	MaxEntries      int `yaml:"maxEntries"`         // 最大缓存条目数 (default: 1000)
 	MaxQueryLen     int `yaml:"maxQueryLen"`        // 最大 query string 长度 (default: 2048)
 	MaxKeyLen       int `yaml:"maxKeyLen"`          // 最大缓存键长度 (default: 4096)
+}
+
+// AccessLogConfig 访问日志配置
+// Level: "all" 记录所有请求, "errorOnly" 只记录非 2xx/3xx 响应
+type AccessLogConfig struct {
+	Level string `yaml:"level"`
 }
 
 type OTEL struct {
@@ -162,7 +170,7 @@ func (c *Config) SetDefaults() {
 		cb.TimeoutSec = 5
 	}
 	if cb.MaxRequests <= 0 {
-		cb.MaxRequests = 3
+		cb.MaxRequests = 10
 	}
 
 	// PreGzip
@@ -184,6 +192,15 @@ func (c *Config) SetDefaults() {
 	}
 	if pg.MaxKeyLen <= 0 {
 		pg.MaxKeyLen = 4096
+	}
+
+	// AccessLog：dev 全量记录，prod/staging 只记非 2xx
+	if c.AccessLog.Level == "" {
+		if c.Mode == "dev" {
+			c.AccessLog.Level = "all"
+		} else {
+			c.AccessLog.Level = "errorOnly"
+		}
 	}
 }
 

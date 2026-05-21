@@ -13,6 +13,7 @@ import (
 	dproto "github.com/cloudwego/dynamicgo/proto"
 	"github.com/cloudwego/kitex/client"
 	"github.com/cloudwego/kitex/client/genericclient"
+	"github.com/cloudwego/kitex/pkg/connpool"
 	"github.com/cloudwego/kitex/pkg/discovery"
 	"github.com/cloudwego/kitex/pkg/generic"
 	"github.com/cloudwego/kitex/pkg/transmeta"
@@ -30,6 +31,7 @@ const (
 	etcdDialTimeout    = 5 * time.Second
 	maxBodySize        = 900 * 1024
 	maxTokenLen        = 4096
+	tokenCacheTTL      = 30 * time.Second // token 有效性本地缓存时间
 )
 
 var ErrServiceNotFound = errors.New("service not found")
@@ -61,6 +63,9 @@ type Proxy struct {
 	connectTimeout   time.Duration
 	maxRetries       int
 	registerRetries  int
+	// tokenCache 缓存 token 有效性，避免每次请求都查 Redis SIsMember
+	// key: token string, value: tokenCacheEntry
+	tokenCache sync.Map
 }
 
 type Option func(*Proxy)
@@ -291,6 +296,11 @@ func (p *Proxy) registerService(
 		client.WithSuite(kotelkitex.NewClientSuite(
 			kotelkitex.WithEnableGRPCMetadata(),
 		)),
+		client.WithLongConnection(connpool.IdleConfig{
+			MaxIdlePerAddress: 100,
+			MaxIdleGlobal:     500,
+			MaxIdleTimeout:    3 * time.Minute,
+		}),
 	)
 	if err != nil {
 		_ = provider.Close()
@@ -306,4 +316,37 @@ func (p *Proxy) registerService(
 
 	logger.Infof("service registered: %s (proto: %s)", serviceName, protoPath)
 	return nil
+}
+
+// tokenCacheEntry 缓存 token 有效性检查结果。
+type tokenCacheEntry struct {
+	valid     bool
+	expiresAt time.Time
+}
+
+// checkTokenCache 检查 token 本地缓存，命中返回 (valid, true)，未命中返回 (false, false)。
+func (p *Proxy) checkTokenCache(token string) (valid bool, hit bool) {
+	val, ok := p.tokenCache.Load(token)
+	if !ok {
+		return false, false
+	}
+	entry := val.(tokenCacheEntry)
+	if time.Now().After(entry.expiresAt) {
+		p.tokenCache.Delete(token)
+		return false, false
+	}
+	return entry.valid, true
+}
+
+// setTokenCache 写入 token 有效性缓存。
+func (p *Proxy) setTokenCache(token string, valid bool) {
+	p.tokenCache.Store(token, tokenCacheEntry{
+		valid:     valid,
+		expiresAt: time.Now().Add(tokenCacheTTL),
+	})
+}
+
+// InvalidateTokenCache 使指定 token 的缓存失效（用于 token 注销/刷新场景）。
+func (p *Proxy) InvalidateTokenCache(token string) {
+	p.tokenCache.Delete(token)
 }

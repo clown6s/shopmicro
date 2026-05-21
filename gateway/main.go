@@ -208,12 +208,12 @@ func Run(configPath string) error {
 		AllowHeaders:     cfg.CORS.AllowHeaders,
 		MaxAge:           cfg.CORS.MaxAgeSec,
 	}, cfg.Mode))
-	h.Use(middleware.SecurityHeadersMiddleware(cfg.Mode)) // HSTS、CSP、X-Frame-Options 等
-	h.Use(middleware.GzipMiddleware())                    // gzip 压缩（跳过 pre-gzip 已压缩的响应）
-	h.Use(middleware.AccessLogMiddleware())               // 访问日志
-	h.Use(middleware.TraceIDMiddleware())                 // trace-id 响应头
-	h.Use(middleware.RealIPMiddleware())                  // X-Forwarded-For 信任链 → _real_ip
-	h.Use(middleware.RateLimitMiddleware(rl))             // 限流
+	h.Use(middleware.SecurityHeadersMiddleware(cfg.Mode))      // HSTS、CSP、X-Frame-Options 等
+	h.Use(middleware.GzipMiddleware())                         // gzip 压缩（跳过 pre-gzip 已压缩的响应）
+	h.Use(middleware.AccessLogMiddleware(cfg.AccessLog.Level)) // 访问日志
+	h.Use(middleware.TraceIDMiddleware())                      // trace-id 响应头
+	h.Use(middleware.RealIPMiddleware())                       // X-Forwarded-For 信任链 → _real_ip
+	h.Use(middleware.RateLimitMiddleware(rl))                  // 限流
 
 	// 发现服务
 	if err := p.DiscoverAndRegister(r, cfg.Etcd.Addrs, cfg.ProtoBase); err != nil {

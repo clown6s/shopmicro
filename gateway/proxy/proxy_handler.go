@@ -194,19 +194,30 @@ func (p *Proxy) authenticate(ctx context.Context, c *app.RequestContext, service
 		return nil, false
 	}
 
-	// P1-1: 验证令牌在 Redis SET 中仍然有效
+	// P1-1: 验证令牌在 Redis SET 中仍然有效（带本地缓存）
 	if p.rdb != nil {
-		tokenKey := fmt.Sprintf("%s%d", tokenPrefix, claims.UserID)
-		isMember, err := p.rdb.SIsMember(ctx, tokenKey, tokenStr)
-		if err != nil {
-			logger.Warnf("redis sismember failed (fail-closed): user_id=%d err=%v", claims.UserID, err)
-			response.Fail(c, http.StatusServiceUnavailable, int(errcode.CodeGwSrvUnavailable), "service temporarily unavailable")
-			c.Abort()
-			return nil, false
-		} else if !isMember {
-			response.Unauthorized(c, "token revoked")
-			c.Abort()
-			return nil, false
+		if valid, hit := p.checkTokenCache(tokenStr); hit {
+			if !valid {
+				response.Unauthorized(c, "token revoked")
+				c.Abort()
+				return nil, false
+			}
+			// 缓存命中且有效，跳过 Redis 查询
+		} else {
+			tokenKey := fmt.Sprintf("%s%d", tokenPrefix, claims.UserID)
+			isMember, err := p.rdb.SIsMember(ctx, tokenKey, tokenStr)
+			if err != nil {
+				logger.Warnf("redis sismember failed (fail-closed): user_id=%d err=%v", claims.UserID, err)
+				response.Fail(c, http.StatusServiceUnavailable, int(errcode.CodeGwSrvUnavailable), "service temporarily unavailable")
+				c.Abort()
+				return nil, false
+			} else if !isMember {
+				p.setTokenCache(tokenStr, false)
+				response.Unauthorized(c, "token revoked")
+				c.Abort()
+				return nil, false
+			}
+			p.setTokenCache(tokenStr, true)
 		}
 	}
 

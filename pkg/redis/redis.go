@@ -34,10 +34,10 @@ func (c *Config) Validate() error {
 
 func (c *Config) setDefaults() {
 	if c.PoolSize <= 0 {
-		c.PoolSize = 100
+		c.PoolSize = 500
 	}
 	if c.MinIdleConns <= 0 {
-		c.MinIdleConns = 10
+		c.MinIdleConns = 50
 	}
 	if c.PoolTimeoutSec <= 0 {
 		c.PoolTimeoutSec = 4

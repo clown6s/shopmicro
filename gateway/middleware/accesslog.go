@@ -34,7 +34,8 @@ func maskIP(ip string) string {
 	return "masked"
 }
 
-func AccessLogMiddleware() app.HandlerFunc {
+func AccessLogMiddleware(level string) app.HandlerFunc {
+	errorOnly := level == "errorOnly"
 	return func(ctx context.Context, c *app.RequestContext) {
 
 		// 跳过健康检查端点以减少日志噪音。
@@ -47,6 +48,14 @@ func AccessLogMiddleware() app.HandlerFunc {
 		start := time.Now()
 
 		c.Next(ctx)
+
+		// errorOnly 模式：跳过 2xx/3xx 响应
+		if errorOnly {
+			status := c.Response.StatusCode()
+			if status >= 200 && status < 400 {
+				return
+			}
+		}
 
 		latency := time.Since(start)
 

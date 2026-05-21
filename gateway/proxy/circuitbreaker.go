@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -18,10 +19,16 @@ type CircuitBreaker struct {
 }
 
 // NewCircuitBreaker 创建一个 CircuitBreaker。
-// consecutiveFailures: 连续失败次数触发熔断（default 5）
-// interval: Open→HalfOpen 间隔（default 30s）
-// timeout: HalfOpen 状态超时（default 5s）
+//
+// consecutiveFailures: 连续失败次数触发熔断（default 5），仅作为辅助条件
+// interval: Closed 状态计数重置间隔（default 30s）
+// timeout: Open→HalfOpen 超时（default 5s）
 // maxRequests: HalfOpen 状态最大探测请求数（default 3）
+//
+// 触发条件（同时满足）：
+//   - 窗口内请求数 >= 20（避免低流量误触发）
+//   - 失败率 >= 50%
+//   - 连续失败次数 >= consecutiveFailures
 func NewCircuitBreaker(consecutiveFailures uint32, interval, timeout time.Duration, maxRequests uint32) *CircuitBreaker {
 	if consecutiveFailures == 0 {
 		consecutiveFailures = 5
@@ -33,7 +40,7 @@ func NewCircuitBreaker(consecutiveFailures uint32, interval, timeout time.Durati
 		timeout = 5 * time.Second
 	}
 	if maxRequests == 0 {
-		maxRequests = 3
+		maxRequests = 10
 	}
 	cf := consecutiveFailures
 	cb := &CircuitBreaker{
@@ -42,7 +49,7 @@ func NewCircuitBreaker(consecutiveFailures uint32, interval, timeout time.Durati
 			MaxRequests:   maxRequests,
 			Interval:      interval,
 			Timeout:       timeout,
-			ReadyToTrip:   func(counts gobreaker.Counts) bool { return counts.ConsecutiveFailures >= cf },
+			ReadyToTrip:   func(counts gobreaker.Counts) bool { return readyToTrip(counts, cf) },
 			OnStateChange: onStateChange,
 			IsSuccessful:  isSuccessful,
 		},
@@ -50,10 +57,45 @@ func NewCircuitBreaker(consecutiveFailures uint32, interval, timeout time.Durati
 	return cb
 }
 
-// isSuccessful 判定 RPC 调用是否成功。
-// err 为 nil 视为成功，err 非 nil 视为失败。
+// readyToTrip 判断是否应该打开熔断器。
+// 同时使用失败率和连续失败次数，避免高并发下少量瞬态错误误触发熔断。
+//
+// 触发条件（三个同时满足）：
+//  1. 窗口内总请求数 >= 20（排除低流量场景的噪音）
+//  2. 失败率 >= 50%
+//  3. 连续失败次数 >= consecutiveFailures
+func readyToTrip(counts gobreaker.Counts, consecutiveFailures uint32) bool {
+	// 低流量时不触发，避免少量错误就打开熔断
+	if counts.Requests < 20 {
+		return false
+	}
+	failureRate := float64(counts.TotalFailures) / float64(counts.Requests)
+	return failureRate >= 0.5 && counts.ConsecutiveFailures >= consecutiveFailures
+}
+
+// isSuccessful 判定 RPC 调用是否成功（用于熔断器计数）。
+//
+// 只有基础设施错误才计入熔断失败：
+//   - 超时（timeout, deadline exceeded）
+//   - 连接错误（connection refused, connection reset, connection shutdown）
+//   - 熔断器错误（ErrOpenState, ErrTooManyRequests）
+//
+// 业务错误（参数错误、记录不存在、权限不足等）不影响熔断计数，
+// 因为它们不代表下游服务不可用。
 func isSuccessful(err error) bool {
-	return err == nil
+	if err == nil {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	// 基础设施错误 → 熔断失败
+	return !(strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "deadline exceeded") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "connection shutdown") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "open state") ||
+		strings.Contains(msg, "too many requests"))
 }
 
 // onStateChange 记录熔断器状态变更日志。
