@@ -35,6 +35,9 @@ func (c *Config) GetHealthAddr() string {
 
 // ApplyEnv 从环境变量覆盖敏感配置
 func (c *Config) ApplyEnv() {
+	if v := conf.Env("MODE", ""); v != "" {
+		c.Mode = strings.ToLower(v)
+	}
 	if v := conf.Env("MYSQL_DSN", ""); v != "" {
 		c.MySQL.DSN = v
 	}

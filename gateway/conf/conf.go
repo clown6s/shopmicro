@@ -205,6 +205,9 @@ func (c *Config) SetDefaults() {
 }
 
 func (c *Config) ApplyEnv() {
+	if v := conf.Env("MODE", ""); v != "" {
+		c.Mode = strings.ToLower(v)
+	}
 	if v := conf.Env("REDIS_ADDR", ""); v != "" {
 		c.Redis.Addr = v
 	}
