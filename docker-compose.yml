@@ -190,6 +190,7 @@ services:
       ETCD_ADDRS: "shopmicro-etcd:2379"
       MYSQL_DSN: "root:admin@zzp@tcp(shopmicro-mysql:3306)/shop_micro?charset=utf8mb4&parseTime=true&loc=Local"
       AMAP_KEY: "2bf43aed63c04f92dad38aaa6da2db50"
+      JWT_SECRET: '4*8#5@7!^i(nj_9876555=+s4x3v9g12m`js0lmb8(-=+-_!`~||\]}mb<.?,.>>,mncukdkieijufonicndknveufw3io'
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     networks:
       - infra
@@ -211,6 +212,7 @@ services:
       REDIS_ADDR: "shopmicro-redis:6379"
       ETCD_ADDRS: "shopmicro-etcd:2379"
       MYSQL_DSN: "root:admin@zzp@tcp(shopmicro-mysql:3306)/shop_micro?charset=utf8mb4&parseTime=true&loc=Local"
+      JWT_SECRET: '4*8#5@7!^i(nj_9876555=+s4x3v9g12m`js0lmb8(-=+-_!`~||\]}mb<.?,.>>,mncukdkieijufonicndknveufw3io'
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     networks:
       - infra

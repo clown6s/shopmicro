@@ -57,6 +57,9 @@ func (c *Config) ApplyEnv() {
 	if v := conf.Env("AMAP_KEY", ""); v != "" {
 		c.AMap.Key = v
 	}
+	if v := conf.Env("JWT_SECRET", ""); v != "" {
+		c.Auth.JWTSecret = v
+	}
 }
 
 // Validate 校验必填的敏感配置
