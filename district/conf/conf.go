@@ -42,9 +42,8 @@ func (c *Config) GetHealthAddr() string {
 
 // ApplyEnv 从环境变量覆盖敏感配置
 func (c *Config) ApplyEnv() {
-	// MySQL DSN 优先从环境变量获取（.env 或系统环境变量）
-	if c.MySQL.DSN == "" {
-		c.MySQL.DSN = conf.Env("MYSQL_DSN", "")
+	if v := conf.Env("MYSQL_DSN", ""); v != "" {
+		c.MySQL.DSN = v
 	}
 
 	if v := conf.Env("SERVER_ADDR", ""); v != "" {

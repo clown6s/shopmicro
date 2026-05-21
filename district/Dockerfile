@@ -57,5 +57,5 @@ ENV HEALTH_ADDR=:8898
 
 ENTRYPOINT ["./district-bin", "-c", "conf/config.yaml"]
 
-HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
   CMD curl -sf http://localhost:8898/health || exit 1
