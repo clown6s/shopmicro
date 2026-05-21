@@ -9,6 +9,7 @@ WORKDIR /build
 
 # 安装构建依赖
 RUN apk add --no-cache git
+ENV GOPROXY=https://goproxy.cn,direct
 
 # 复制 go.work 和所有 go.mod
 COPY go.work go.work.sum ./
@@ -19,9 +20,9 @@ COPY pkg/go.mod pkg/go.sum ./pkg/
 # GOWORK=off: 忽略 go.work，只下载当前模块的直接依赖
 # GOPROXY: 使用国内代理
 WORKDIR /build/gateway
-RUN GOWORK=off GOPROXY=https://goproxy.cn,direct go mod download
+RUN GOWORK=off go mod download
 WORKDIR /build/pkg
-RUN GOWORK=off GOPROXY=https://goproxy.cn,direct go mod download
+RUN GOWORK=off go mod download
 WORKDIR /build
 
 # 复制源码（包括 proto 文件，go work use 已将所有模块纳入工作空间）
