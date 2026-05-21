@@ -1,6 +1,9 @@
 package netutil
 
-import "net"
+import (
+	"fmt"
+	"net"
+)
 
 // GetLocalIP 通过 UDP 拨号获取本机对外通信的 IP 地址。
 // 操作系统会自动选择有默认路由的网卡，避免选到虚拟网卡或 link-local 地址。
@@ -10,6 +13,10 @@ func GetLocalIP() (net.IP, error) {
 		return nil, err
 	}
 	defer conn.Close()
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	localAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("LocalAddr is %T, expected *net.UDPAddr", conn.LocalAddr())
+	}
 	return localAddr.IP, nil
 }

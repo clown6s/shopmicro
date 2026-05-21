@@ -34,7 +34,14 @@ func GzipMiddleware() app.HandlerFunc {
 		}
 
 		c.Header("Content-Encoding", "gzip")
-		c.Header("Vary", "Accept-Encoding")
+
+		// 追加 Vary 而非覆盖，保留 CORS 设的 "Vary: Origin"
+		existing := string(c.Response.Header.Peek("Vary"))
+		if existing != "" {
+			c.Header("Vary", existing+", Accept-Encoding")
+		} else {
+			c.Header("Vary", "Accept-Encoding")
+		}
 
 		gzipped := compress.AppendGzipBytesLevel(nil, body, 1) // BestSpeed
 		c.Response.SetBodyStream(bytes.NewBuffer(gzipped), len(gzipped))

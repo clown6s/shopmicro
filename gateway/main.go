@@ -225,6 +225,10 @@ func Run(configPath string) error {
 	// 以便在优雅关闭期间 WatchServices 协程退出，
 	// 而不是在 Run() 返回后才退出。
 	watchCtx, watchCancel := context.WithCancel(context.Background())
+
+	// 启动 token 缓存定期清理（复用 watchCtx 的生命周期）
+	p.StartTokenCacheCleaner(watchCtx.Done())
+
 	p.WatchServices(watchCtx, r, cfg.Etcd.Addrs, cfg.ProtoBase)
 
 	// =========================

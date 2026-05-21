@@ -88,7 +88,7 @@ func CORS(cfg *CORSConfig, mode string) app.HandlerFunc {
 		}
 
 		if originAllowed {
-			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE")
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
 			c.Header("Access-Control-Allow-Headers", allowHeaders)
 			c.Header("Access-Control-Max-Age", maxAge)
 			if creds {

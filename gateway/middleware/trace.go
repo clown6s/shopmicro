@@ -90,6 +90,9 @@ func generateRequestID() string {
 	}
 
 	// P3-06: 从 pool 获取 buffer，用完归还
+	// 安全性说明：string(buf) 会复制底层数据，result 是独立副本，
+	// Put 之后 buf 指针指向的底层数组可被 pool 回收，不影响 result。
+	// ⚠️ 切勿改为切片操作（如 buf[:n]），否则会引入 use-after-free。
 	bufPtr := requestIDBufPool.Get().(*[]byte)
 	buf := *bufPtr
 	for i := 2; i >= 0; i-- {

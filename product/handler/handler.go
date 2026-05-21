@@ -72,7 +72,7 @@ func (s *ProductServiceImpl) GetCategoryTree(ctx context.Context, req *v1.GetCat
 		return &v1.GetCategoryTreeResp{List: tree}, nil
 	})
 	if shared {
-		logger.Infof("product: GetCategoryTree request coalesced by singleflight")
+		logger.Debugf("product: GetCategoryTree request coalesced by singleflight")
 	}
 
 	if err != nil {

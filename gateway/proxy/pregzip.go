@@ -113,7 +113,7 @@ func cleanPreGzipCache() {
 			expiredSet[k] = struct{}{}
 		}
 		preGzipOrderMu.Lock()
-		filtered := preGzipOrder[:0]
+		filtered := make([]string, 0, len(preGzipOrder)-len(expiredSet))
 		for _, k := range preGzipOrder {
 			if _, ok := expiredSet[k]; !ok {
 				filtered = append(filtered, k)
@@ -204,7 +204,8 @@ func setPreGzip(key string, data []byte) {
 			var oldest string
 			if len(preGzipOrder) > 0 {
 				oldest = preGzipOrder[0]
-				preGzipOrder = preGzipOrder[1:]
+				// 创建新 slice 而非复用底层数组，避免内存泄漏
+				preGzipOrder = append([]string(nil), preGzipOrder[1:]...)
 			}
 			preGzipOrderMu.Unlock()
 			if oldest == "" {

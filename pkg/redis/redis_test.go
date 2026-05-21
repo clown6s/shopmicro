@@ -8,11 +8,11 @@ func TestConfigSetDefaults(t *testing.T) {
 	cfg := Config{}
 	cfg.setDefaults()
 
-	if cfg.PoolSize != 100 {
-		t.Fatalf("expected PoolSize 100, got %d", cfg.PoolSize)
+	if cfg.PoolSize != 500 {
+		t.Fatalf("expected PoolSize 500, got %d", cfg.PoolSize)
 	}
-	if cfg.MinIdleConns != 10 {
-		t.Fatalf("expected MinIdleConns 10, got %d", cfg.MinIdleConns)
+	if cfg.MinIdleConns != 50 {
+		t.Fatalf("expected MinIdleConns 50, got %d", cfg.MinIdleConns)
 	}
 	if cfg.PoolTimeoutSec != 4 {
 		t.Fatalf("expected PoolTimeoutSec 4, got %d", cfg.PoolTimeoutSec)

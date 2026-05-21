@@ -75,11 +75,14 @@ func (p *Proxy) DiscoverAndRegister(
 	if len(regFailures) > 0 {
 		return fmt.Errorf("failed to register services at startup: %v", regFailures)
 	}
-	// 用 etcd 中的实际实例数覆盖 registerService 设置的初始值 1
+	// 用 etcd 中的实际实例 key 初始化 instanceKeys
 	p.mu.Lock()
 	for svcName, count := range instanceMap {
-		if _, ok := p.clients[svcName]; ok && count > 0 {
-			p.instanceCount[svcName] = int64(count)
+		if keys, ok := p.instanceKeys[svcName]; ok && count > 0 {
+			// 注册期间只知道计数，用序号作为占位 key
+			for i := 0; i < count; i++ {
+				keys[fmt.Sprintf("startup-%d", i)] = true
+			}
 		}
 	}
 	p.mu.Unlock()
@@ -158,7 +161,13 @@ func (p *Proxy) watchOnce(
 			switch ev.Type {
 			case clientv3.EventTypePut:
 				p.mu.Lock()
-				p.instanceCount[svcName]++
+				keyStr := string(ev.Kv.Key)
+				if p.instanceKeys[svcName] == nil {
+					p.instanceKeys[svcName] = make(map[string]bool)
+				}
+				if !p.instanceKeys[svcName][keyStr] {
+					p.instanceKeys[svcName][keyStr] = true
+				}
 				p.mu.Unlock()
 
 				if _, ok := p.getClient(svcName); ok {
@@ -181,16 +190,21 @@ func (p *Proxy) watchOnce(
 				}
 			case clientv3.EventTypeDelete:
 				p.mu.Lock()
-				p.instanceCount[svcName]--
-				count := p.instanceCount[svcName]
-				shouldRemove := count <= 0
+				keyStr := string(ev.Kv.Key)
+				var shouldRemove bool
+				var remaining int
+				if keys, ok := p.instanceKeys[svcName]; ok {
+					delete(keys, keyStr)
+					remaining = len(keys)
+					shouldRemove = remaining == 0
+				}
 				p.mu.Unlock()
 
 				if shouldRemove {
 					p.mu.Lock()
 					if sc, ok := p.clients[svcName]; ok {
 						delete(p.clients, svcName)
-						delete(p.instanceCount, svcName)
+						delete(p.instanceKeys, svcName)
 						p.mu.Unlock()
 						if err := sc.Generic.Close(); err != nil {
 							logger.Warnf("WatchServices: close generic for %s: %v", svcName, err)
@@ -199,10 +213,11 @@ func (p *Proxy) watchOnce(
 							logger.Warnf("WatchServices: close client for %s: %v", svcName, err)
 						}
 						logger.Infof("WatchServices: removed client for %s (all instances deregistered)", svcName)
+					} else {
+						p.mu.Unlock()
 					}
-					// instanceCount[svcName] 已在 L193 删除，无需重复操作
-				} else {
-					logger.Infof("WatchServices: instance deregistered for %s (remaining: %d)", svcName, count)
+				} else if remaining > 0 {
+					logger.Infof("WatchServices: instance deregistered for %s (remaining: %d)", svcName, remaining)
 				}
 			}
 		}

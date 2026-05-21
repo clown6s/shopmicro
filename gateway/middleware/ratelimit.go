@@ -159,7 +159,7 @@ var fallbackCounter atomic.Uint64
 // ipLimiterEntry 封装 rate.Limiter 及其最后访问时间，用于定期淘汰。
 type ipLimiterEntry struct {
 	limiter  *rate.Limiter
-	lastSeen time.Time
+	lastSeen atomic.Int64 // UnixNano，使用 atomic 避免数据竞争
 }
 
 // localLimiterPerIP 本地内存限流器（按 IP），用于 GET 公开接口的轻量限流。
@@ -216,7 +216,7 @@ func cleanLocalLimiters(stop <-chan struct{}) {
 			// 第二遍：清理过期条目
 			localLimiterPerIP.Range(func(key, value interface{}) bool {
 				entry, ok := value.(*ipLimiterEntry)
-				if !ok || entry.lastSeen.Before(expiredAt) {
+				if !ok || entry.lastSeen.Load() < expiredAt.UnixNano() {
 					localLimiterPerIP.Delete(key)
 				}
 				return true
@@ -226,17 +226,19 @@ func cleanLocalLimiters(stop <-chan struct{}) {
 }
 
 func getLocalLimiter(ip string) *rate.Limiter {
+	nowNano := time.Now().UnixNano()
 	if v, ok := localLimiterPerIP.Load(ip); ok {
 		if entry, ok := v.(*ipLimiterEntry); ok {
-			entry.lastSeen = time.Now()
+			entry.lastSeen.Store(nowNano)
 			return entry.limiter
 		}
 	}
 	limiter := rate.NewLimiter(rate.Limit(localRateLimit), localRateLimit)
-	entry := &ipLimiterEntry{limiter: limiter, lastSeen: time.Now()}
+	entry := &ipLimiterEntry{limiter: limiter}
+	entry.lastSeen.Store(nowNano)
 	actual, _ := localLimiterPerIP.LoadOrStore(ip, entry)
 	if actualEntry, ok := actual.(*ipLimiterEntry); ok {
-		actualEntry.lastSeen = time.Now()
+		actualEntry.lastSeen.Store(nowNano)
 		return actualEntry.limiter
 	}
 	return limiter

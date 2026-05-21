@@ -134,7 +134,10 @@ func Run(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("get local ip: %w", err)
 	}
-	registryAddr, _ := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", localIP.String(), addr.Port))
+	registryAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", localIP.String(), addr.Port))
+	if err != nil {
+		return fmt.Errorf("resolve registry addr for %s:%d: %w", localIP.String(), addr.Port, err)
+	}
 
 	svr := v1.NewServer(
 		districtHandler,

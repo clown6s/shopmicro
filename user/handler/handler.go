@@ -204,7 +204,7 @@ func (s *UserServiceImpl) recordLoginFailure(ctx context.Context, phone string) 
 func (s *UserServiceImpl) clearLoginFailures(ctx context.Context, phone string) {
 	key := fmt.Sprintf("%s%s", loginFailKeyPrefix, phone)
 	if err := s.rdb.Del(ctx, key); err != nil {
-		logger.Warnf("user: failed to clear login failures for phone=%s: %v", phone, err)
+		logger.Warnf("user: failed to clear login failures for phone=%s: %v", maskPhone(phone), err)
 	}
 }
 

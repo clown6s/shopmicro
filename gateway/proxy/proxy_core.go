@@ -49,7 +49,7 @@ type ServiceClient struct {
 type Proxy struct {
 	mu               sync.RWMutex
 	clients          map[string]*ServiceClient
-	instanceCount    map[string]int64 // 每个服务的 etcd 实例引用计数
+	instanceKeys     map[string]map[string]bool // 每个服务的 etcd 实例 key 集合（用于准确计数）
 	jwtParser        *pkgjwt.Parser
 	rdb              *redis.Client
 	publicMethod     map[string]bool
@@ -182,7 +182,7 @@ func WithRegisterRetries(n int) Option {
 func New(opts ...Option) *Proxy {
 	p := &Proxy{
 		clients:          make(map[string]*ServiceClient),
-		instanceCount:    make(map[string]int64),
+		instanceKeys:     make(map[string]map[string]bool),
 		publicMethod:     make(map[string]bool),
 		allowedMethods:   make(map[string]map[string]bool),
 		httpMethodMap:    make(map[string]map[string]bool),
@@ -316,7 +316,7 @@ func (p *Proxy) registerService(
 		Generic: g,
 		svcDesc: svcDesc,
 	}
-	p.instanceCount[serviceName] = 1
+	p.instanceKeys[serviceName] = make(map[string]bool)
 
 	logger.Infof("service registered: %s (proto: %s)", serviceName, protoPath)
 	return nil
@@ -334,7 +334,11 @@ func (p *Proxy) checkTokenCache(token string) (valid bool, hit bool) {
 	if !ok {
 		return false, false
 	}
-	entry := val.(tokenCacheEntry)
+	entry, ok := val.(tokenCacheEntry)
+	if !ok {
+		p.tokenCache.Delete(token)
+		return false, false
+	}
 	if time.Now().After(entry.expiresAt) {
 		p.tokenCache.Delete(token)
 		return false, false
@@ -353,4 +357,40 @@ func (p *Proxy) setTokenCache(token string, valid bool) {
 // InvalidateTokenCache 使指定 token 的缓存失效（用于 token 注销/刷新场景）。
 func (p *Proxy) InvalidateTokenCache(token string) {
 	p.tokenCache.Delete(token)
+}
+
+// tokenCacheCleanInterval 定期清理 token 缓存的间隔
+const tokenCacheCleanInterval = 5 * time.Minute
+
+// CleanTokenCache 清理所有过期的 token 缓存条目，防止已注销用户的 token 永驻内存。
+// 应由定时器或清理 goroutine 定期调用。
+func (p *Proxy) CleanTokenCache() {
+	now := time.Now()
+	p.tokenCache.Range(func(key, value interface{}) bool {
+		entry, ok := value.(tokenCacheEntry)
+		if !ok {
+			p.tokenCache.Delete(key)
+			return true
+		}
+		if now.After(entry.expiresAt) {
+			p.tokenCache.Delete(key)
+		}
+		return true
+	})
+}
+
+// StartTokenCacheCleaner 启动定期清理 token 缓存的 goroutine。
+func (p *Proxy) StartTokenCacheCleaner(stop <-chan struct{}) {
+	go func() {
+		ticker := time.NewTicker(tokenCacheCleanInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				p.CleanTokenCache()
+			}
+		}
+	}()
 }

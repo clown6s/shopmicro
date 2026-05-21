@@ -277,14 +277,14 @@ func TestNew_WithMaxRetries_Negative(t *testing.T) {
 	}
 }
 
-// ==================== New instanceCount ====================
+// ==================== New instanceKeys ====================
 
-func TestNew_InstanceCountInitialized(t *testing.T) {
+func TestNew_InstanceKeysInitialized(t *testing.T) {
 	p := New()
-	if p.instanceCount == nil {
-		t.Fatal("instanceCount should be initialized")
+	if p.instanceKeys == nil {
+		t.Fatal("instanceKeys should be initialized")
 	}
-	if len(p.instanceCount) != 0 {
-		t.Fatal("instanceCount should be empty")
+	if len(p.instanceKeys) != 0 {
+		t.Fatal("instanceKeys should be empty")
 	}
 }
