@@ -36,7 +36,7 @@ RUN cd user && go build -o /user-bin .
 # ============================================================
 FROM alpine:3.19
 
-RUN apk --no-cache add ca-certificates tzdata
+RUN apk --no-cache add ca-certificates tzdata curl
 
 WORKDIR /app
 

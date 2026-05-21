@@ -5,7 +5,7 @@
 # 使用: docker compose up -d
 #
 # 注意:
-# 1. MySQL root 密码、Redis 密码等敏感值在 .env 中配置
+# 1. 生产环境应修改密码（搜索 admin@zzp 替换为强密码）
 # 2. 生产环境应启用 TLS（见各服务配置文件中的注释）
 # ============================================================
 
@@ -23,8 +23,8 @@ services:
     ports:
       - "3306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-admin@zzp}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-shop_micro}
+      MYSQL_ROOT_PASSWORD: "admin@zzp"
+      MYSQL_DATABASE: "shop_micro"
       MYSQL_CHARACTER_SET_SERVER: utf8mb4
       MYSQL_COLLATION_SERVER: utf8mb4_0900_ai_ci
       TZ: Asia/Shanghai
@@ -39,7 +39,7 @@ services:
       infra:
         ipv4_address: 172.30.0.10
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-admin@zzp}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-padmin@zzp"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -69,9 +69,9 @@ services:
     volumes:
       - redis-data:/data
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
-    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_PASSWORD:-admin@zzp}
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass admin@zzp
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-admin@zzp}
+      REDIS_PASSWORD: "admin@zzp"
     networks:
       infra:
         ipv4_address: 172.30.0.20
@@ -108,7 +108,7 @@ services:
       ETCD_NAME: shopmicro-etcd
       ETCD_DATA_DIR: /etcd-data
       ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
-      ETCD_ADVERTISE_CLIENT_URLS: http://${ETCD_HOST:-10.211.55.6}:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://shopmicro-etcd:2379
       ETCD_LISTEN_PEER_URLS: http://172.30.0.30:2380
       ETCD_INITIAL_ADVERTISE_PEER_URLS: http://172.30.0.30:2380
       ETCD_INITIAL_CLUSTER: shopmicro-etcd=http://172.30.0.30:2380

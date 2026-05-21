@@ -1,0 +1,24 @@
+server:
+  addr: ":6002"
+
+registryIP: "127.0.0.1"       # 注册到 etcd 的 IP，本地开发填 127.0.0.1
+
+mysql:
+  dsn: "root:changeme@tcp(127.0.0.1:3306)/shop_micro?charset=utf8mb4&parseTime=True&loc=Local"
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: "changeme"
+  db: 0
+
+jwt:
+  secret: "changeme"          # JWT 签名密钥（至少32位随机字符串）
+  refreshSecret: "changeme"   # Refresh Token 密钥
+  expiration: 24              # Token 过期时间（小时）
+  issuer: "shopmicro"
+
+etcd:
+  addrs:
+    - "127.0.0.1:2379"
+
+mode: "dev"                   # dev / staging / prod

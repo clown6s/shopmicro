@@ -123,6 +123,14 @@ func Run(configPath string) error {
 	}
 
 	// =========================
+	// Kitex 注册 IP（必须在创建 server 之前设置）
+	// =========================
+
+	if cfg.RegistryIP != "" {
+		os.Setenv("KITEX_IP_TO_REGISTRY", cfg.RegistryIP)
+	}
+
+	// =========================
 	// kitex 服务端
 	// =========================
 

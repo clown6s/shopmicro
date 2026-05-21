@@ -21,6 +21,9 @@ vendor/
 
 # Environment / secrets
 .env
-# Config (contains passwords - use .env.example instead)
-# Uncomment if you don't want config.yaml in repo:
-# */conf/config.yaml
+# Config (contains passwords/secrets - use config.yaml.example)
+
+gateway/conf/config.yaml
+user/conf/config.yaml
+district/conf/config.yaml
+product/conf/config.yaml

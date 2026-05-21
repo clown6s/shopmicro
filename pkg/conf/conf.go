@@ -2,11 +2,8 @@ package conf
 
 import (
 	"fmt"
-	"log"
 	"os"
-	"path/filepath"
 
-	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,8 +21,8 @@ type Base struct {
 	Mode   string `yaml:"mode"`
 }
 
-// Load 加载配置文件，然后从 .env 文件覆盖敏感字段
-// 优先级: 环境变量 > .env 文件 > config.yaml
+// Load 加载配置文件。
+// 优先级: 环境变量 > config.yaml（环境变量通过各服务 ApplyEnv() 覆盖）
 func Load(path string, cfg interface{}) error {
 	if path == "" {
 		return fmt.Errorf("conf: config path is required")
@@ -42,23 +39,6 @@ func Load(path string, cfg interface{}) error {
 		return err
 	}
 
-	// P1-10: .env 加载是可选的。区分 "文件不存在"（info）和 "解析失败"（warn），
-	// 避免隐藏 .env 文件语法错误。
-	// R4-P2-16: 此处使用标准库 log 而非项目 logger，因为 Load() 通常在 logger.Init() 之前调用。
-	if err := godotenv.Load(); err != nil {
-		if os.IsNotExist(err) {
-			// .env 不存在是正常的（Docker 部署通过环境变量传配置），不打印
-		} else {
-			log.Printf("[conf] .env parse error in working directory: %v", err)
-		}
-	}
-	if err := godotenv.Load(filepath.Join(filepath.Dir(path), ".env")); err != nil {
-		if os.IsNotExist(err) {
-			// .env 不存在是正常的，不打印
-		} else {
-			log.Printf("[conf] .env parse error in config directory: %v", err)
-		}
-	}
 	return nil
 }
 

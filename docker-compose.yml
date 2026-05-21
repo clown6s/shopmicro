@@ -2,12 +2,11 @@
 # 使用方式: docker compose up -d
 # 基础设施需先启动: cd deploy && docker compose up -d
 #
-# 配置: 每个服务读取自己的 .env 文件（env_file），
+# 配置: 各服务配置在 conf/config.yaml 中（本地开发默认值），
 #       environment 仅覆盖容器内网络地址（宿主机IP → 容器名）
 
 name: shopmicro
 
-# 全局时区
 x-timezone: &timezone "Asia/Shanghai"
 
 services:
@@ -17,17 +16,15 @@ services:
       dockerfile: user/Dockerfile
     container_name: shopmicro-user
     restart: unless-stopped
-    env_file:
-      - user/.env
     environment:
       TZ: *timezone
       REDIS_ADDR: "shopmicro-redis:6379"
+      REDIS_PASSWORD: "admin@zzp"
       ETCD_ADDRS: "shopmicro-etcd:2379"
-      MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-admin@zzp}@tcp(shopmicro-mysql:3306)/${MYSQL_DATABASE:-shop_micro}?charset=utf8mb4&parseTime=true&loc=Local"
+      MYSQL_DSN: "root:admin@zzp@tcp(shopmicro-mysql:3306)/shop_micro?charset=utf8mb4&parseTime=true&loc=Local"
+      JWT_SECRET: '4*8#5@7!^i(nj_9876555=+s4x3v9g12m`js0lmb8(-=+-_!`~||\]}mb<.?,.>>,mncukdkieijufonicndknveufw3io'
+      JWT_REFRESH_SECRET: '4*8#5@7!^i(ng5yd963=+s4x3v9g12m`js0lmb8(-=+-_!`~||\]}mb<.?,.>>,nv853srwoxw2#09'
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
-    ports:
-      - "8888:8888"
-      - "8899:8899"
     networks:
       - infra
 
@@ -37,17 +34,13 @@ services:
       dockerfile: district/Dockerfile
     container_name: shopmicro-district
     restart: unless-stopped
-    env_file:
-      - district/.env
     environment:
       TZ: *timezone
       REDIS_ADDR: "shopmicro-redis:6379"
       ETCD_ADDRS: "shopmicro-etcd:2379"
-      MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-admin@zzp}@tcp(shopmicro-mysql:3306)/${MYSQL_DATABASE:-shop_micro}?charset=utf8mb4&parseTime=true&loc=Local"
+      MYSQL_DSN: "root:admin@zzp@tcp(shopmicro-mysql:3306)/shop_micro?charset=utf8mb4&parseTime=true&loc=Local"
+      AMAP_KEY: "2bf43aed63c04f92dad38aaa6da2db50"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
-    ports:
-      - "8900:8888"
-      - "8898:8899"
     networks:
       - infra
 
@@ -57,17 +50,12 @@ services:
       dockerfile: product/Dockerfile
     container_name: shopmicro-product
     restart: unless-stopped
-    env_file:
-      - product/.env
     environment:
       TZ: *timezone
       REDIS_ADDR: "shopmicro-redis:6379"
       ETCD_ADDRS: "shopmicro-etcd:2379"
-      MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-admin@zzp}@tcp(shopmicro-mysql:3306)/${MYSQL_DATABASE:-shop_micro}?charset=utf8mb4&parseTime=true&loc=Local"
+      MYSQL_DSN: "root:admin@zzp@tcp(shopmicro-mysql:3306)/shop_micro?charset=utf8mb4&parseTime=true&loc=Local"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
-    ports:
-      - "8901:8888"
-      - "8897:8897"
     networks:
       - infra
 
@@ -78,15 +66,18 @@ services:
     container_name: shopmicro-gateway
     restart: unless-stopped
     depends_on:
-      - user
-      - district
-      - product
-    env_file:
-      - gateway/.env
+      user:
+        condition: service_healthy
+      district:
+        condition: service_healthy
+      product:
+        condition: service_healthy
     environment:
       TZ: *timezone
       REDIS_ADDR: "shopmicro-redis:6379"
+      REDIS_PASSWORD: "admin@zzp"
       ETCD_ADDRS: "shopmicro-etcd:2379"
+      JWT_SECRET: '4*8#5@7!^i(nj_9876555=+s4x3v9g12m`js0lmb8(-=+-_!`~||\]}mb<.?,.>>,mncukdkieijufonicndknveufw3io'
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     ports:
       - "7000:8080"

@@ -16,6 +16,7 @@ type AMapConfig struct {
 type Config struct {
 	Server     conf.Server  `yaml:"server"`
 	HealthAddr string       `yaml:"healthAddr"`
+	RegistryIP string       `yaml:"registryIP"` // 注册到 etcd 的 IP，为空则 Kitex 自动检测
 	Etcd       conf.Etcd    `yaml:"etcd"`
 	MySQL      mysql.Config `yaml:"mysql"`
 	AMap       AMapConfig   `yaml:"amap"`
@@ -54,6 +55,9 @@ func (c *Config) ApplyEnv() {
 	}
 	if v := conf.Env("AMAP_KEY", ""); v != "" {
 		c.AMap.Key = v
+	}
+	if v := conf.Env("KITEX_IP_TO_REGISTRY", ""); v != "" {
+		c.RegistryIP = v
 	}
 }
 
