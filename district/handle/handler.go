@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"golang.org/x/sync/singleflight"
 
@@ -15,7 +16,8 @@ import (
 // R4-P2-10: 使用 DistrictStore 接口替代具体类型，提升可测试性
 type DistrictServiceImpl struct {
 	store DistrictStore
-	sf    *singleflight.Group // 使用指针，UpdateDistrict 时原子替换清除所有缓存
+	sfMu  sync.RWMutex        // 保护 sf 字段的并发读写
+	sf    *singleflight.Group // 使用指针，UpdateDistrict 时替换清除所有缓存
 }
 
 // R4-P2-10: NewDistrictHandler 接受 DistrictStore 接口
@@ -29,10 +31,25 @@ func NewDistrictHandler(store DistrictStore) (*DistrictServiceImpl, error) {
 	}, nil
 }
 
+// getSF 安全读取当前的 singleflight.Group
+func (s *DistrictServiceImpl) getSF() *singleflight.Group {
+	s.sfMu.RLock()
+	sf := s.sf
+	s.sfMu.RUnlock()
+	return sf
+}
+
+// resetSF 原子替换 singleflight.Group，清除所有查询缓存
+func (s *DistrictServiceImpl) resetSF() {
+	s.sfMu.Lock()
+	s.sf = &singleflight.Group{}
+	s.sfMu.Unlock()
+}
+
 // GetProvinces —— 返回省级行政区列表（扁平，无 children）
 func (s *DistrictServiceImpl) GetProvinces(ctx context.Context, req *v1.GetProvincesReq) (*v1.GetProvincesResp, error) {
 
-	result, err, shared := s.sf.Do("provinces", func() (interface{}, error) {
+	result, err, shared := s.getSF().Do("provinces", func() (interface{}, error) {
 		nodes, err := s.store.GetProvinces(ctx)
 		if err != nil {
 			return nil, err
@@ -63,7 +80,7 @@ func (s *DistrictServiceImpl) GetChildren(ctx context.Context, req *v1.GetChildr
 	}
 
 	code := strconv.FormatUint(uint64(parentAdCode), 10)
-	result, err, shared := s.sf.Do("children:"+code, func() (interface{}, error) {
+	result, err, shared := s.getSF().Do("children:"+code, func() (interface{}, error) {
 		nodes, err := s.store.GetChildrenByParent(ctx, parentAdCode)
 		if err != nil {
 			return nil, err
@@ -99,7 +116,7 @@ func (s *DistrictServiceImpl) UpdateDistrict(ctx context.Context, req *v1.Update
 	}
 	// 数据已更新，替换 singleflight Group 清除所有查询缓存
 	// （包括 "provinces" 和所有 "children:xxx"），下次请求重新从数据库加载
-	s.sf = &singleflight.Group{}
+	s.resetSF()
 	logger.Info("district: singleflight query cache cleared after UpdateDistrict")
 	return &v1.UpdateDistrictResp{}, nil
 }

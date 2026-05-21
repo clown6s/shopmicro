@@ -156,19 +156,75 @@ func (rl *RedisRateLimiter) allowWithConfig(ctx context.Context, key string, now
 // fallbackCounter 是 crypto/rand 失败时的后备计数器
 var fallbackCounter atomic.Uint64
 
+// ipLimiterEntry 封装 rate.Limiter 及其最后访问时间，用于定期淘汰。
+type ipLimiterEntry struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
 // localLimiterPerIP 本地内存限流器（按 IP），用于 GET 公开接口的轻量限流。
 // 使用 sync.Map + golang.org/x/time/rate 实现无锁读。
-var localLimiterPerIP sync.Map // map[string]*rate.Limiter
+// 定期清理长时间未访问的条目，防止攻击者伪造大量 IP 导致 OOM。
+var localLimiterPerIP sync.Map // map[string]*ipLimiterEntry
 
 const localRateLimit = 100000 // 每秒每 IP 100000 次（GET 公开接口，内存限流上限）
 
+const (
+	localLimiterMaxEntries    = 100000 // 最大缓存 IP 数
+	localLimiterTTL           = 10 * time.Minute
+	localLimiterCleanInterval = 5 * time.Minute
+)
+
+func init() {
+	go cleanLocalLimiters()
+}
+
+// cleanLocalLimiters 定期清理过期的 IP 限流器条目。
+func cleanLocalLimiters() {
+	ticker := time.NewTicker(localLimiterCleanInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		expiredAt := now.Add(-localLimiterTTL)
+
+		// 第一遍：统计当前条目数
+		var count int
+		localLimiterPerIP.Range(func(_, _ interface{}) bool {
+			count++
+			return true
+		})
+
+		// 条目数在限制内且没有超限风险，跳过清理
+		if count < localLimiterMaxEntries/2 {
+			continue
+		}
+
+		// 第二遍：清理过期条目
+		localLimiterPerIP.Range(func(key, value interface{}) bool {
+			entry, ok := value.(*ipLimiterEntry)
+			if !ok || entry.lastSeen.Before(expiredAt) {
+				localLimiterPerIP.Delete(key)
+			}
+			return true
+		})
+	}
+}
+
 func getLocalLimiter(ip string) *rate.Limiter {
 	if v, ok := localLimiterPerIP.Load(ip); ok {
-		return v.(*rate.Limiter)
+		if entry, ok := v.(*ipLimiterEntry); ok {
+			entry.lastSeen = time.Now()
+			return entry.limiter
+		}
 	}
 	limiter := rate.NewLimiter(rate.Limit(localRateLimit), localRateLimit)
-	actual, _ := localLimiterPerIP.LoadOrStore(ip, limiter)
-	return actual.(*rate.Limiter)
+	entry := &ipLimiterEntry{limiter: limiter, lastSeen: time.Now()}
+	actual, _ := localLimiterPerIP.LoadOrStore(ip, entry)
+	if actualEntry, ok := actual.(*ipLimiterEntry); ok {
+		actualEntry.lastSeen = time.Now()
+		return actualEntry.limiter
+	}
+	return limiter
 }
 
 // uniqueMember 返回一个限流成员字符串，即使在同一纳秒的并发请求中也能保证唯一。

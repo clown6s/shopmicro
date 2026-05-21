@@ -271,9 +271,30 @@ func (r *testRedisOps) RunScript(_ context.Context, src string, keys []string, a
 	if src == rateLimitScript || src == loginFailIncrScript {
 		return int64(0), nil
 	}
-	// For revoke/refresh token scripts, return 1 (success)
-	if src == revokeTokensScript || src == refreshTokensScript {
+	// For revoke token scripts, return 1 (success)
+	if src == revokeTokensScript {
 		return int64(1), nil
+	}
+	// For refresh token script, simulate successful rotation
+	if src == refreshTokensScript {
+		// Simulate: old RT exists in Redis → GETDEL succeeds → return "ok:AT:RT"
+		// Check if the old RT key has a value in mock data
+		rtKey := ""
+		if len(keys) >= 3 {
+			rtKey = keys[2]
+		}
+		if rtKey != "" {
+			if _, exists := r.data[rtKey]; exists {
+				// Simulate GETDEL: delete old RT and return success
+				delete(r.data, rtKey)
+				// Return fake AT:RT pair
+				return "ok:fakeAccessToken:fakeRefreshToken", nil
+			}
+			// RT key not found in mock data → GETDEL returns nil → simulate RT already consumed
+			return nil, nil
+		}
+		// No rtKey provided, return nil (RT not found)
+		return nil, nil
 	}
 	// Check for script-specific error overrides
 	if err, ok := r.errs[src]; ok {

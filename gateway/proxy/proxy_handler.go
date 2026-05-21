@@ -307,12 +307,11 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 			}
 
 			if int(code) != 0 {
-				httpCode := int(code)
-				if httpCode < 400 || httpCode > 599 {
-					httpCode = http.StatusInternalServerError
-				}
 				msg, _ := m["message"].(string)
-				c.JSON(response.HttpStatus(httpCode), response.R{
+				// 使用统一的 HttpStatus 映射，不直接透传下游 code 为 HTTP 状态码，
+				// 防止下游服务控制网关返回任意 4xx/5xx 状态码。
+				httpCode := response.HttpStatus(int(code))
+				c.JSON(httpCode, response.R{
 					Code:    int(code),
 					Message: msg,
 					Data:    m["data"],

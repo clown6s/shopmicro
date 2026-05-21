@@ -66,6 +66,41 @@ func (g *Generator) Generate(userID int64) (string, error) {
 	return token.SignedString(g.secret)
 }
 
+// Parse 解析并验证 JWT token，返回 Claims。
+// Generator 同时持有签名密钥，因此可以用于解析自己签发的 token。
+func (g *Generator) Parse(tokenStr string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return g.secret, nil
+	})
+	if err != nil {
+		if errors.Is(err, jwt.ErrTokenExpired) {
+			return nil, ErrTokenExpired
+		}
+		return nil, fmt.Errorf("%w: %w", ErrTokenInvalid, err)
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid {
+		return nil, ErrTokenInvalid
+	}
+	if g.issuer != "" && claims.Issuer != g.issuer {
+		return nil, ErrTokenIssuer
+	}
+	if len(g.audience) > 0 {
+		for _, expected := range g.audience {
+			for _, got := range claims.Audience {
+				if got == expected {
+					return claims, nil
+				}
+			}
+		}
+		return nil, ErrTokenAudience
+	}
+	return claims, nil
+}
+
 // Parser JWT 解析器
 type Parser struct {
 	secret   []byte
