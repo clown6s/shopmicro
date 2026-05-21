@@ -12,12 +12,15 @@ RUN apk add --no-cache git
 
 # 复制 go.work 和所有 go.mod
 COPY go.work go.work.sum ./
-COPY gateway/go.mod gateway/go.sum ./
-COPY pkg/go.mod pkg/go.sum ./
+COPY gateway/go.mod gateway/go.sum ./gateway/
+COPY pkg/go.mod pkg/go.sum ./pkg/
 
 # 下载依赖（利用 Docker cache layer）
-RUN cd gateway && go mod download
-RUN cd pkg && go mod download
+WORKDIR /build/gateway
+RUN go mod download
+WORKDIR /build/pkg
+RUN go mod download
+WORKDIR /build
 
 # 复制源码（包括 proto 文件，go work use 已将所有模块纳入工作空间）
 COPY . .

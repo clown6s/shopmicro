@@ -10,14 +10,17 @@ WORKDIR /build
 # 安装构建依赖
 RUN apk add --no-cache git
 
-# 复制 go.work 和所有 go.mod
+# 复制 go.work 和所有 go.mod（注意：COPY src dst，dst 末尾有 / 才是目录）
 COPY go.work go.work.sum ./
-COPY user/go.mod user/go.sum ./
-COPY pkg/go.mod pkg/go.sum ./
+COPY user/go.mod user/go.sum ./user/
+COPY pkg/go.mod pkg/go.sum ./pkg/
 
 # 下载依赖（利用 Docker cache layer）
-RUN cd user && go mod download
-RUN cd pkg && go mod download
+WORKDIR /build/user
+RUN go mod download
+WORKDIR /build/pkg
+RUN go mod download
+WORKDIR /build
 
 # 复制源码
 COPY . .

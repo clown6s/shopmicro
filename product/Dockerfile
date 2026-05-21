@@ -12,12 +12,15 @@ RUN apk add --no-cache git
 
 # 复制 go.work 和所有 go.mod
 COPY go.work go.work.sum ./
-COPY product/go.mod product/go.sum ./
-COPY pkg/go.mod pkg/go.sum ./
+COPY product/go.mod product/go.sum ./product/
+COPY pkg/go.mod pkg/go.sum ./pkg/
 
 # 下载依赖（利用 Docker cache layer）
-RUN cd product && go mod download
-RUN cd pkg && go mod download
+WORKDIR /build/product
+RUN go mod download
+WORKDIR /build/pkg
+RUN go mod download
+WORKDIR /build
 
 # 复制源码
 COPY . .
