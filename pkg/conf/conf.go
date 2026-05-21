@@ -47,14 +47,14 @@ func Load(path string, cfg interface{}) error {
 	// R4-P2-16: 此处使用标准库 log 而非项目 logger，因为 Load() 通常在 logger.Init() 之前调用。
 	if err := godotenv.Load(); err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("[conf] .env not found in working directory (non-fatal)")
+			// .env 不存在是正常的（Docker 部署通过环境变量传配置），不打印
 		} else {
 			log.Printf("[conf] .env parse error in working directory: %v", err)
 		}
 	}
 	if err := godotenv.Load(filepath.Join(filepath.Dir(path), ".env")); err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("[conf] .env not found in config directory (non-fatal)")
+			// .env 不存在是正常的，不打印
 		} else {
 			log.Printf("[conf] .env parse error in config directory: %v", err)
 		}
