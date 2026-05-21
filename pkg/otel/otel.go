@@ -22,11 +22,14 @@ import (
 // endpoint 可通过环境变量 OTEL_EXPORTER_OTLP_ENDPOINT 覆盖
 // 返回 (shutdown 函数, error)，调用方必须检查 error
 func InitTracerWithEndpoint(serviceName, mode, defaultEndpoint string) (func(context.Context) error, error) {
-	// P0-01 修复：支持通过参数传入默认 endpoint
-	endpoint := defaultEndpoint
-	if ep := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); ep != "" {
-		endpoint = ep
+	// 环境变量优先级：OTEL_EXPORTER_OTLP_ENDPOINT=none 表示显式禁用 otel
+	// 空字符串也表示禁用（Docker 部署场景，不部署 collector）
+	envEp := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if envEp == "" || envEp == "none" || envEp == "off" {
+		logger.Info("otel: disabled (OTEL_EXPORTER_OTLP_ENDPOINT not set or empty)")
+		return func(ctx context.Context) error { return nil }, nil
 	}
+	endpoint := envEp
 	// R5-P1-01 修复：在去除前缀前捕获 scheme — gRPC 需要裸 host:port
 	useTLS := strings.HasPrefix(endpoint, "https://")
 	endpoint = strings.TrimPrefix(endpoint, "https://")

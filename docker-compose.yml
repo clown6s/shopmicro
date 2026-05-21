@@ -89,7 +89,7 @@ services:
       ETCD_ADDRS: "shopmicro-etcd:2379"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     ports:
-      - "7000:7000"
+      - "7000:8080"
     networks:
       - infra
 
