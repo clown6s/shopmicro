@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/kitex/pkg/endpoint"
+	"github.com/cloudwego/kitex/pkg/registry"
 	"github.com/cloudwego/kitex/pkg/rpcinfo"
 	"github.com/cloudwego/kitex/pkg/transmeta"
 	server "github.com/cloudwego/kitex/server"
@@ -34,6 +35,7 @@ import (
 	pkghealth "shopmicro/pkg/health"
 	"shopmicro/pkg/jwt"
 	"shopmicro/pkg/logger"
+	"shopmicro/pkg/netutil"
 	"shopmicro/pkg/otel"
 )
 
@@ -106,14 +108,6 @@ func Run(configPath string) error {
 	}
 
 	// =========================
-	// Kitex 注册 IP（必须在创建 server 之前设置）
-	// =========================
-
-	if cfg.RegistryIP != "" {
-		os.Setenv("KITEX_IP_TO_REGISTRY", cfg.RegistryIP)
-	}
-
-	// =========================
 	// kitex 服务端
 	// =========================
 
@@ -161,6 +155,13 @@ func Run(configPath string) error {
 		return next
 	}
 
+	// 获取本机真实 IP 用于服务注册，避免 Kitex 自动检测选到虚拟网卡
+	localIP, err := netutil.GetLocalIP()
+	if err != nil {
+		return fmt.Errorf("get local ip: %w", err)
+	}
+	registryAddr, _ := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", localIP.String(), addr.Port))
+
 	svr := v1.NewServer(
 		districtHandler,
 
@@ -169,6 +170,11 @@ func Run(configPath string) error {
 		}),
 
 		server.WithRegistry(r),
+
+		server.WithRegistryInfo(&registry.Info{
+			Addr:           registryAddr,
+			SkipListenAddr: true,
+		}),
 
 		server.WithServiceAddr(addr),
 

@@ -1,0 +1,11 @@
+server:
+  addr: ":6002"
+
+mysql:
+  dsn: "root:admin@zzp@tcp(10.211.55.5:3306)/shop_micro?charset=utf8mb4&parseTime=True&loc=Local"
+
+etcd:
+  addrs:
+    - "10.211.55.5:2379"
+
+mode: "dev"

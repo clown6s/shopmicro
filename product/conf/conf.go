@@ -11,7 +11,6 @@ import (
 type Config struct {
 	Server     conf.Server  `yaml:"server"`
 	HealthAddr string       `yaml:"healthAddr"`
-	RegistryIP string       `yaml:"registryIP"` // 注册到 etcd 的 IP，为空则 Kitex 自动检测
 	Etcd       conf.Etcd    `yaml:"etcd"`
 	MySQL      mysql.Config `yaml:"mysql"`
 	Mode       string       `yaml:"mode"`
@@ -45,9 +44,6 @@ func (c *Config) ApplyEnv() {
 	}
 	if v := conf.Env("ETCD_ADDRS", ""); v != "" {
 		c.Etcd.Addrs = strings.Split(v, ",")
-	}
-	if v := conf.Env("KITEX_IP_TO_REGISTRY", ""); v != "" {
-		c.RegistryIP = v
 	}
 }
 
