@@ -7,6 +7,9 @@
 
 name: shopmicro
 
+# 全局时区
+x-timezone: &timezone "Asia/Shanghai"
+
 services:
   user:
     build:
@@ -17,7 +20,7 @@ services:
     env_file:
       - user/.env
     environment:
-      # 容器内网络地址覆盖
+      TZ: *timezone
       REDIS_ADDR: "shopmicro-redis:6379"
       ETCD_ADDRS: "shopmicro-etcd:2379"
       MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-admin@zzp}@tcp(shopmicro-mysql:3306)/${MYSQL_DATABASE:-shop_micro}?charset=utf8mb4&parseTime=true&loc=Local"
@@ -37,6 +40,7 @@ services:
     env_file:
       - district/.env
     environment:
+      TZ: *timezone
       REDIS_ADDR: "shopmicro-redis:6379"
       ETCD_ADDRS: "shopmicro-etcd:2379"
       MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-admin@zzp}@tcp(shopmicro-mysql:3306)/${MYSQL_DATABASE:-shop_micro}?charset=utf8mb4&parseTime=true&loc=Local"
@@ -56,6 +60,7 @@ services:
     env_file:
       - product/.env
     environment:
+      TZ: *timezone
       REDIS_ADDR: "shopmicro-redis:6379"
       ETCD_ADDRS: "shopmicro-etcd:2379"
       MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD:-admin@zzp}@tcp(shopmicro-mysql:3306)/${MYSQL_DATABASE:-shop_micro}?charset=utf8mb4&parseTime=true&loc=Local"
@@ -79,6 +84,7 @@ services:
     env_file:
       - gateway/.env
     environment:
+      TZ: *timezone
       REDIS_ADDR: "shopmicro-redis:6379"
       ETCD_ADDRS: "shopmicro-etcd:2379"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
