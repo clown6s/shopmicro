@@ -16,13 +16,18 @@ extensions:
 
   jaeger_storage:
     backends:
-      memory_store:
-        memory:
-          max_traces: 100000
+      badger_store:
+        badger:
+          directories:
+            keys: "/data/jaeger/keys"
+            values: "/data/jaeger/values"
+          ephemeral: false
+          ttl:
+            spans: 168h
 
   jaeger_query:
     storage:
-      traces: memory_store
+      traces: badger_store
     ui:
       config_file: ""
     http:
@@ -43,4 +48,4 @@ processors:
 
 exporters:
   jaeger_storage_exporter:
-    trace_storage: memory_store
+    trace_storage: badger_store
