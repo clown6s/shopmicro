@@ -3,11 +3,12 @@
 # ============================================================
 # 使用: docker compose up -d
 #
-# 启动顺序: MySQL/Redis/etcd/Jaeger → user/district/product → gateway
+# 启动顺序: MySQL/Redis/etcd/Jaeger/Loki → Promtail → user/district/product → gateway → Grafana
 # 注意:
 # 1. 生产环境应修改密码（搜索 admin@zzp 替换为强密码）
 # 2. 生产环境应启用 TLS（见各服务配置文件中的注释）
-# 3. Jaeger UI: http://<host>:16686
+# 3. Grafana: http://<host>:3000 (admin/admin@zzp)
+# 4. Jaeger UI: http://<host>:16686
 # ============================================================
 
 name: shopmicro
@@ -180,6 +181,101 @@ services:
         max-size: "50m"
         max-file: "3"
 
+  loki:
+    image: grafana/loki:2.9.10
+    container_name: shopmicro-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/config.yaml
+    volumes:
+      - ./deploy/loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    environment:
+      TZ: *timezone
+    networks:
+      infra:
+        ipv4_address: 172.30.0.50
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "3"
+
+  promtail:
+    image: grafana/promtail:2.9.10
+    container_name: shopmicro-promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yaml
+    volumes:
+      - ./deploy/promtail/config.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    environment:
+      TZ: *timezone
+    networks:
+      infra:
+        ipv4_address: 172.30.0.51
+    depends_on:
+      loki:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.3"
+        reservations:
+          memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: shopmicro-grafana
+    restart: unless-stopped
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      TZ: *timezone
+      GF_SECURITY_ADMIN_PASSWORD: *password
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "http://localhost:3000"
+    ports:
+      - "3000:3000"
+    networks:
+      infra:
+        ipv4_address: 172.30.0.60
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "3"
+
   # =========================
   # 微服务
   # =========================
@@ -320,3 +416,7 @@ volumes:
     name: shopmicro-etcd-data
   jaeger-data:
     name: shopmicro-jaeger-data
+  loki-data:
+    name: shopmicro-loki-data
+  grafana-data:
+    name: shopmicro-grafana-data

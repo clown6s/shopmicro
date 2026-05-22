@@ -1,0 +1,35 @@
+# Promtail 配置 — 通过 Docker Socket 采集容器日志
+# 文档: https://grafana.com/docs/loki/latest/send-data/promtail/
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://172.30.0.50:3100/loki/api/v1/push
+    backoff_config:
+      min_period: 500ms
+      max_period: 5m
+    max_backoff: 5m
+    batchwait: 1s
+    batchsize: 1048576
+
+scrape_configs:
+  - job_name: shopmicro
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=shopmicro"]
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: 'stream'
+    pipeline_stages:
+      - docker: {}
