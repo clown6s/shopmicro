@@ -12,7 +12,7 @@ service:
 extensions:
   healthcheckv2:
     http:
-      endpoint: 0.0.0.0:16687
+      endpoint: 0.0.0.0:13133
 
   jaeger_storage:
     backends:
