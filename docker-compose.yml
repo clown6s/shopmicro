@@ -258,6 +258,7 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_SERVER_ROOT_URL: "http://localhost:3000"
+      GF_DEFAULT_LANGUAGE: "zh-Hans"
     ports:
       - "3000:3000"
     networks:

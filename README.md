@@ -12,14 +12,38 @@
                              │
                     ┌────────┼────────┐
                  MySQL    Redis    etcd
+                             │
+                    ┌────────┼────────┐
+                  Jaeger    Loki    Grafana
 ```
+
+## 服务列表
 
 | 服务 | 说明 | 框架 | 端口 |
 |------|------|------|------|
-| Gateway | API 网关，JWT 鉴权、限流、熔断 | Hertz | 7000 |
-| User | 用户注册/登录、Token 管理 | Kitex | 6002 |
-| District | 行政区划查询与更新 | Kitex | 6000 |
-| Product | 商品分类管理 | Kitex | 6001 |
+| Gateway | API 网关，JWT 鉴权、限流、熔断、PreGzip 缓存 | Hertz | 7000 |
+| User | 用户注册/登录、Token 管理 | Kitex | 8899 |
+| District | 行政区划查询与更新（高德地图数据源） | Kitex | 8898 |
+| Product | 商品分类管理（三级树形结构） | Kitex | 8897 |
+
+## 基础设施
+
+| 组件 | 版本 | IP | 端口 | 说明 |
+|------|------|-----|------|------|
+| MySQL | 8.4 | 172.30.0.10 | 3306 | 业务数据库 |
+| Redis | 8.6.2 | 172.30.0.20 | 6379 | 缓存 + Token 存储 |
+| etcd | 3.6.9 | 172.30.0.30 | 2379/2380 | 服务发现 |
+| Jaeger | 2.3.0 | 172.30.0.40 | 16686/4317/4318 | 链路追踪（OTLP + Badger） |
+| Loki | 2.9.10 | 172.30.0.50 | 3100 | 日志聚合存储 |
+| Promtail | 2.9.10 | 172.30.0.51 | - | 日志采集（Docker Socket） |
+| Grafana | 11.5.2 | 172.30.0.60 | 3000 | 可视化面板（Loki + Jaeger） |
+
+## 观测平台
+
+- **Grafana**: http://\<host\>:3000（admin / admin@zzp）
+  - Explore → Loki 数据源：查询日志 `{container="shopmicro-gateway"}`
+  - Explore → Jaeger 数据源：链路追踪
+- **Jaeger UI**: http://\<host\>:16686
 
 ## 项目结构
 
@@ -30,9 +54,16 @@ shopmicro/
 ├── district/         # 行政区划服务
 ├── product/          # 商品分类服务
 ├── pkg/              # 公共模块（jwt/logger/mysql/redis/otel/...）
-├── proto/            # Protobuf IDL 文件
-├── scripts/          # SQL 脚本
-├── deploy/           # 生产部署配置（基础设施 docker-compose、MySQL/Redis 配置）
+├── proto/            # Thrift IDL 文件
+├── deploy/           # 部署配置
+│   ├── docker-compose.yml  # 全栈编排（含基础设施）
+│   ├── mysql/        # MySQL 配置
+│   ├── redis/        # Redis 配置
+│   ├── jaeger/       # Jaeger 配置
+│   ├── loki/         # Loki 配置
+│   ├── promtail/     # Promtail 配置
+│   ├── grafana/      # Grafana 数据源配置
+│   └── scripts/      # MySQL 初始化脚本
 ├── docker-compose.yml
 ├── go.work
 └── Makefile
@@ -42,10 +73,20 @@ shopmicro/
 
 - **Go 1.26** / Go Workspace Monorepo
 - **Hertz** HTTP 网关 + **Kitex** gRPC 框架（字节跳动）
+- **Thrift** 接口定义 + Kitex Generic 泛化调用
 - **etcd** 服务发现
-- **MySQL 8** + **Redis 7**
-- **OpenTelemetry** 链路追踪
-- **Protobuf** 接口定义 + Kitex Generic 泛化调用
+- **MySQL 8** + **Redis 8**
+- **OpenTelemetry** → Jaeger 链路追踪（gateway 100% 采样，其他 10%）
+- **Loki + Promtail + Grafana** 日志收集与可视化
+- **PreGzip 缓存**：Gateway 预压缩 + 写操作自动失效
+
+## 缓存策略
+
+| 层级 | 位置 | 机制 | 失效方式 |
+|------|------|------|---------|
+| L1 | 下游服务 | Singleflight 防缓存击穿 | 重启清除 |
+| L2 | Gateway | PreGzip 预压缩缓存（sync.Map） | POST/PUT/DELETE 按服务前缀清缓存 |
+| L3 | Redis | 业务缓存（Token 等） | TTL 过期 |
 
 ## API 格式
 
@@ -64,51 +105,41 @@ Content-Type: application/json
 ### 前置依赖
 
 - Go 1.26+
-- MySQL 8.0
-- Redis 7
-- etcd 3.5
+- MySQL 8.0+
+- Redis 7+
+- etcd 3.5+
 - [kitex](https://github.com/cloudwego/kitex) CLI
 
-### 启动基础设施
+### 一键部署（Docker Compose）
 
 ```bash
-# 方式一：Docker（推荐开发用）
-cd deploy && docker-compose up -d
+# 启动所有基础设施 + 微服务
+docker compose up -d
 
-
-# 单独重新构建并部署某个服务（如 user）
+# 单独重建某个服务
 docker compose up -d --build --no-deps user
-
-# 只重建镜像不启动
-docker compose build user
 
 # 只重启（不重新构建）
 docker compose up -d --no-deps user
-
-# 如果该服务有依赖的服务也重启了，用 --no-deps 阻止
-
-
-# 方式二：本地已安装
-# 确保 MySQL、Redis、etcd 运行中
 ```
 
-### 启动服务
+### 本地开发
 
 ```bash
-# 方式一：Makefile
-make user
-make district
-make product
-make gateway
+# 启动基础设施
+docker compose up -d mysql redis etcd jaeger loki promtail grafana
 
-# 方式二：手动
+# 启动服务（方式一：Makefile）
+make user && make district && make product && make gateway
+
+# 启动服务（方式二：手动）
 cd user && go run . -c conf/config.yaml
 cd district && go run . -c conf/config.yaml
 cd product && go run . -c conf/config.yaml
 cd gateway && go run . -c conf/config.yaml
 ```
 
-### 测试
+## API 测试
 
 ```bash
 # 注册
@@ -130,68 +161,31 @@ curl -X POST http://localhost:7000/api/v1/product/GetCategoryTree \
   -H "Content-Type: application/json" -d '{}'
 ```
 
-## Docker 部署
-
-### 1. 部署基础设施
-
-```bash
-cd deploy
-cp .env.example .env   # 编辑填入密码
-docker-compose up -d
-```
-
-### 2. 构建服务镜像
-
-```bash
-# 在项目根目录执行，build context 为项目根目录
-docker build -t shopmicro-gateway -f gateway/Dockerfile .
-docker build -t shopmicro-user -f user/Dockerfile .
-docker build -t shopmicro-district -f district/Dockerfile .
-docker build -t shopmicro-product -f product/Dockerfile .
-```
-
-### 3. 配置环境变量
-
-在项目根目录创建 `.env`：
-
-```env
-MYSQL_DSN=root:password@tcp(172.30.0.10:3306)/shopmall?charset=utf8mb4&parseTime=true&loc=Local
-REDIS_ADDR=172.30.0.20:6379
-REDIS_PASSWORD=your_redis_password
-ETCD_ADDRS=172.30.0.30:2379
-JWT_SECRET=your-jwt-secret-at-least-64-chars-long
-AMAP_KEY=your-amap-key
-INTERNAL_TOKEN=your-internal-token
-```
-
-### 4. 启动所有服务
-
-```bash
-docker-compose up -d
-```
-
-### 5. 验证
-
-```bash
-curl http://localhost:7000/health
-# → {"status":"ok"}
-
-curl http://localhost:8899/health   # user 健康检查
-curl http://localhost:8898/health   # district 健康检查
-curl http://localhost:8897/health   # product 健康检查
-```
-
 ## 端口规划
 
-| 服务 | 开发端口 | Docker 映射 | 健康检查 |
+| 服务 | 容器端口 | Docker 映射 | 健康检查 |
 |------|---------|------------|---------|
-| Gateway | :8080 | 7000:7000 | `/health` `/ready` |
-| User | :6002 | 8888:8888 | :8899/health |
-| District | :6000 | 8900:8888 | :8898/health |
-| Product | :6001 | 8901:8888 | :8897/health |
-| MySQL | 3306 | 3306 | - |
-| Redis | 6379 | 6379 | - |
-| etcd | 2379 | 2379 | - |
+| Gateway | 7000 | 7000:7000 | /health |
+| User | 8899 | - | :8899/health |
+| District | 8898 | - | :8898/health |
+| Product | 8897 | - | :8897/health |
+| MySQL | 3306 | 3306:3306 | mysqladmin ping |
+| Redis | 6379 | 6379:6379 | redis-cli ping |
+| etcd | 2379 | 2379:2379 | etcdctl endpoint health |
+| Jaeger | 16686/4317/4318 | 16686/4317/4318 | healthcheckv2 :13133 |
+| Loki | 3100 | 3100:3100 | /ready |
+| Grafana | 3000 | 3000:3000 | - |
+
+## 持久化卷
+
+| 卷名 | 容器挂载点 | 说明 |
+|------|-----------|------|
+| shopmicro-mysql-data | /var/lib/mysql | MySQL 数据 |
+| shopmicro-redis-data | /data | Redis 持久化 |
+| shopmicro-etcd-data | /etcd-data | etcd 数据 |
+| shopmicro-jaeger-data | /tmp/jaeger | Jaeger Badger 追踪数据 |
+| shopmicro-loki-data | /loki | Loki 日志存储 |
+| shopmicro-grafana-data | /var/lib/grafana | Grafana 面板/配置 |
 
 ## Make 命令
 
