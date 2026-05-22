@@ -147,6 +147,7 @@ services:
     image: jaegertracing/jaeger:2.3.0
     container_name: shopmicro-jaeger
     restart: unless-stopped
+    user: "0:0"
     command: --config=/etc/jaeger/config.yaml
     volumes:
       - ./deploy/jaeger/config.yaml:/etc/jaeger/config.yaml:ro
