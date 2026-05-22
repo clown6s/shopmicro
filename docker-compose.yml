@@ -162,7 +162,7 @@ services:
       infra:
         ipv4_address: 172.30.0.40
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:13133/status"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:13133/"]
       interval: 10s
       timeout: 5s
       retries: 5
