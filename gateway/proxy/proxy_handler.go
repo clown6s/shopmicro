@@ -167,8 +167,15 @@ func (p *Proxy) Handler() app.HandlerFunc {
 
 		resp, err := p.Call(ctx, service, method, body, callOpts...)
 
-		// Pre-gzip 缓存回填
+		// Pre-gzip 缓存回填（仅 GET）
 		if err == nil {
+			// 写操作成功后，清除该 service 的 preGzip 缓存
+			if reqMethod == http.MethodPost || reqMethod == http.MethodPut || reqMethod == http.MethodDelete {
+				if n := InvalidatePreGzipByService(service); n > 0 {
+					logger.Infof("preGzip cache invalidated after write (service=%s method=%s cleared=%d)", service, method, n)
+				}
+			}
+
 			if p.tryPreGzipCache(c, service, method, resp) {
 				return
 			}

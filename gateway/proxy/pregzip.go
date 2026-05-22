@@ -236,6 +236,47 @@ func servePreGzip(c *app.RequestContext, gzipped []byte) {
 	c.Abort()
 }
 
+// InvalidatePreGzipByService 按 service 前缀批量清除 preGzip 缓存。
+// 当下游服务数据变更（写操作成功）后调用，确保 Gateway 缓存与数据源一致。
+// 返回清除的缓存条目数。
+func InvalidatePreGzipByService(service string) int {
+	prefix := "pregzip:" + service + "/"
+	var deletedKeys []string
+	preGzipCache.Range(func(key, _ interface{}) bool {
+		keyStr, ok := key.(string)
+		if !ok {
+			return true
+		}
+		if strings.HasPrefix(keyStr, prefix) {
+			if _, deleted := preGzipCache.LoadAndDelete(keyStr); deleted {
+				deletedKeys = append(deletedKeys, keyStr)
+			}
+		}
+		return true
+	})
+	if len(deletedKeys) == 0 {
+		return 0
+	}
+	preGzipCount.Add(-int64(len(deletedKeys)))
+
+	// 从 FIFO 顺序列表中移除已删除的 key
+	deletedSet := make(map[string]struct{}, len(deletedKeys))
+	for _, k := range deletedKeys {
+		deletedSet[k] = struct{}{}
+	}
+	preGzipOrderMu.Lock()
+	filtered := make([]string, 0, len(preGzipOrder))
+	for _, k := range preGzipOrder {
+		if _, ok := deletedSet[k]; !ok {
+			filtered = append(filtered, k)
+		}
+	}
+	preGzipOrder = filtered
+	preGzipOrderMu.Unlock()
+
+	return len(deletedKeys)
+}
+
 // PreGzipCacheMiddleware 返回一个轻量中间件，在所有业务中间件之前
 // 检查 pre-gzip 缓存。命中时直接响应并 Abort，跳过后续所有中间件。
 // 仅对 GET 请求生效。
