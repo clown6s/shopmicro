@@ -1,8 +1,8 @@
-# Jaeger 2 配置 — 适配 shopmicro 微服务架构
+# Jaeger 2 配置 — shopmicro 微服务架构
 # 文档: https://www.jaegertracing.io/docs/v2/configure/
 
 service:
-  extensions: [healthcheckv2, storage]
+  extensions: [jaeger_storage, jaeger_query, healthcheckv2]
   pipelines:
     traces:
       receivers: [otlp]
@@ -11,12 +11,26 @@ service:
 
 extensions:
   healthcheckv2:
-    endpoint: 0.0.0.0:16687
+    http:
+      endpoint: 0.0.0.0:16687
 
-  storage:
-    type: badger          # 内嵌存储，零依赖，适合开发/测试
-    directory: /tmp/jaeger
-    trace_ttl: 168h      # trace 保留 7 天
+  jaeger_storage:
+    backends:
+      badger_store:
+        badger:
+          directory_spm: /tmp/jaeger/badger/spm
+          directory_trace: /tmp/jaeger/badger/traces
+          mmap: false
+          log_level: info
+          gc_interval: 5m
+
+  jaeger_query:
+    storage:
+      traces: badger_store
+    ui:
+      config_file: ""
+    http:
+      endpoint: 0.0.0.0:16686
 
 receivers:
   otlp:
@@ -33,11 +47,4 @@ processors:
 
 exporters:
   jaeger_storage_exporter:
-    storage:
-      type: badger
-
-connectors:
-
-components:
-  pprof:
-    endpoint: 0.0.0.0:1888
+    trace_storage: badger_store
