@@ -13,7 +13,6 @@ clients:
     backoff_config:
       min_period: 500ms
       max_period: 5m
-    max_backoff: 5m
     batchwait: 1s
     batchsize: 1048576
 
