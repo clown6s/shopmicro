@@ -26,7 +26,7 @@ mode: "dev"
 
 otel:
   endpoint: "http://10.211.55.5:4317"
-  sampleRate: 0
+  sampleRate: 1.0
 
 rateLimit:
   limit: 1000000
