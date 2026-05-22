@@ -19,8 +19,8 @@ extensions:
       badger_store:
         badger:
           directories:
-            keys: "/data/jaeger/keys"
-            values: "/data/jaeger/values"
+            keys: "/tmp/jaeger/keys"
+            values: "/tmp/jaeger/values"
           ephemeral: false
           ttl:
             spans: 168h
