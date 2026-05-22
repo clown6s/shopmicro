@@ -16,17 +16,13 @@ extensions:
 
   jaeger_storage:
     backends:
-      badger_store:
-        badger:
-          directory_spm: /tmp/jaeger/badger/spm
-          directory_trace: /tmp/jaeger/badger/traces
-          mmap: false
-          log_level: info
-          gc_interval: 5m
+      memory_store:
+        memory:
+          max_traces: 100000
 
   jaeger_query:
     storage:
-      traces: badger_store
+      traces: memory_store
     ui:
       config_file: ""
     http:
@@ -47,4 +43,4 @@ processors:
 
 exporters:
   jaeger_storage_exporter:
-    trace_storage: badger_store
+    trace_storage: memory_store

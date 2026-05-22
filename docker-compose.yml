@@ -150,7 +150,6 @@ services:
     command: --config=/etc/jaeger/config.yaml
     volumes:
       - ./deploy/jaeger/config.yaml:/etc/jaeger/config.yaml:ro
-      - jaeger-data:/tmp/jaeger
     ports:
       - "16686:16686"   # Jaeger UI
       - "4317:4317"     # OTLP gRPC
