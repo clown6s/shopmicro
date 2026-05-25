@@ -41,9 +41,10 @@ var methodNameRegex = regexp.MustCompile(`^[A-Za-z][a-zA-Z0-9]*$`)
 var serviceRegex = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
 
 type ServiceClient struct {
-	Client  genericclient.Client
-	Generic generic.Generic
-	svcDesc *dproto.ServiceDescriptor
+	Client   genericclient.Client
+	Generic  generic.Generic
+	Provider generic.PbDescriptorProviderDynamicGo // 保存 provider 以便服务注销时关闭（内嵌 Closer）
+	svcDesc  *dproto.ServiceDescriptor
 }
 
 type Proxy struct {
@@ -312,9 +313,10 @@ func (p *Proxy) registerService(
 	}
 
 	p.clients[serviceName] = &ServiceClient{
-		Client:  cli,
-		Generic: g,
-		svcDesc: svcDesc,
+		Client:   cli,
+		Generic:  g,
+		Provider: provider,
+		svcDesc:  svcDesc,
 	}
 	p.instanceKeys[serviceName] = make(map[string]bool)
 

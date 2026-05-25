@@ -194,7 +194,7 @@ func (d *CategoryDal) DeleteCategory(ctx context.Context, catId int64) error {
 
 	const query = `
 		UPDATE category
-		SET deleted_at = NOW()
+		SET deleted_at = UTC_TIMESTAMP()
 		WHERE deleted_at IS NULL
 		  AND (
 		      cat_id = ?

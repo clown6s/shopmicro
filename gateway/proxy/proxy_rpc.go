@@ -37,9 +37,18 @@ func (p *Proxy) Call(
 	var lastErr error
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// 每次重试创建独立的超时 context，避免前一次耗时过长导致后续重试无有效时间
+		var perCtx context.Context
+		var perCancel context.CancelFunc
+		if deadline, ok := ctx.Deadline(); ok {
+			perCtx, perCancel = context.WithDeadline(ctx, deadline)
+		} else {
+			perCtx, perCancel = context.WithCancel(ctx)
+		}
+
 		// 每次重试独立通过熔断器，确保熔断状态变更能被及时感知。
 		rpcFn := func() (interface{}, error) {
-			return cli.Client.GenericCall(ctx, method, req, callOpts...)
+			return cli.Client.GenericCall(perCtx, method, req, callOpts...)
 		}
 
 		var resp interface{}
@@ -49,6 +58,7 @@ func (p *Proxy) Call(
 		} else {
 			resp, err = rpcFn()
 		}
+		perCancel()
 
 		if err == nil {
 			return resp, nil

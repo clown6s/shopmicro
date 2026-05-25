@@ -3,6 +3,7 @@ package data
 import (
 	"database/sql"
 
+	"shopmicro/pkg/logger"
 	"shopmicro/pkg/mysql"
 	"shopmicro/pkg/redis"
 )
@@ -29,7 +30,13 @@ func New(cfg mysql.Config, redisCfg redis.Config) (*Data, func(), error) {
 	}
 
 	cleanup := func() {
-		// 先关闭 Redis：关闭期间可能需要 Redis 撤销 token
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("cleanup panic during shutdown (recovered): %v", r)
+			}
+		}()
+		// 先关 Redis 再关 DB：DB 是更关键的数据层资源，应最后关闭。
+		// 避免优雅关闭期间 in-flight 请求因 Redis 可用但 DB 已关闭而操作失败。
 		redisCleanup()
 		dbCleanup()
 	}

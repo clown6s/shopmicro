@@ -284,6 +284,9 @@ func main() {
 	flag.Parse()
 
 	if err := Run(*configPath); err != nil {
+		if logger.IsInitialized() {
+			logger.Fatalf("run district service failed: %v", err)
+		}
 		log.Fatalf("run district service failed: %v", err)
 	}
 }

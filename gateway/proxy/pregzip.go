@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -29,12 +28,11 @@ type preGzipEntry struct {
 // preGzipCache 全局预压缩缓存（sync.Map：读多写少，无锁读）。
 var preGzipCache sync.Map
 
-// 缓存条目计数，用于限制总缓存数量防止内存耗尽
-var preGzipCount atomic.Int64
-
-// preGzipOrder 记录缓存 key 的插入顺序，用于 FIFO 淘汰
+// R2-P1-03: 统一写锁，保护 preGzipOrder、preGzipCount 以及所有写操作，
+// 消除 sync.Map + atomic + Mutex 混用导致的 count/order 与 cache 不一致窗口。
+var preGzipMu sync.Mutex
 var preGzipOrder []string
-var preGzipOrderMu sync.Mutex
+var preGzipCount int64
 
 // preGzipStop 用于优雅停止清理 goroutine
 var preGzipStop chan struct{}
@@ -81,16 +79,24 @@ func StopPreGzipCleaner() {
 }
 
 // cleanPreGzipCache 遍历缓存并删除过期条目。
-// 由于 sync.Map 没有 Range + Delete 的原子操作，
-// 使用 Range 收集过期 key 后再逐个删除。
+// R2-P1-03: 在 preGzipMu 锁内执行，确保 cache/order/count 一致性。
 func cleanPreGzipCache() {
+	preGzipMu.Lock()
+	defer preGzipMu.Unlock()
+	cleanPreGzipCacheLocked()
+}
+
+// cleanPreGzipCacheLocked 删除过期条目，调用方必须持有 preGzipMu。
+func cleanPreGzipCacheLocked() {
 	now := time.Now()
 	var expiredKeys []string
 	preGzipCache.Range(func(key, value interface{}) bool {
-		// P2-02: 类型断言加 comma-ok，防止意外类型导致 panic
 		entry, ok := value.(*preGzipEntry)
 		if !ok {
-			preGzipCache.Delete(key) // 清除非法条目
+			keyStr, _ := key.(string)
+			if keyStr != "" {
+				expiredKeys = append(expiredKeys, keyStr)
+			}
 			return true
 		}
 		if now.After(entry.expiry) {
@@ -102,17 +108,13 @@ func cleanPreGzipCache() {
 		return true
 	})
 	for _, k := range expiredKeys {
-		if _, deleted := preGzipCache.LoadAndDelete(k); deleted {
-			preGzipCount.Add(-1)
-		}
+		preGzipCache.Delete(k)
 	}
-	// 从 FIFO 顺序列表中移除过期 key
 	if len(expiredKeys) > 0 {
 		expiredSet := make(map[string]struct{}, len(expiredKeys))
 		for _, k := range expiredKeys {
 			expiredSet[k] = struct{}{}
 		}
-		preGzipOrderMu.Lock()
 		filtered := make([]string, 0, len(preGzipOrder)-len(expiredSet))
 		for _, k := range preGzipOrder {
 			if _, ok := expiredSet[k]; !ok {
@@ -120,7 +122,7 @@ func cleanPreGzipCache() {
 			}
 		}
 		preGzipOrder = filtered
-		preGzipOrderMu.Unlock()
+		preGzipCount -= int64(len(expiredKeys))
 	}
 }
 
@@ -157,63 +159,53 @@ func preGzipCacheKey(service, method string, queryString []byte) string {
 	return key
 }
 
-// getPreGzip 读取预压缩缓存。过期条目被惰性删除。
+// getPreGzip 读取预压缩缓存。
+// R2-P1-03: 过期条目仅返回 miss，不执行惰性删除（由定期 cleaner 统一处理），
+// 保持读路径完全无锁，避免写操作争用。
 func getPreGzip(key string) ([]byte, bool) {
 	val, ok := preGzipCache.Load(key)
 	if !ok {
 		return nil, false
 	}
-	// R4-P2-01: 类型断言加 comma-ok，防止意外类型导致 panic
 	entry, ok := val.(*preGzipEntry)
 	if !ok {
-		preGzipCache.Delete(key)
 		return nil, false
 	}
 	if time.Now().After(entry.expiry) {
-		if _, deleted := preGzipCache.LoadAndDelete(key); deleted {
-			preGzipCount.Add(-1)
-		}
 		return nil, false
 	}
 	return entry.data, true
 }
 
 // setPreGzip 写入预压缩缓存。
-// 超过 preGzipMaxEntries 时不写入新条目，防止内存耗尽。
-// R5-P1-01: 使用 LoadOrStore 原子检查，仅在新 key 时递增计数器，
-// 防止并发写入相同 key 时计数器永久膨胀导致缓存失效。
+// R2-P1-03: 整个写操作（LoadOrStore + order 追加 + count 递增 + 淘汰）
+// 在 preGzipMu 锁内完成，消除 count/order 与 cache 的不一致窗口。
+// 读路径（getPreGzip）保持无锁，不受影响。
 func setPreGzip(key string, data []byte) {
 	entry := &preGzipEntry{
 		data:   data,
 		expiry: time.Now().Add(preGzipCfg.ttl),
 	}
+	preGzipMu.Lock()
+	defer preGzipMu.Unlock()
+
 	if _, loaded := preGzipCache.LoadOrStore(key, entry); loaded {
 		return // 已存在，不重复写入也不递增计数器
 	}
-	newCount := preGzipCount.Add(1)
-	preGzipOrderMu.Lock()
 	preGzipOrder = append(preGzipOrder, key)
-	preGzipOrderMu.Unlock()
+	preGzipCount++
 
-	// 并发写入可能短暂超过上限，触发清理和 FIFO 淘汰
-	if newCount > preGzipCfg.maxEntries {
-		cleanPreGzipCache()
-		// 清理过期条目后仍超过上限，FIFO 淘汰最旧的条目
-		for preGzipCount.Load() > preGzipCfg.maxEntries {
-			preGzipOrderMu.Lock()
-			var oldest string
-			if len(preGzipOrder) > 0 {
-				oldest = preGzipOrder[0]
-				// 创建新 slice 而非复用底层数组，避免内存泄漏
-				preGzipOrder = append([]string(nil), preGzipOrder[1:]...)
-			}
-			preGzipOrderMu.Unlock()
-			if oldest == "" {
-				break
-			}
-			if _, deleted := preGzipCache.LoadAndDelete(oldest); deleted {
-				preGzipCount.Add(-1)
-			}
+	if preGzipCount > preGzipCfg.maxEntries {
+		// 先清理过期条目
+		cleanPreGzipCacheLocked()
+		// 清理后仍超过上限，FIFO 淘汰最旧的条目
+		for preGzipCount > preGzipCfg.maxEntries && len(preGzipOrder) > 0 {
+			oldest := preGzipOrder[0]
+			copy(preGzipOrder, preGzipOrder[1:])
+			preGzipOrder[len(preGzipOrder)-1] = ""
+			preGzipOrder = preGzipOrder[:len(preGzipOrder)-1]
+			preGzipCache.Delete(oldest)
+			preGzipCount--
 		}
 	}
 }
@@ -237,10 +229,12 @@ func servePreGzip(c *app.RequestContext, gzipped []byte) {
 }
 
 // InvalidatePreGzipByService 按 service 前缀批量清除 preGzip 缓存。
-// 当下游服务数据变更（写操作成功）后调用，确保 Gateway 缓存与数据源一致。
-// 返回清除的缓存条目数。
+// R2-P1-03: 在 preGzipMu 锁内执行，确保 cache/order/count 一致性。
 func InvalidatePreGzipByService(service string) int {
 	prefix := "pregzip:" + service + "/"
+	preGzipMu.Lock()
+	defer preGzipMu.Unlock()
+
 	var deletedKeys []string
 	preGzipCache.Range(func(key, _ interface{}) bool {
 		keyStr, ok := key.(string)
@@ -248,23 +242,20 @@ func InvalidatePreGzipByService(service string) int {
 			return true
 		}
 		if strings.HasPrefix(keyStr, prefix) {
-			if _, deleted := preGzipCache.LoadAndDelete(keyStr); deleted {
-				deletedKeys = append(deletedKeys, keyStr)
-			}
+			preGzipCache.Delete(keyStr)
+			deletedKeys = append(deletedKeys, keyStr)
 		}
 		return true
 	})
 	if len(deletedKeys) == 0 {
 		return 0
 	}
-	preGzipCount.Add(-int64(len(deletedKeys)))
+	preGzipCount -= int64(len(deletedKeys))
 
-	// 从 FIFO 顺序列表中移除已删除的 key
 	deletedSet := make(map[string]struct{}, len(deletedKeys))
 	for _, k := range deletedKeys {
 		deletedSet[k] = struct{}{}
 	}
-	preGzipOrderMu.Lock()
 	filtered := make([]string, 0, len(preGzipOrder))
 	for _, k := range preGzipOrder {
 		if _, ok := deletedSet[k]; !ok {
@@ -272,7 +263,6 @@ func InvalidatePreGzipByService(service string) int {
 		}
 	}
 	preGzipOrder = filtered
-	preGzipOrderMu.Unlock()
 
 	return len(deletedKeys)
 }

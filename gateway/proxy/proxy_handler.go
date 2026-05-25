@@ -286,7 +286,8 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 			return
 		}
 		errMsg := err.Error()
-		// 请求体序列化错误
+		// 请求体序列化错误（Kitex 泛化调用无法返回类型化 error，只能靠错误消息匹配）
+		// TODO: 升级 Kitex 版本后检查是否有导出的 sentinel error 替代字符串匹配
 		if strings.Contains(errMsg, "json convert to protobuf failed") ||
 			strings.Contains(errMsg, "marshal message failed") ||
 			strings.Contains(errMsg, "failed to unmarshal") ||
@@ -346,6 +347,8 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 		return
 	}
 
-	response.OK(c, resp)
+	// 默认返回：resp 类型非 string（Kitex 版本变化时可能发生）
+	logger.Warnf("rpc resp unexpected type: service=%s method=%s type=%T", service, method, resp)
+	response.Fail(c, http.StatusInternalServerError, int(errcode.CodeGwServer), "internal server error")
 	c.Abort()
 }

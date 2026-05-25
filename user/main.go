@@ -181,7 +181,8 @@ func Run(configPath string) error {
 		),
 
 		// P1-02：Panic 恢复 — 防止 handler panic 导致进程崩溃
-		server.WithMiddleware(panicRecoveryMiddleware),
+		// R2-P1-04：生产环境不记录完整堆栈，避免内部架构信息泄露
+		server.WithMiddleware(newPanicRecoveryMiddleware(cfg.Mode)),
 	)
 
 	// =========================
@@ -278,16 +279,24 @@ func isKitexStopped(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
-// panicRecoveryMiddleware 捕获 kitex handler panic，防止 panic 导致进程崩溃。
-func panicRecoveryMiddleware(next endpoint.Endpoint) endpoint.Endpoint {
-	return func(ctx context.Context, req, resp interface{}) (err error) {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Errorf("kitex panic recovered: %v\n%s", r, debug.Stack())
-				err = fmt.Errorf("internal error: panic recovered")
-			}
-		}()
-		return next(ctx, req, resp)
+// newPanicRecoveryMiddleware 捕获 kitex handler panic，防止 panic 导致进程崩溃。
+// R2-P1-04：生产环境不记录完整堆栈，仅记录 panic 值。
+func newPanicRecoveryMiddleware(mode string) endpoint.Middleware {
+	isProd := mode == "prod"
+	return func(next endpoint.Endpoint) endpoint.Endpoint {
+		return func(ctx context.Context, req, resp interface{}) (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					if isProd {
+						logger.Errorf("kitex panic recovered: %v", r)
+					} else {
+						logger.Errorf("kitex panic recovered: %v\n%s", r, debug.Stack())
+					}
+					err = fmt.Errorf("internal error: panic recovered")
+				}
+			}()
+			return next(ctx, req, resp)
+		}
 	}
 }
 
@@ -302,7 +311,9 @@ func main() {
 	flag.Parse()
 
 	if err := Run(*configPath); err != nil {
-		// 日志可能尚未初始化（例如配置加载/校验失败）
+		if logger.IsInitialized() {
+			logger.Fatalf("run user service failed: %v", err)
+		}
 		log.Fatalf("run user service failed: %v", err)
 	}
 }

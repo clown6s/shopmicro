@@ -74,7 +74,7 @@ func TestSetGetPreGzip(t *testing.T) {
 
 	// 确保计数从0开始
 	preGzipCache.Clear()
-	preGzipCount.Store(0)
+	preGzipCount = 0
 
 	setPreGzip("test:svc/Method", []byte("compressed-data"))
 
@@ -97,7 +97,7 @@ func TestGetPreGzip_Expired(t *testing.T) {
 	preGzipCfg.maxKeyLen = 256
 
 	preGzipCache.Clear()
-	preGzipCount.Store(0)
+	preGzipCount = 0
 
 	setPreGzip("test:svc/Expired", []byte("data"))
 
@@ -115,14 +115,14 @@ func TestSetPreGzip_Dedup(t *testing.T) {
 	preGzipCfg.maxKeyLen = 256
 
 	preGzipCache.Clear()
-	preGzipCount.Store(0)
+	preGzipCount = 0
 
 	// 写入同一个 key 两次，计数应只加1
 	setPreGzip("test:svc/Dedup", []byte("v1"))
 	setPreGzip("test:svc/Dedup", []byte("v2"))
 
-	if preGzipCount.Load() != 1 {
-		t.Errorf("count = %d, want 1 (dedup)", preGzipCount.Load())
+	if preGzipCount != 1 {
+		t.Errorf("count = %d, want 1 (dedup)", preGzipCount)
 	}
 	// 第一次写入的值应保留
 	data, ok := getPreGzip("test:svc/Dedup")
@@ -137,19 +137,19 @@ func TestCleanPreGzipCache(t *testing.T) {
 	preGzipCfg.maxKeyLen = 256
 
 	preGzipCache.Clear()
-	preGzipCount.Store(0)
+	preGzipCount = 0
 
 	// 写入一个即将过期的条目
 	preGzipCache.Store("test:svc/Old", &preGzipEntry{
 		data:   []byte("old"),
 		expiry: time.Now().Add(-1 * time.Second), // 已过期
 	})
-	preGzipCount.Store(1)
+	preGzipCount = 1
 
 	cleanPreGzipCache()
 
-	if preGzipCount.Load() != 0 {
-		t.Errorf("count after cleanup = %d, want 0", preGzipCount.Load())
+	if preGzipCount != 0 {
+		t.Errorf("count after cleanup = %d, want 0", preGzipCount)
 	}
 }
 

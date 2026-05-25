@@ -49,6 +49,12 @@ func (s *ProductServiceImpl) CreateCategory(ctx context.Context, req *v1.CreateC
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
+	if len(name) > 64 {
+		return nil, fmt.Errorf("name too long (max 64 chars, got %d)", len(name))
+	}
+	if len(req.GetIcon()) > 512 {
+		return nil, fmt.Errorf("icon too long (max 512 chars, got %d)", len(req.GetIcon()))
+	}
 
 	catId, err := s.store.CreateCategory(ctx, name, req.GetParentCid(), req.GetShowStatus(), req.GetSort(), req.GetIcon())
 	if err != nil {
@@ -91,6 +97,12 @@ func (s *ProductServiceImpl) UpdateCategory(ctx context.Context, req *v1.UpdateC
 	catId := req.GetCatId()
 	if catId == 0 {
 		return nil, fmt.Errorf("cat_id is required")
+	}
+	if req.GetName() != "" && len(req.GetName()) > 64 {
+		return nil, fmt.Errorf("name too long (max 64 chars, got %d)", len(req.GetName()))
+	}
+	if req.GetIcon() != "" && len(req.GetIcon()) > 512 {
+		return nil, fmt.Errorf("icon too long (max 512 chars, got %d)", len(req.GetIcon()))
 	}
 
 	if err := s.store.UpdateCategory(ctx, catId, req.GetName(), req.GetShowStatus(), req.GetSort(), req.GetIcon()); err != nil {

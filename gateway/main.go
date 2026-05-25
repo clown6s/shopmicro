@@ -328,6 +328,9 @@ func main() {
 	flag.Parse()
 
 	if err := Run(*configPath); err != nil {
+		if logger.IsInitialized() {
+			logger.Fatalf("gateway run failed: %v", err)
+		}
 		log.Fatalf("gateway run failed: %v", err)
 	}
 }

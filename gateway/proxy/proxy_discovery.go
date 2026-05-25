@@ -31,7 +31,7 @@ func (p *Proxy) DiscoverAndRegister(
 	}
 	defer etcdClient.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	prefix := etcdRegistryPrefix + "/"
@@ -210,6 +210,11 @@ func (p *Proxy) watchOnce(
 						if err := sc.Generic.Close(); err != nil {
 							logger.Warnf("WatchServices: close generic for %s: %v", svcName, err)
 						}
+						if sc.Provider != nil {
+							if err := sc.Provider.Close(); err != nil {
+								logger.Warnf("WatchServices: close provider for %s: %v", svcName, err)
+							}
+						}
 						if err := sc.Client.Close(); err != nil {
 							logger.Warnf("WatchServices: close client for %s: %v", svcName, err)
 						}
@@ -224,6 +229,10 @@ func (p *Proxy) watchOnce(
 		}
 	}
 
+	// 区分 ctx 取消（正常关闭）和连接断开（异常关闭）
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return errWatchClosed
 }
 

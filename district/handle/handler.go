@@ -15,9 +15,10 @@ import (
 // DistrictServiceImpl 行政区划服务实现
 // R4-P2-10: 使用 DistrictStore 接口替代具体类型，提升可测试性
 type DistrictServiceImpl struct {
-	store DistrictStore
-	sfMu  sync.RWMutex        // 保护 sf 字段的并发读写
-	sf    *singleflight.Group // 使用指针，UpdateDistrict 时替换清除所有缓存
+	store    DistrictStore
+	sfMu     sync.RWMutex        // 保护 sf 字段的并发读写
+	sf       *singleflight.Group // 使用指针，UpdateDistrict 时替换清除所有缓存
+	updateMu sync.Mutex          // 序列化全量更新操作，防止 singleflight 吞请求
 }
 
 // R4-P2-10: NewDistrictHandler 接受 DistrictStore 接口
@@ -103,17 +104,15 @@ func (s *DistrictServiceImpl) GetChildren(ctx context.Context, req *v1.GetChildr
 }
 
 // UpdateDistrict 从高德地图拉取行政区划数据，全量替换数据库。
-// R4-P2-11: 使用 singleflight 防止并发全量替换导致锁竞争或数据不一致
+// 使用 mutex 序列化全量更新，避免 singleflight 吞掉重复请求。
 func (s *DistrictServiceImpl) UpdateDistrict(ctx context.Context, req *v1.UpdateDistrictReq) (*v1.UpdateDistrictResp, error) {
-	_, err, shared := s.getSF().Do("update-district", func() (interface{}, error) {
-		return nil, s.store.UpdateDistrict(ctx)
-	})
-	if shared {
-		logger.Infof("district: UpdateDistrict request coalesced by singleflight (duplicate update suppressed)")
-	}
-	if err != nil {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+
+	if err := s.store.UpdateDistrict(ctx); err != nil {
 		return nil, err
 	}
+
 	// 数据已更新，替换 singleflight Group 清除所有查询缓存
 	// （包括 "provinces" 和所有 "children:xxx"），下次请求重新从数据库加载
 	s.resetSF()

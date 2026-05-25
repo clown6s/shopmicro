@@ -124,7 +124,10 @@ func Init(mode string) error {
 	return nil
 }
 
-// R6-P2-07: 使用 atomic.Pointer.Load 替代裸指针读取，并发安全
+// IsInitialized reports whether the logger has been successfully initialized.
+func IsInitialized() bool { return initialized.Load() }
+
+// C R6-P2-07: 使用 atomic.Pointer.Load 替代裸指针读取，并发安全
 func C() *zap.SugaredLogger {
 	if l := logPtr.Load(); l != nil {
 		return l
