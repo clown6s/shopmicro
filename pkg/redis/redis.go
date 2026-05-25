@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -84,6 +85,29 @@ func New(cfg Config) (*Client, func(), error) {
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		_ = rdb.Close() // P2-19: ping 失败时关闭客户端以防止泄漏
 		return nil, nil, err
+	}
+
+	// 优雅等待 Redis 就绪：容器环境下 Redis 可能尚未完全启动，
+	// 指数退避重试最多 30 秒，避免进程反复 crash loop。
+	deadline := time.Now().Add(30 * time.Second)
+	interval := 1 * time.Second
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		lastErr = rdb.Ping(ctx).Err()
+		cancel()
+		if lastErr == nil {
+			break
+		}
+		log.Printf("redis not ready, retrying in %v: %v", interval, lastErr)
+		time.Sleep(interval)
+		if interval < 5*time.Second {
+			interval *= 2
+		}
+	}
+	if lastErr != nil {
+		_ = rdb.Close()
+		return nil, nil, fmt.Errorf("redis ping failed after 30s: %w", lastErr)
 	}
 
 	cleanup := func() { _ = rdb.Close() }

@@ -3,6 +3,8 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"log"
 	"time"
 
 	"github.com/XSAM/otelsql"
@@ -48,14 +50,28 @@ func New(cfg Config) (*sql.DB, func(), error) {
 	db.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
 	db.SetConnMaxIdleTime(time.Duration(cfg.ConnMaxIdleTime) * time.Second)
 
-	// Ping MySQL 以验证连接（带 10s 超时防止阻塞）
-	pingCtx, pingCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := db.PingContext(pingCtx); err != nil {
+	// 优雅等待 MySQL 就绪：容器环境下 MySQL 可能尚未完全启动，
+	// 指数退避重试最多 30 秒，避免进程反复 crash loop。
+	deadline := time.Now().Add(30 * time.Second)
+	interval := 1 * time.Second
+	var lastErr error
+	for time.Now().Before(deadline) {
+		pingCtx, pingCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		lastErr = db.PingContext(pingCtx)
 		pingCancel()
-		_ = db.Close()
-		return nil, nil, err
+		if lastErr == nil {
+			break
+		}
+		log.Printf("mysql not ready, retrying in %v: %v", interval, lastErr)
+		time.Sleep(interval)
+		if interval < 5*time.Second {
+			interval *= 2
+		}
 	}
-	pingCancel()
+	if lastErr != nil {
+		_ = db.Close()
+		return nil, nil, fmt.Errorf("mysql ping failed after 30s: %w", lastErr)
+	}
 
 	cleanup := func() { _ = db.Close() }
 	return db, cleanup, nil
