@@ -32,7 +32,7 @@
 |------|------|-----|------|------|
 | MySQL | 8.4 | 172.30.0.10 | 3306 | 业务数据库 |
 | Redis | 8.6.2 | 172.30.0.20 | 6379 | 缓存 + Token 存储 |
-| etcd | 3.6.9 | 172.30.0.30 | 2379/2380 | 服务发现 |
+| etcd | 3.6.9 (3节点) | 172.30.0.31/32/33 | 2379 | 服务发现（集群部署） |
 | Jaeger | 2.3.0 | 172.30.0.40 | 16686/4317/4318 | 链路追踪（OTLP + Badger） |
 | Loki | 2.9.10 | 172.30.0.50 | 3100 | 日志聚合存储 |
 | Promtail | 2.9.10 | 172.30.0.51 | - | 日志采集（Docker Socket） |
@@ -53,10 +53,8 @@ shopmicro/
 ├── user/             # 用户服务
 ├── district/         # 行政区划服务
 ├── product/          # 商品分类服务
-├── pkg/              # 公共模块（jwt/logger/mysql/redis/otel/...）
-├── proto/            # Thrift IDL 文件
+├── pkg/              # 公共模块（jwt/logger/mysql/redis/otel/errcode/...）
 ├── deploy/           # 部署配置
-│   ├── docker-compose.yml  # 全栈编排（含基础设施）
 │   ├── mysql/        # MySQL 配置
 │   ├── redis/        # Redis 配置
 │   ├── jaeger/       # Jaeger 配置
@@ -73,8 +71,8 @@ shopmicro/
 
 - **Go 1.26** / Go Workspace Monorepo
 - **Hertz** HTTP 网关 + **Kitex** gRPC 框架（字节跳动）
-- **Thrift** 接口定义 + Kitex Generic 泛化调用
-- **etcd** 服务发现
+- **Protobuf (proto3)** 接口定义 + Kitex Generic 泛化调用
+- **etcd** 服务发现（3 节点集群）
 - **MySQL 8** + **Redis 8**
 - **OpenTelemetry** → Jaeger 链路追踪（gateway 100% 采样，其他 10%）
 - **Loki + Promtail + Grafana** 日志收集与可视化
@@ -127,7 +125,7 @@ docker compose up -d --no-deps user
 
 ```bash
 # 启动基础设施
-docker compose up -d mysql redis etcd jaeger loki promtail grafana
+docker compose up -d mysql redis etcd-1 etcd-2 etcd-3 jaeger loki promtail grafana
 
 # 启动服务（方式一：Makefile）
 make user && make district && make product && make gateway
@@ -169,9 +167,11 @@ curl -X POST http://localhost:7000/api/v1/product/GetCategoryTree \
 | User | 8899 | - | :8899/health |
 | District | 8898 | - | :8898/health |
 | Product | 8897 | - | :8897/health |
-| MySQL | 3306 | 3306:3306 | mysqladmin ping |
-| Redis | 6379 | 6379:6379 | redis-cli ping |
-| etcd | 2379 | 2379:2379 | etcdctl endpoint health |
+| MySQL | 3306 | 内网仅 | mysqladmin ping |
+| Redis | 6379 | 内网仅 | redis-cli ping |
+| etcd-1 | 2379 | 2379:2379（调试用） | etcdctl endpoint health |
+| etcd-2 | 2379 | 内网仅 | etcdctl endpoint health |
+| etcd-3 | 2379 | 内网仅 | etcdctl endpoint health |
 | Jaeger | 16686/4317/4318 | 16686/4317/4318 | healthcheckv2 :13133 |
 | Loki | 3100 | 3100:3100 | /ready |
 | Grafana | 3000 | 3000:3000 | - |
@@ -182,7 +182,9 @@ curl -X POST http://localhost:7000/api/v1/product/GetCategoryTree \
 |------|-----------|------|
 | shopmicro-mysql-data | /var/lib/mysql | MySQL 数据 |
 | shopmicro-redis-data | /data | Redis 持久化 |
-| shopmicro-etcd-data | /etcd-data | etcd 数据 |
+| shopmicro-etcd-data-1 | /etcd-data | etcd 节点 1 数据 |
+| shopmicro-etcd-data-2 | /etcd-data | etcd 节点 2 数据 |
+| shopmicro-etcd-data-3 | /etcd-data | etcd 节点 3 数据 |
 | shopmicro-jaeger-data | /tmp/jaeger | Jaeger Badger 追踪数据 |
 | shopmicro-loki-data | /loki | Loki 日志存储 |
 | shopmicro-grafana-data | /var/lib/grafana | Grafana 面板/配置 |

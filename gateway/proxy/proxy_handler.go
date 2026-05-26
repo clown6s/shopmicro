@@ -50,13 +50,13 @@ func (p *Proxy) Handler() app.HandlerFunc {
 			allowed, ok := p.allowedMethods[service]
 			if !ok {
 				logger.Warnf("rejected request: service not in whitelist (service=%s)", service)
-				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwParam), "access denied")
+				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwForbidden), "access denied")
 				c.Abort()
 				return
 			}
 			if !allowed[method] {
 				logger.Warnf("rejected request: method not allowed (service=%s, method=%s)", service, method)
-				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwParam), "access denied")
+				response.Fail(c, http.StatusForbidden, int(errcode.CodeGwForbidden), "access denied")
 				c.Abort()
 				return
 			}
@@ -67,7 +67,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		if reqMethod == http.MethodPost || reqMethod == http.MethodPut {
 			ct := string(c.ContentType())
 			if ct != "" && !strings.HasPrefix(ct, "application/json") {
-				response.Fail(c, http.StatusUnsupportedMediaType, int(errcode.CodeGwParam), "content type must be application/json")
+				response.Fail(c, http.StatusUnsupportedMediaType, int(errcode.CodeGwUnsupportedMediaType), "content type must be application/json")
 				c.Abort()
 				return
 			}
@@ -77,7 +77,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		if methods, ok := p.httpMethodMap[service+"/"+method]; ok {
 			if !methods[reqMethod] {
 				logger.Warnf("rejected request: http method not allowed (service=%s, method=%s, http=%s)", service, method, reqMethod)
-				response.Fail(c, http.StatusMethodNotAllowed, int(errcode.CodeGwParam), "method not allowed")
+				response.Fail(c, http.StatusMethodNotAllowed, int(errcode.CodeGwMethodNotAllowed), "method not allowed")
 				c.Abort()
 				return
 			}
@@ -132,7 +132,7 @@ func (p *Proxy) Handler() app.HandlerFunc {
 		// 请求体处理
 		rawBody := c.Request.Body()
 		if len(rawBody) > maxBodySize {
-			response.Fail(c, http.StatusRequestEntityTooLarge, int(errcode.CodeGwParam), "request body too large")
+			response.Fail(c, http.StatusRequestEntityTooLarge, int(errcode.CodeGwPayloadTooLarge), "request body too large")
 			c.Abort()
 			return
 		}
@@ -163,6 +163,16 @@ func (p *Proxy) Handler() app.HandlerFunc {
 				perAttempt = 5 * time.Second
 			}
 			callOpts = append(callOpts, callopt.WithRPCTimeout(perAttempt))
+		}
+
+		// 预校验：使用 proto 描述符检查请求体字段类型，提前拦截序列化错误
+		if sc, ok := p.getClient(service); ok && sc.svcDesc != nil {
+			if valErr := validateBodyAgainstProto(body, sc.svcDesc, method); valErr != nil {
+				logger.Warnf("request body type mismatch: service=%s method=%s err=%v", service, method, valErr)
+				response.Fail(c, http.StatusBadRequest, int(errcode.CodeGwParam), "请求参数类型错误，请检查字段类型")
+				c.Abort()
+				return
+			}
 		}
 
 		resp, err := p.Call(ctx, service, method, body, callOpts...)
@@ -281,17 +291,14 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 		// R5-P3-01: 服务未找到
 		if errors.Is(err, ErrServiceNotFound) {
 			logger.Warnf("service not found: service=%s method=%s", service, method)
-			response.Fail(c, http.StatusNotFound, int(errcode.CodeGwParam), "service not found")
+			response.Fail(c, http.StatusNotFound, int(errcode.CodeGwNotFound), "service not found")
 			c.Abort()
 			return
 		}
-		errMsg := err.Error()
-		// 请求体序列化错误（Kitex 泛化调用无法返回类型化 error，只能靠错误消息匹配）
-		// TODO: 升级 Kitex 版本后检查是否有导出的 sentinel error 替代字符串匹配
-		if strings.Contains(errMsg, "json convert to protobuf failed") ||
-			strings.Contains(errMsg, "marshal message failed") ||
-			strings.Contains(errMsg, "failed to unmarshal") ||
-			strings.Contains(errMsg, "cannot parse") {
+		// 请求体序列化错误 fallback（Kitex 泛化调用无法返回类型化 error）
+		// 正常流程应被 validateBodyAgainstProto() 在 RPC 调用前拦截，
+		// 此处作为兜底，使用多关键词组合匹配降低误判风险。
+		if isSerializationError(err) {
 			logger.Warnf("request serialization failed: service=%s method=%s err=%v", service, method, err)
 			response.Fail(c, http.StatusBadRequest, int(errcode.CodeGwParam), "请求参数类型错误，请检查字段类型")
 			c.Abort()
@@ -309,7 +316,7 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 		var m map[string]interface{}
 		if err := json.Unmarshal([]byte(s), &m); err != nil {
 			logger.Warnf("rpc response unmarshal failed: service=%s method=%s err=%v", service, method, err)
-			response.Fail(c, http.StatusInternalServerError, int(errcode.CodeGwServer), "internal server error")
+			response.Fail(c, http.StatusInternalServerError, int(errcode.CodeGwResponse), "response parse error")
 			c.Abort()
 			return
 		}
@@ -318,7 +325,7 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 			code, ok := codeRaw.(float64)
 			if !ok {
 				logger.Warnf("rpc response has non-numeric code: service=%s method=%s code=%v", service, method, codeRaw)
-				response.Fail(c, http.StatusInternalServerError, int(errcode.CodeGwServer), "internal server error")
+				response.Fail(c, http.StatusInternalServerError, int(errcode.CodeGwResponse), "response parse error")
 				c.Abort()
 				return
 			}
@@ -349,6 +356,6 @@ func (p *Proxy) handleRPCResponse(c *app.RequestContext, service, method string,
 
 	// 默认返回：resp 类型非 string（Kitex 版本变化时可能发生）
 	logger.Warnf("rpc resp unexpected type: service=%s method=%s type=%T", service, method, resp)
-	response.Fail(c, http.StatusInternalServerError, int(errcode.CodeGwServer), "internal server error")
+	response.Fail(c, http.StatusInternalServerError, int(errcode.CodeGwResponse), "response parse error")
 	c.Abort()
 }

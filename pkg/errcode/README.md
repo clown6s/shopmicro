@@ -10,24 +10,27 @@
 |------|------|------|
 | `0` | 成功 | 无错误 |
 | `10000–19999` | 用户服务业务错误 | user 服务 |
-| `20000–29999` | 商品服务业务错误 | product 服务 (预留) |
+| `20000–29999` | 商品服务业务错误 | product 服务 |
+| `30000–39999` | 行政区划服务业务错误 | district 服务 |
 | `50000–59999` | 网关基础设施错误 | gateway 自身产生 |
-
-> ⚠️ **历史遗留**：部分网关错误码暂用 `50001–50007`（非 5xxxx），下一大版本将统一迁移至 `5xxxx`。
 
 ---
 
-## 网关层错误码 (当前实现)
+## 网关层错误码
 
 | 常量 | 值 | HTTP Status | 说明 |
 |------|-----|-------------|------|
-| `ErrParam` (`CodeGwParam`) | `50001` | 400 | 参数错误 |
-| `ErrServer` (`CodeGwServer`) | `50002` | 500 | 服务器内部错误 |
-| `ErrToken` (`CodeGwToken`) | `50003` | 401 | token 无效 / 缺失 / 已吊销 |
-| `ErrNotFound` (`CodeGwNotFound`) | `50004` | 404 | 服务未发现 |
-| `ErrResponse` (`CodeGwResponse`) | `50005` | 500 | 下游响应异常 |
-| `ErrRateLimit` (`CodeGwRateLimit`) | `50006` | 429 | 请求频率限制 |
-| `ErrServiceUnavail` (`CodeGwSrvUnavailable`) | `50007` | 503 | 下游服务不可用 (熔断) |
+| `CodeGwParam` | `50001` | 400 | 参数格式错误（字段缺失、格式无效） |
+| `CodeGwServer` | `50002` | 500 | 服务器内部错误 |
+| `CodeGwToken` | `50003` | 401 | 认证失败（token 缺失/无效/已吊销） |
+| `CodeGwNotFound` | `50004` | 404 | 服务或资源未找到 |
+| `CodeGwResponse` | `50005` | 500 | 下游响应解析异常 |
+| `CodeGwRateLimit` | `50006` | 429 | 请求频率限制 |
+| `CodeGwSrvUnavailable` | `50007` | 503 | 下游服务不可用（熔断） |
+| `CodeGwForbidden` | `50008` | 403 | 无权限（不在白名单或方法不允许） |
+| `CodeGwMethodNotAllowed` | `50009` | 405 | HTTP 方法不允许 |
+| `CodeGwUnsupportedMediaType` | `50010` | 415 | Content-Type 不支持 |
+| `CodeGwPayloadTooLarge` | `50011` | 413 | 请求体过大 |
 
 ---
 
@@ -50,6 +53,10 @@
 | `CodeUserInternal` | `10013` | 用户服务内部错误 |
 | `CodeUserUnauthorized` | `10014` | 未授权 (未登录) |
 | `CodeUserForbidden` | `10015` | 无权限操作 (非本人数据) |
+| `CodeUserEmailFormat` | `10016` | 邮箱格式错误 |
+| `CodeUserParam` | `10017` | 参数校验失败（字段超长、格式错误等） |
+| `CodeUserPwdTooLong` | `10018` | 密码超过最大长度 |
+| `CodeUserAccountLocked` | `10019` | 账号被临时锁定（登录失败次数过多） |
 
 ---
 

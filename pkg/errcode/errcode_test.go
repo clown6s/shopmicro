@@ -120,8 +120,26 @@ func TestCodeRanges(t *testing.T) {
 	if CodeUserPhoneRequired < 10000 || CodeUserPhoneRequired >= 20000 {
 		t.Fatal("user code out of range")
 	}
+	// Product codes: 20000-29999
+	if CodeProductParam < 20000 || CodeProductParam >= 30000 {
+		t.Fatal("product code out of range")
+	}
+	// District codes: 30000-39999
+	if CodeDistrictParam < 30000 || CodeDistrictParam >= 40000 {
+		t.Fatal("district code out of range")
+	}
 	// Gateway codes: 50000-59999
 	if CodeGwParam < 50000 || CodeGwParam >= 60000 {
 		t.Fatal("gateway code out of range")
+	}
+	// 验证所有 gateway 常量在 50000-59999 范围内
+	codes := []uint32{CodeGwParam, CodeGwServer, CodeGwToken, CodeGwNotFound,
+		CodeGwResponse, CodeGwRateLimit, CodeGwSrvUnavailable,
+		CodeGwForbidden, CodeGwMethodNotAllowed, CodeGwUnsupportedMediaType,
+		CodeGwPayloadTooLarge}
+	for _, c := range codes {
+		if c < 50000 || c >= 60000 {
+			t.Fatalf("gateway code %d out of range", c)
+		}
 	}
 }

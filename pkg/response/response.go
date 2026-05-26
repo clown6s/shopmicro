@@ -108,14 +108,26 @@ func InternalError(c *app.RequestContext) {
 //
 // 精确映射（优先匹配）：
 //
-//	10009 NotFound      → 404 Not Found
-//	10010 TokenRequired  → 401 Unauthorized
-//	10011 TokenInvalid   → 401 Unauthorized
-//	10012 TokenMismatch  → 401 Unauthorized
-//	10013 Internal       → 500 Internal Server Error
-//	10014 Unauthorized   → 401 Unauthorized
-//	10015 Forbidden      → 403 Forbidden
-//	10019 AccountLocked  → 423 Locked
+//	User 服务:
+//	  10009 NotFound      → 404 Not Found
+//	  10010 TokenRequired  → 401 Unauthorized
+//	  10011 TokenInvalid   → 401 Unauthorized
+//	  10012 TokenMismatch  → 401 Unauthorized
+//	  10013 Internal       → 500 Internal Server Error
+//	  10014 Unauthorized   → 401 Unauthorized
+//	  10015 Forbidden      → 403 Forbidden
+//	  10019 AccountLocked  → 423 Locked
+//
+//	Gateway 服务:
+//	  50003 Token          → 401 Unauthorized
+//	  50004 NotFound       → 404 Not Found
+//	  50005 Response       → 500 Internal Server Error
+//	  50006 RateLimit      → 429 Too Many Requests
+//	  50007 SrvUnavailable → 503 Service Unavailable
+//	  50008 Forbidden      → 403 Forbidden
+//	  50009 MethodNotAllowed → 405 Method Not Allowed
+//	  50010 UnsupportedMediaType → 415 Unsupported Media Type
+//	  50011 PayloadTooLarge → 413 Payload Too Large
 //
 // 范围回退：
 //
@@ -127,6 +139,7 @@ func HttpStatus(code int) int {
 		return consts.StatusOK
 	}
 	switch code {
+	// User 服务精确映射
 	case int(errcode.CodeUserNotFound):
 		return consts.StatusNotFound
 	case int(errcode.CodeUserTokenRequired), int(errcode.CodeUserTokenInvalid),
@@ -138,6 +151,25 @@ func HttpStatus(code int) int {
 		return http.StatusLocked
 	case int(errcode.CodeUserInternal):
 		return consts.StatusInternalServerError
+	// Gateway 精确映射
+	case int(errcode.CodeGwToken):
+		return consts.StatusUnauthorized
+	case int(errcode.CodeGwNotFound):
+		return consts.StatusNotFound
+	case int(errcode.CodeGwResponse):
+		return consts.StatusInternalServerError
+	case int(errcode.CodeGwRateLimit):
+		return consts.StatusTooManyRequests
+	case int(errcode.CodeGwSrvUnavailable):
+		return consts.StatusServiceUnavailable
+	case int(errcode.CodeGwForbidden):
+		return consts.StatusForbidden
+	case int(errcode.CodeGwMethodNotAllowed):
+		return consts.StatusMethodNotAllowed
+	case int(errcode.CodeGwUnsupportedMediaType):
+		return consts.StatusUnsupportedMediaType
+	case int(errcode.CodeGwPayloadTooLarge):
+		return consts.StatusRequestEntityTooLarge
 	}
 	if code < 50000 {
 		return consts.StatusBadRequest

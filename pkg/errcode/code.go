@@ -43,11 +43,15 @@ const (
 
 // Gateway 基础设施: 50000 - 59999 (网关自身错误)
 const (
-	CodeGwParam          uint32 = 50001
-	CodeGwServer         uint32 = 50002
-	CodeGwToken          uint32 = 50003
-	CodeGwNotFound       uint32 = 50004
-	CodeGwResponse       uint32 = 50005
-	CodeGwRateLimit      uint32 = 50006 // 请求频率限制
-	CodeGwSrvUnavailable uint32 = 50007 // 下游服务不可用（熔断）
+	CodeGwParam                uint32 = 50001 // 参数格式错误（字段缺失、格式无效）
+	CodeGwServer               uint32 = 50002 // 服务器内部错误
+	CodeGwToken                uint32 = 50003 // 认证失败（token 缺失/无效/已吊销）
+	CodeGwNotFound             uint32 = 50004 // 服务或资源未找到
+	CodeGwResponse             uint32 = 50005 // 下游响应解析异常
+	CodeGwRateLimit            uint32 = 50006 // 请求频率限制
+	CodeGwSrvUnavailable       uint32 = 50007 // 下游服务不可用（熔断）
+	CodeGwForbidden            uint32 = 50008 // 无权限（不在白名单或方法不允许）
+	CodeGwMethodNotAllowed     uint32 = 50009 // HTTP 方法不允许
+	CodeGwUnsupportedMediaType uint32 = 50010 // Content-Type 不支持
+	CodeGwPayloadTooLarge      uint32 = 50011 // 请求体过大
 )
