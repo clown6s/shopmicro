@@ -1,4 +1,4 @@
-package handle
+package handler
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	v1 "shopmicro/district/kitex_gen/api/district/v1"
+	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/logger"
 )
 
@@ -67,7 +68,7 @@ func (s *DistrictServiceImpl) GetProvinces(ctx context.Context, req *v1.GetProvi
 
 	resp, ok := result.(*v1.GetProvincesResp)
 	if !ok {
-		return nil, fmt.Errorf("singleflight: unexpected type %T for GetProvincesResp", result)
+		return nil, errcode.NewBizError(errcode.CodeDistrictInternal, "internal error")
 	}
 	return resp, nil
 }
@@ -77,7 +78,7 @@ func (s *DistrictServiceImpl) GetChildren(ctx context.Context, req *v1.GetChildr
 
 	parentAdCode := req.GetParentAdCode()
 	if parentAdCode == 0 {
-		return nil, fmt.Errorf("parentAdCode is required")
+		return nil, errcode.NewBizError(errcode.CodeDistrictParam, "parentAdCode is required")
 	}
 
 	code := strconv.FormatUint(uint64(parentAdCode), 10)
@@ -98,7 +99,7 @@ func (s *DistrictServiceImpl) GetChildren(ctx context.Context, req *v1.GetChildr
 
 	resp, ok := result.(*v1.GetChildrenResp)
 	if !ok {
-		return nil, fmt.Errorf("singleflight: unexpected type %T for GetChildrenResp", result)
+		return nil, errcode.NewBizError(errcode.CodeDistrictInternal, "internal error")
 	}
 	return resp, nil
 }

@@ -28,7 +28,7 @@ import (
 
 	"shopmicro/district/conf"
 	"shopmicro/district/data"
-	"shopmicro/district/handle"
+	"shopmicro/district/handler"
 
 	pkgconf "shopmicro/pkg/conf"
 	pkghealth "shopmicro/pkg/health"
@@ -109,7 +109,7 @@ func Run(configPath string) error {
 	// kitex 服务端
 	// =========================
 
-	districtHandler, err := handle.NewDistrictHandler(dataProvider.District())
+	districtHandler, err := handler.NewDistrictHandler(dataProvider.District())
 	if err != nil {
 		return fmt.Errorf("create district handler: %w", err)
 	}

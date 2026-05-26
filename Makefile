@@ -21,7 +21,7 @@ setup: go.work
 	@echo "setup: workspace ready (run 'go work sync' to download dependencies)"
 
 go.work:
-	@echo 'go 1.26.1\n\nuse (\n\t./gateway\n\t./pkg\n\t./user\n)' > go.work
+	@echo 'go 1.26.1\n\nuse (\n\t./gateway\n\t./pkg\n\t./user\n\t./district\n\t./product\n)' > go.work
 
 clean:
 	rm -rf user/kitex_gen gateway/kitex_gen

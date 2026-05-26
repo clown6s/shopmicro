@@ -28,7 +28,18 @@ const (
 	CodeUserAccountLocked uint32 = 10019 // 账号被临时锁定（登录失败次数过多）
 )
 
-// Product 服务: 20000 - 29999 (预留)
+// Product 服务: 20000 - 29999
+const (
+	CodeProductParam    uint32 = 20001 // 参数校验失败
+	CodeProductNotFound uint32 = 20002 // 分类不存在
+	CodeProductInternal uint32 = 20003 // 内部错误
+)
+
+// District 服务: 30000 - 39999
+const (
+	CodeDistrictParam    uint32 = 30001 // 参数校验失败
+	CodeDistrictInternal uint32 = 30002 // 内部错误
+)
 
 // Gateway 基础设施: 50000 - 59999 (网关自身错误)
 const (

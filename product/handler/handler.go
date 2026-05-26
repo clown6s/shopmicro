@@ -7,8 +7,25 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"shopmicro/pkg/errcode"
 	"shopmicro/pkg/logger"
 	v1 "shopmicro/product/kitex_gen/api/product/v1"
+)
+
+// newBiz 创建业务错误（无精确 HTTP 状态码，由 gateway 按错误码范围推断）
+func newBiz(code uint32, msg string) *errcode.BizError { return errcode.NewBizError(code, msg) }
+
+// newBizHTTP 创建附带 HTTP 状态码的业务错误
+func newBizHTTP(code uint32, msg string, httpStatus int) *errcode.BizError {
+	return errcode.BizErrorHTTPStatus(code, msg, httpStatus)
+}
+
+var (
+	errProductNameRequired = newBiz(errcode.CodeProductParam, "name is required")
+	errProductNameTooLong  = newBiz(errcode.CodeProductParam, "name too long (max 64 chars)")
+	errProductIconTooLong  = newBiz(errcode.CodeProductParam, "icon too long (max 512 chars)")
+	errProductCatIdReq     = newBiz(errcode.CodeProductParam, "cat_id is required")
+	errProductInternal     = newBizHTTP(errcode.CodeProductInternal, "internal error", 500)
 )
 
 // ProductServiceImpl 商品服务实现
@@ -47,13 +64,13 @@ func (s *ProductServiceImpl) resetSF() {
 func (s *ProductServiceImpl) CreateCategory(ctx context.Context, req *v1.CreateCategoryReq) (*v1.CreateCategoryResp, error) {
 	name := req.GetName()
 	if name == "" {
-		return nil, fmt.Errorf("name is required")
+		return nil, errProductNameRequired
 	}
 	if len(name) > 64 {
-		return nil, fmt.Errorf("name too long (max 64 chars, got %d)", len(name))
+		return nil, errProductNameTooLong
 	}
 	if len(req.GetIcon()) > 512 {
-		return nil, fmt.Errorf("icon too long (max 512 chars, got %d)", len(req.GetIcon()))
+		return nil, errProductIconTooLong
 	}
 
 	catId, err := s.store.CreateCategory(ctx, name, req.GetParentCid(), req.GetShowStatus(), req.GetSort(), req.GetIcon())
@@ -87,7 +104,7 @@ func (s *ProductServiceImpl) GetCategoryTree(ctx context.Context, req *v1.GetCat
 
 	resp, ok := result.(*v1.GetCategoryTreeResp)
 	if !ok {
-		return nil, fmt.Errorf("singleflight: unexpected type %T for GetCategoryTreeResp", result)
+		return nil, errProductInternal
 	}
 	return resp, nil
 }
@@ -96,13 +113,13 @@ func (s *ProductServiceImpl) GetCategoryTree(ctx context.Context, req *v1.GetCat
 func (s *ProductServiceImpl) UpdateCategory(ctx context.Context, req *v1.UpdateCategoryReq) (*v1.UpdateCategoryResp, error) {
 	catId := req.GetCatId()
 	if catId == 0 {
-		return nil, fmt.Errorf("cat_id is required")
+		return nil, errProductCatIdReq
 	}
 	if req.GetName() != "" && len(req.GetName()) > 64 {
-		return nil, fmt.Errorf("name too long (max 64 chars, got %d)", len(req.GetName()))
+		return nil, errProductNameTooLong
 	}
 	if req.GetIcon() != "" && len(req.GetIcon()) > 512 {
-		return nil, fmt.Errorf("icon too long (max 512 chars, got %d)", len(req.GetIcon()))
+		return nil, errProductIconTooLong
 	}
 
 	if err := s.store.UpdateCategory(ctx, catId, req.GetName(), req.GetShowStatus(), req.GetSort(), req.GetIcon()); err != nil {
@@ -120,7 +137,7 @@ func (s *ProductServiceImpl) UpdateCategory(ctx context.Context, req *v1.UpdateC
 func (s *ProductServiceImpl) DeleteCategory(ctx context.Context, req *v1.DeleteCategoryReq) (*v1.DeleteCategoryResp, error) {
 	catId := req.GetCatId()
 	if catId == 0 {
-		return nil, fmt.Errorf("cat_id is required")
+		return nil, errProductCatIdReq
 	}
 
 	if err := s.store.DeleteCategory(ctx, catId); err != nil {
