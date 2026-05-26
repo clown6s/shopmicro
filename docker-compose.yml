@@ -3,12 +3,13 @@
 # ============================================================
 # 使用: docker compose up -d
 #
-# 启动顺序: MySQL/Redis/etcd/Jaeger/Loki → Promtail → user/district/product → gateway → Grafana
+# 启动顺序: MySQL/Redis/etcd-1,2,3/Jaeger/Loki → Promtail → user/district/product → gateway → Grafana
 # 注意:
 # 1. 生产环境应修改密码（搜索 admin@zzp 替换为强密码）
 # 2. 生产环境应启用 TLS（见各服务配置文件中的注释）
 # 3. Grafana: http://<host>:3000 (admin/admin@zzp)
 # 4. Jaeger UI: http://<host>:16686
+# 5. etcd: 3节点集群 (etcd-1/2/3)，仅 etcd-1 暴露 2379 端口用于调试
 # ============================================================
 
 name: shopmicro
@@ -97,21 +98,20 @@ services:
         max-size: "20m"
         max-file: "3"
 
-  etcd:
+  etcd-1:
     image: quay.io/coreos/etcd:v3.6.9
-    container_name: shopmicro-etcd
+    container_name: shopmicro-etcd-1
     restart: unless-stopped
     ports:
       - "2379:2379"
-      - "2380:2380"
     environment:
-      ETCD_NAME: shopmicro-etcd
+      ETCD_NAME: etcd-1
       ETCD_DATA_DIR: /etcd-data
       ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
-      ETCD_ADVERTISE_CLIENT_URLS: http://shopmicro-etcd:2379
-      ETCD_LISTEN_PEER_URLS: http://172.30.0.30:2380
-      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://172.30.0.30:2380
-      ETCD_INITIAL_CLUSTER: shopmicro-etcd=http://172.30.0.30:2380
+      ETCD_ADVERTISE_CLIENT_URLS: http://shopmicro-etcd-1:2379
+      ETCD_LISTEN_PEER_URLS: http://172.30.0.31:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://172.30.0.31:2380
+      ETCD_INITIAL_CLUSTER: etcd-1=http://172.30.0.31:2380,etcd-2=http://172.30.0.32:2380,etcd-3=http://172.30.0.33:2380
       ETCD_INITIAL_CLUSTER_TOKEN: shopmicro-etcd-token
       ETCD_INITIAL_CLUSTER_STATE: new
       ETCD_SNAPSHOT_COUNT: 50000
@@ -121,10 +121,98 @@ services:
       ETCD_AUTO_COMPACTION_MODE: periodic
       ETCD_AUTO_COMPACTION_RETENTION: 1h
     volumes:
-      - etcd-data:/etcd-data
+      - etcd-data-1:/etcd-data
     networks:
       infra:
-        ipv4_address: 172.30.0.30
+        ipv4_address: 172.30.0.31
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://localhost:2379"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "3"
+
+  etcd-2:
+    image: quay.io/coreos/etcd:v3.6.9
+    container_name: shopmicro-etcd-2
+    restart: unless-stopped
+    environment:
+      ETCD_NAME: etcd-2
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://shopmicro-etcd-2:2379
+      ETCD_LISTEN_PEER_URLS: http://172.30.0.32:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://172.30.0.32:2380
+      ETCD_INITIAL_CLUSTER: etcd-1=http://172.30.0.31:2380,etcd-2=http://172.30.0.32:2380,etcd-3=http://172.30.0.33:2380
+      ETCD_INITIAL_CLUSTER_TOKEN: shopmicro-etcd-token
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_SNAPSHOT_COUNT: 50000
+      ETCD_HEARTBEAT_INTERVAL: 500
+      ETCD_ELECTION_TIMEOUT: 2500
+      ETCD_QUOTA_BACKEND_BYTES: 8589934592
+      ETCD_AUTO_COMPACTION_MODE: periodic
+      ETCD_AUTO_COMPACTION_RETENTION: 1h
+    volumes:
+      - etcd-data-2:/etcd-data
+    networks:
+      infra:
+        ipv4_address: 172.30.0.32
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://localhost:2379"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "3"
+
+  etcd-3:
+    image: quay.io/coreos/etcd:v3.6.9
+    container_name: shopmicro-etcd-3
+    restart: unless-stopped
+    environment:
+      ETCD_NAME: etcd-3
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://shopmicro-etcd-3:2379
+      ETCD_LISTEN_PEER_URLS: http://172.30.0.33:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://172.30.0.33:2380
+      ETCD_INITIAL_CLUSTER: etcd-1=http://172.30.0.31:2380,etcd-2=http://172.30.0.32:2380,etcd-3=http://172.30.0.33:2380
+      ETCD_INITIAL_CLUSTER_TOKEN: shopmicro-etcd-token
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_SNAPSHOT_COUNT: 50000
+      ETCD_HEARTBEAT_INTERVAL: 500
+      ETCD_ELECTION_TIMEOUT: 2500
+      ETCD_QUOTA_BACKEND_BYTES: 8589934592
+      ETCD_AUTO_COMPACTION_MODE: periodic
+      ETCD_AUTO_COMPACTION_RETENTION: 1h
+    volumes:
+      - etcd-data-3:/etcd-data
+    networks:
+      infra:
+        ipv4_address: 172.30.0.33
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://localhost:2379"]
       interval: 15s
@@ -292,14 +380,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      etcd:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
         condition: service_healthy
     environment:
       TZ: *timezone
       MODE: "prod"
       REDIS_ADDR: "shopmicro-redis:6379"
       REDIS_PASSWORD: *password
-      ETCD_ADDRS: "shopmicro-etcd:2379"
+      ETCD_ADDRS: "shopmicro-etcd-1:2379,shopmicro-etcd-2:2379,shopmicro-etcd-3:2379"
       MYSQL_DSN: "root:admin@zzp@tcp(shopmicro-mysql:3306)/shop_micro?charset=utf8mb4&parseTime=true&loc=Local"
       JWT_SECRET: '4*8#5@7!^i(nj_9876555=+s4x3v9g12m`js0lmb8(-=+-_!`~||\]}mb<.?,.>>,mncukdkieijufonicndknveufw3io'
       JWT_REFRESH_SECRET: '4*8#5@7!^i(ng5yd963=+s4x3v9g12m`js0lmb8(-=+-_!`~||\]}mb<.?,.>>,nv853srwoxw2#09'
@@ -329,13 +421,17 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-      etcd:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
         condition: service_healthy
     environment:
       TZ: *timezone
       MODE: "prod"
       REDIS_ADDR: "shopmicro-redis:6379"
-      ETCD_ADDRS: "shopmicro-etcd:2379"
+      ETCD_ADDRS: "shopmicro-etcd-1:2379,shopmicro-etcd-2:2379,shopmicro-etcd-3:2379"
       MYSQL_DSN: "root:admin@zzp@tcp(shopmicro-mysql:3306)/shop_micro?charset=utf8mb4&parseTime=true&loc=Local"
       AMAP_KEY: "2bf43aed63c04f92dad38aaa6da2db50"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://shopmicro-jaeger:4317"
@@ -364,13 +460,17 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-      etcd:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
         condition: service_healthy
     environment:
       TZ: *timezone
       MODE: "prod"
       REDIS_ADDR: "shopmicro-redis:6379"
-      ETCD_ADDRS: "shopmicro-etcd:2379"
+      ETCD_ADDRS: "shopmicro-etcd-1:2379,shopmicro-etcd-2:2379,shopmicro-etcd-3:2379"
       MYSQL_DSN: "root:admin@zzp@tcp(shopmicro-mysql:3306)/shop_micro?charset=utf8mb4&parseTime=true&loc=Local"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://shopmicro-jaeger:4317"
     healthcheck:
@@ -407,7 +507,7 @@ services:
       MODE: "prod"
       REDIS_ADDR: "shopmicro-redis:6379"
       REDIS_PASSWORD: *password
-      ETCD_ADDRS: "shopmicro-etcd:2379"
+      ETCD_ADDRS: "shopmicro-etcd-1:2379,shopmicro-etcd-2:2379,shopmicro-etcd-3:2379"
       JWT_SECRET: '4*8#5@7!^i(nj_9876555=+s4x3v9g12m`js0lmb8(-=+-_!`~||\]}mb<.?,.>>,mncukdkieijufonicndknveufw3io'
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://shopmicro-jaeger:4317"
     ports:
@@ -441,8 +541,12 @@ volumes:
     name: shopmicro-mysql-data
   redis-data:
     name: shopmicro-redis-data
-  etcd-data:
-    name: shopmicro-etcd-data
+  etcd-data-1:
+    name: shopmicro-etcd-data-1
+  etcd-data-2:
+    name: shopmicro-etcd-data-2
+  etcd-data-3:
+    name: shopmicro-etcd-data-3
   jaeger-data:
     name: shopmicro-jaeger-data
   loki-data:
