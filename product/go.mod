@@ -3,7 +3,6 @@ module shopmicro/product
 go 1.26.1
 
 require (
-	github.com/bytedance/gopkg v0.1.4
 	github.com/cloudwego/kitex v0.16.2
 	github.com/cloudwego/prutal v0.1.3
 	github.com/kitex-contrib/obs-opentelemetry v0.3.0
